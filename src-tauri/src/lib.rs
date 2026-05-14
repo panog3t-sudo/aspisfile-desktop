@@ -27,6 +27,7 @@ pub fn run() {
             commands::get_platform,
             commands::open_external,
             commands::log_security_event,
+            commands::authenticate_biometric,
         ])
         .run(tauri::generate_context!())
         .expect("AspisFile Viewer failed to start");

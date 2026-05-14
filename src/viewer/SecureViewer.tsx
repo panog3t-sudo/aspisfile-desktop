@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { sessionStore } from "../lib/sessionStore";
 import { supabase } from "../lib/supabase";
@@ -7,6 +7,43 @@ import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { LegalOverlay } from "../components/LegalOverlay";
+import { LockScreen } from "../components/LockScreen";
+
+const IDLE_MS   = 2 * 60 * 1000; // lock after 2 min inactivity
+const BLUR_MS   = 30 * 1000;      // lock 30s after window loses focus
+
+function useLockGuard(enabled: boolean, onLock: () => void) {
+  const onLockRef = useRef(onLock);
+  onLockRef.current = onLock;
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    let idleTimer: number;
+    let blurTimer: number;
+
+    const resetIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => onLockRef.current(), IDLE_MS);
+    };
+    const handleBlur  = () => { blurTimer = window.setTimeout(() => onLockRef.current(), BLUR_MS); };
+    const handleFocus = () => clearTimeout(blurTimer);
+
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"] as const;
+    events.forEach((e) => document.addEventListener(e, resetIdle, { passive: true }));
+    window.addEventListener("blur",  handleBlur);
+    window.addEventListener("focus", handleFocus);
+    resetIdle();
+
+    return () => {
+      clearTimeout(idleTimer);
+      clearTimeout(blurTimer);
+      events.forEach((e) => document.removeEventListener(e, resetIdle));
+      window.removeEventListener("blur",  handleBlur);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [enabled]);
+}
 
 declare const __API_BASE__: string;
 
@@ -31,7 +68,11 @@ export function SecureViewer({ token, sig, env, onClose }: Props) {
   const [revoked, setRevoked]         = useState(false);
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
   const [error, setError]             = useState<string | null>(null);
+  const [locked, setLocked]           = useState(false);
   const startedRef                    = useRef(false);
+
+  const isViewing = !!(sessionId && totalPages > 0 && !locked);
+  useLockGuard(isViewing, useCallback(() => setLocked(true), []));
 
   // Step 1: fetch file + recipient info (no auth required)
   useEffect(() => {
@@ -123,12 +164,21 @@ export function SecureViewer({ token, sig, env, onClose }: Props) {
   if (!sessionId || totalPages === 0) return <AuthLoadingScreen />;
 
   return (
-    <TileRenderer
-      sessionId={sessionId}
-      fileId={file.id}
-      file={file}
-      totalPages={totalPages}
-      onClose={onClose}
-    />
+    <>
+      <TileRenderer
+        sessionId={sessionId}
+        fileId={file.id}
+        file={file}
+        totalPages={totalPages}
+        onClose={onClose}
+        onLock={() => setLocked(true)}
+      />
+      {locked && (
+        <LockScreen
+          fileName={file.name}
+          onUnlock={() => setLocked(false)}
+        />
+      )}
+    </>
   );
 }

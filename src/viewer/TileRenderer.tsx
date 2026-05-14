@@ -23,6 +23,7 @@ type Props = {
   recipient?: RecipientInfo;
   totalPages: number;
   onClose: () => void;
+  onLock: () => void;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -51,7 +52,7 @@ const badgeStyle: React.CSSProperties = {
   cursor: "default",
 };
 
-export function TileRenderer({ sessionId, fileId, file, totalPages, onClose }: Props) {
+export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
   const [tileUrls, setTileUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
@@ -157,6 +158,13 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose }: P
             style={toolbarBtnStyle(false)}
           >
             ✕
+          </button>
+          <button
+            onClick={onLock}
+            title="Lock viewer"
+            style={toolbarBtnStyle(false)}
+          >
+            🔒
           </button>
           <span style={{ fontSize: 13, color: "#94A3B8", fontFamily: "system-ui", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {file.name}
