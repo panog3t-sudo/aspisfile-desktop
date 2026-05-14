@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { sessionStore } from "../lib/sessionStore";
 import { FileInfo, RecipientInfo } from "../lib/desktopAuth";
@@ -22,31 +22,72 @@ type Props = {
   file: FileInfo;
   recipient?: RecipientInfo;
   totalPages: number;
+  onClose: () => void;
 };
 
-export function TileRenderer({ sessionId, fileId, file, totalPages }: Props) {
+const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
+
+const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
+  width: 26,
+  height: 26,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 4,
+  border: "0.5px solid #334155",
+  background: disabled ? "transparent" : "#0F172A",
+  color: disabled ? "#475569" : "#CBD5E1",
+  cursor: disabled ? "not-allowed" : "pointer",
+  fontSize: 16,
+  lineHeight: 1,
+  fontFamily: "system-ui",
+  flexShrink: 0,
+});
+
+const badgeStyle: React.CSSProperties = {
+  fontSize: 14,
+  lineHeight: 1,
+  opacity: 0.75,
+  cursor: "default",
+};
+
+export function TileRenderer({ sessionId, fileId, file, totalPages, onClose }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
   const [tileUrls, setTileUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
+  const [zoomIndex, setZoomIndex] = useState(2); // 100% default
   const fingerprintRef = useRef<string>("");
 
   useEffect(() => {
     getDesktopFingerprint().then((fp) => { fingerprintRef.current = fp; });
   }, []);
 
+  // Block all copy / cut / select-all keyboard shortcuts and clipboard events
+  useEffect(() => {
+    const blockCopy = (e: ClipboardEvent) => e.preventDefault();
+    document.addEventListener("copy",  blockCopy);
+    document.addEventListener("cut",   blockCopy);
+    return () => {
+      document.removeEventListener("copy",  blockCopy);
+      document.removeEventListener("cut",   blockCopy);
+    };
+  }, []);
+
   const fetchTile = useCallback(async (page: number): Promise<string | null> => {
-    const key = sessionStore.get();
+    const key = sessionStore.getKey();
     if (!key) return null;
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${key}`,
+      "X-App-Platform": "desktop",
+      "X-Device-Fingerprint": fingerprintRef.current,
+    };
+    const ds = sessionStore.getDeviceShare();
+    if (ds) headers["X-Device-Share"] = ds;
 
     const res = await fetch(
       `${__API_BASE__}/api/v1/viewer/${fileId}/tile?session=${sessionId}&page=${page}`,
-      {
-        headers: {
-          Authorization: `Bearer ${key}`,
-          "X-App-Platform": "desktop",
-          "X-Device-Fingerprint": fingerprintRef.current,
-        },
-      }
+      { headers }
     );
 
     if (!res.ok) return null;
@@ -85,8 +126,15 @@ export function TileRenderer({ sessionId, fileId, file, totalPages }: Props) {
         flexDirection: "column",
         background: "#0F172A",
         userSelect: "none",
+        WebkitUserSelect: "none",
       }}
       onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={(e) => {
+        if ((e.metaKey || e.ctrlKey) && ["c", "a", "s", "x", "p"].includes(e.key.toLowerCase())) {
+          e.preventDefault();
+        }
+      }}
+      tabIndex={-1}
     >
       {/* Toolbar */}
       <div
@@ -94,53 +142,119 @@ export function TileRenderer({ sessionId, fileId, file, totalPages }: Props) {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "10px 16px",
+          padding: "8px 16px",
           background: "#1E293B",
           borderBottom: "0.5px solid #334155",
           flexShrink: 0,
+          gap: 12,
         }}
       >
-        <span style={{ fontSize: 13, color: "#94A3B8", fontFamily: "system-ui" }}>
-          {file.name}
-        </span>
-        <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui" }}>
-          {currentPage} / {totalPages}
-        </span>
+        {/* Left: close button + file name */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+          <button
+            onClick={() => { sessionStore.clear(); onClose(); }}
+            title="Close document"
+            style={toolbarBtnStyle(false)}
+          >
+            ✕
+          </button>
+          <span style={{ fontSize: 13, color: "#94A3B8", fontFamily: "system-ui", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {file.name}
+          </span>
+        </div>
+
+        {/* Center: zoom controls */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+          <button
+            onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
+            disabled={zoomIndex === 0}
+            title="Zoom out"
+            style={toolbarBtnStyle(zoomIndex === 0)}
+          >
+            −
+          </button>
+          <span style={{ fontSize: 12, color: "#94A3B8", fontFamily: "system-ui", minWidth: 38, textAlign: "center" }}>
+            {ZOOM_STEPS[zoomIndex]}%
+          </span>
+          <button
+            onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
+            disabled={zoomIndex === ZOOM_STEPS.length - 1}
+            title="Zoom in"
+            style={toolbarBtnStyle(zoomIndex === ZOOM_STEPS.length - 1)}
+          >
+            +
+          </button>
+        </div>
+
+        {/* Right: permission badges + page count */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {file.allow_print && (
+            <span title="Printing allowed" style={badgeStyle}>
+              🖨
+            </span>
+          )}
+          {file.allow_download && (
+            <span title="Download allowed" style={badgeStyle}>
+              ⬇
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui" }}>
+            {currentPage} / {totalPages}
+          </span>
+        </div>
       </div>
 
-      {/* Tile */}
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          overflow: "auto",
-          padding: 24,
-        }}
-      >
-        {loading && !tileUrl ? (
-          <span style={{ color: "#64748B", fontSize: 13, fontFamily: "system-ui" }}>
-            Loading…
-          </span>
-        ) : tileUrl ? (
-          <img
-            src={tileUrl}
-            alt={`Page ${currentPage}`}
-            draggable={false}
-            style={{
-              maxWidth: "100%",
-              maxHeight: "100%",
-              borderRadius: 4,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.4)",
-              pointerEvents: "none",
-            }}
-          />
-        ) : (
-          <span style={{ color: "#EF4444", fontSize: 13, fontFamily: "system-ui" }}>
-            Failed to load page.
-          </span>
-        )}
+      {/* Tile — outer div is the scroll container, inner div handles centering.
+           Two-level structure prevents flexbox from clipping the top of tall content. */}
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <div
+          style={{
+            minHeight: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
+        >
+          {loading && !tileUrl ? (
+            <span style={{ color: "#64748B", fontSize: 13, fontFamily: "system-ui" }}>
+              Loading…
+            </span>
+          ) : tileUrl ? (
+            <div style={{ position: "relative", lineHeight: 0, transform: `scale(${ZOOM_STEPS[zoomIndex] / 100})`, transformOrigin: "top center", transition: "transform 0.15s ease" }}>
+              <img
+                src={tileUrl}
+                alt=""
+                draggable={false}
+                style={{
+                  display: "block",
+                  maxWidth: "100%",
+                  height: "auto",
+                  borderRadius: 4,
+                  boxShadow: "0 4px 24px rgba(0,0,0,0.4)",
+                  pointerEvents: "none",
+                  WebkitUserDrag: "none",
+                } as React.CSSProperties}
+              />
+              {/* Transparent overlay — blocks click-to-select and right-click on the image */}
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  cursor: "default",
+                  userSelect: "none",
+                  WebkitUserSelect: "none",
+                } as React.CSSProperties}
+                onContextMenu={(e) => e.preventDefault()}
+              />
+            </div>
+          ) : (
+            <span style={{ color: "#EF4444", fontSize: 13, fontFamily: "system-ui" }}>
+              Failed to load page.
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Pagination */}

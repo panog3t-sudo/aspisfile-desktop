@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' https://aspisfile.com https://*.supabase.co; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://aspisfile.com https://*.supabase.co wss://*.supabase.co"
+      "csp": "default-src 'self' http://localhost:3000 https://aspisfile.com https://*.supabase.co; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://localhost:3000; connect-src 'self' http://localhost:3000 https://aspisfile.com https://*.supabase.co wss://*.supabase.co"
     }
   },
   "bundle": {

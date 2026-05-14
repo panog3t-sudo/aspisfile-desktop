@@ -76,9 +76,10 @@ export default function App() {
         token={viewerParams.token}
         sig={viewerParams.sig}
         env={viewerParams.env}
+        onClose={() => { setMode("idle"); setViewerParams(null); }}
       />
     );
   }
 
-  return <IdleScreen />;
+  return <IdleScreen onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }} />;
 }

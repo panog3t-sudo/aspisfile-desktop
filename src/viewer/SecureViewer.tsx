@@ -1,12 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { sessionStore } from "../lib/sessionStore";
 import { supabase } from "../lib/supabase";
-import {
-  authenticateDesktop,
-  FileInfo,
-  RecipientInfo,
-} from "../lib/desktopAuth";
+import { authenticateDesktop, FileInfo, RecipientInfo } from "../lib/desktopAuth";
 import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
@@ -14,23 +10,30 @@ import { LegalOverlay } from "../components/LegalOverlay";
 
 declare const __API_BASE__: string;
 
-type Props = {
-  token: string;
-  sig: string | null;
-  env: string | null;
-};
+async function getDesktopFingerprint(platform: string): Promise<string> {
+  const raw = `${platform}:${screen.width}x${screen.height}:${
+    Intl.DateTimeFormat().resolvedOptions().timeZone
+  }`;
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
-export function SecureViewer({ token, sig, env }: Props) {
-  const [file, setFile] = useState<FileInfo | null>(null);
-  const [recipient, setRecipient] = useState<RecipientInfo | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [totalPages, setTotalPages] = useState(0);
+type Props = { token: string; sig: string | null; env: string | null; onClose: () => void };
+
+export function SecureViewer({ token, sig, env, onClose }: Props) {
+  const [file, setFile]               = useState<FileInfo | null>(null);
+  const [recipient, setRecipient]     = useState<RecipientInfo | null>(null);
+  const [sessionId, setSessionId]     = useState<string | null>(null);
+  const [totalPages, setTotalPages]   = useState(0);
   const [legalAccepted, setLegalAccepted] = useState(false);
-  const [revoked, setRevoked] = useState(false);
+  const [revoked, setRevoked]         = useState(false);
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]             = useState<string | null>(null);
+  const startedRef                    = useRef(false);
 
-  // Authenticate on mount
+  // Step 1: fetch file + recipient info (no auth required)
   useEffect(() => {
     authenticateDesktop(token, sig, env)
       .then(({ file: f, recipient: r }) => {
@@ -41,52 +44,61 @@ export function SecureViewer({ token, sig, env }: Props) {
       .catch((e: Error) => setError(e.message));
   }, [token, sig, env]);
 
-  // Start session after legal acceptance
+  // Step 2: start session after legal acceptance — uses mobile/desktop token-auth route
   useEffect(() => {
-    if (!legalAccepted || !file || sessionId) return;
+    if (!legalAccepted || !file || startedRef.current) return;
+    startedRef.current = true;
 
-    const platform = invoke<string>("get_platform");
-    platform.then(async (p) => {
-      const res = await fetch(
-        `${__API_BASE__}/api/v1/access/${token}/start`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-App-Platform": "desktop",
-            "X-Desktop-OS": p,
-          },
-          body: JSON.stringify({ deviceFingerprint: null }),
-        }
-      );
+    (async () => {
+      const platform = await invoke<string>("get_platform");
+      const fingerprint = await getDesktopFingerprint(platform);
+
+      const res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-App-Platform": "desktop",
+          "X-Desktop-OS": platform,
+          "User-Agent": navigator.userAgent,
+        },
+        body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint }),
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.error || "Failed to start session");
+        setError(body.error || `Session start failed (${res.status})`);
         return;
       }
 
       const data = await res.json();
-      const sid: string = data.session_id;
-      setSessionId(sid);
-      if (data.session?.key) sessionStore.set(data.session.key);
+
+      if (data.status === "pending_approval") {
+        setError("Access pending sender approval. Please try again shortly.");
+        startedRef.current = false;
+        return;
+      }
+
+      sessionStore.set(data.session_key, data.device_share ?? null);
+      setSessionId(data.session_id);
 
       // Fetch page count
+      const pageHeaders: Record<string, string> = {
+        "X-App-Platform": "desktop",
+        Authorization: `Bearer ${data.session_key}`,
+        "X-Device-Fingerprint": fingerprint,
+      };
+      if (data.device_share) pageHeaders["X-Device-Share"] = data.device_share;
+
       const pagesRes = await fetch(
-        `${__API_BASE__}/api/v1/viewer/${file.id}/pages?session=${sid}`,
-        {
-          headers: {
-            "X-App-Platform": "desktop",
-            Authorization: `Bearer ${sessionStore.get() ?? ""}`,
-          },
-        }
+        `${__API_BASE__}/api/v1/viewer/${file.id}/pages?session=${data.session_id}`,
+        { headers: pageHeaders }
       );
       if (pagesRes.ok) {
         const pagesData = await pagesRes.json();
-        setTotalPages(pagesData.pages ?? 1);
+        setTotalPages(pagesData.count ?? 1);
       }
-    });
-  }, [legalAccepted, file, sessionId, token]);
+    })().catch((e: Error) => setError(e.message));
+  }, [legalAccepted, file, token, sig, env]);
 
   // Realtime revocation listener
   useEffect(() => {
@@ -94,7 +106,7 @@ export function SecureViewer({ token, sig, env }: Props) {
 
     const channel = supabase
       .channel(`file-${file.id}`)
-      .on("broadcast", { event: "revocation" }, (payload: { payload: { reason?: string } }) => {
+      .on("broadcast", { event: "revocation" }, (payload: { payload?: { reason?: string } }) => {
         setRevokeReason(payload.payload?.reason);
         setRevoked(true);
         sessionStore.clear();
@@ -104,11 +116,10 @@ export function SecureViewer({ token, sig, env }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [sessionId, file]);
 
-  if (revoked) return <RevokedScreen reason={revokeReason} />;
-  if (error)   return <RevokedScreen reason={error} />;
-  if (!file || !recipient) return <AuthLoadingScreen />;
-  if (!legalAccepted)
-    return <LegalOverlay file={file} onAccept={() => setLegalAccepted(true)} />;
+  if (revoked)                        return <RevokedScreen reason={revokeReason} />;
+  if (error)                          return <RevokedScreen reason={error} isError />;
+  if (!file || !recipient)            return <AuthLoadingScreen />;
+  if (!legalAccepted)                 return <LegalOverlay file={file} onAccept={() => setLegalAccepted(true)} />;
   if (!sessionId || totalPages === 0) return <AuthLoadingScreen />;
 
   return (
@@ -117,6 +128,7 @@ export function SecureViewer({ token, sig, env }: Props) {
       fileId={file.id}
       file={file}
       totalPages={totalPages}
+      onClose={onClose}
     />
   );
 }
