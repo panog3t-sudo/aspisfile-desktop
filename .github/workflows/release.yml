@@ -1,62 +1,157 @@
-name: Build Desktop Release
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
 
 jobs:
-  build:
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: '--target universal-apple-darwin'
-          - platform: windows-latest
-            args: '--target x86_64-pc-windows-msvc'
-
-    runs-on: ${{ matrix.platform }}
+  build-macos:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Setup Rust (universal targets on macOS)
+      - name: Install Rust (universal targets)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Install frontend deps
+      - name: Install dependencies
         run: npm ci
 
-      - name: Build + bundle
-        uses: tauri-apps/tauri-action@v0
+      - name: Import Apple certificate
+        if: env.APPLE_CERTIFICATE != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # --- Signing env (populated when certs arrive) -----------------
-          # macOS notarization + Developer ID signing
-          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows code signing
-          # WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          # WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          # Tauri updater (separate from code signing — generate via `tauri signer generate`)
-          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "" build.keychain
+          rm certificate.p12
+
+      - name: Build universal macOS app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID:               ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD:         ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID:          ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      # Rename to stable filenames so the web /downloads/* redirects stay
+      # constant across version bumps. Tauri names the file
+      # "AspisFile Viewer_<version>_universal.dmg" with a literal space and
+      # the version embedded — neither matches a stable public URL.
+      - name: Rename dmg to stable name
+        run: |
+          src=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -1)
+          mkdir -p artifacts
+          cp "$src" "artifacts/AspisFile.dmg"
+          ls -la artifacts/
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'AspisFile Viewer ${{ github.ref_name }}'
-          releaseDraft: true
+          name: macos-dmg
+          path: artifacts/AspisFile.dmg
+          retention-days: 1
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows app
+        # Unsigned for now — SmartScreen warning appears on first run.
+        # Windows code-signing cert will be wired in once provisioned.
+        run: npm run tauri build
+
+      # Rename to stable filename for the same reason as the macOS step.
+      - name: Rename msi to stable name
+        shell: pwsh
+        run: |
+          $src = Get-ChildItem -Path src-tauri\target\release\bundle\msi\*.msi | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item $src.FullName -Destination artifacts\AspisFile.msi
+          Get-ChildItem artifacts
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: artifacts/AspisFile.msi
+          retention-days: 1
+
+  create-release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: artifacts/macos
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-msi
+          path: artifacts/windows
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: AspisFile ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            ## AspisFile Desktop ${{ github.event.inputs.tag || github.ref_name }}
+
+            ### Download
+            - **macOS** — `AspisFile.dmg` (universal: Apple Silicon + Intel)
+            - **Windows** — `AspisFile.msi`
+
+            ### Requirements
+            - macOS 12 or later
+            - Windows 10 or later
+
+            ### Installation
+            **macOS**: Double-click the .dmg and drag AspisFile to Applications. If a security warning appears, right-click the app and choose Open.
+            **Windows**: Run the .msi installer. If SmartScreen appears, click "More info → Run anyway".
+          files: |
+            artifacts/macos/AspisFile.dmg
+            artifacts/windows/AspisFile.msi
+          draft: false
           prerelease: false
-          args: ${{ matrix.args }}
