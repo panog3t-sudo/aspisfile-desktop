@@ -55,6 +55,11 @@
       "pubkey": "TAURI_PUBLIC_KEY_PLACEHOLDER",
       "endpoints": ["https://aspisfile.com/api/releases/{{target}}/{{current_version}}"],
       "dialog": false
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aspisfile"]
+      }
     }
   }
 }

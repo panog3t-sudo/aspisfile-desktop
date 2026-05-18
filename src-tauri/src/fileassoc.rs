@@ -12,11 +12,7 @@ pub fn register_handler(app: AppHandle) {
             }
         }
     });
-
-    // Share link opened while app is running (deep link / protocol handler)
-    let app_link = app.clone();
-    app.listen("tauri://deep-link", move |event| {
-        let url = event.payload().to_string();
-        let _ = app_link.emit("open-share-link", url);
-    });
+    // aspisfile:// URL scheme is handled by deeplink::register_handler — it
+    // routes through tauri-plugin-deep-link, which the framework's built-in
+    // `tauri://deep-link` event does not emit on its own.
 }

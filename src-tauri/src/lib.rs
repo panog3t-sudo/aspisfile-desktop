@@ -1,6 +1,7 @@
 mod security;
 mod commands;
 mod fileassoc;
+mod deeplink;
 mod updater;
 
 use tauri::Manager;
@@ -10,16 +11,23 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
             security::apply_window_security(&window);
             fileassoc::register_handler(app.handle().clone());
+            deeplink::register_handler(app.handle().clone());
 
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                updater::check_and_apply(handle).await;
-            });
+            // Skip the auto-updater in dev builds — the /api/releases endpoint
+            // doesn't exist yet, and the failed check pollutes dev logs with
+            // "error decoding response body". Production builds still check.
+            if !cfg!(debug_assertions) {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    updater::check_and_apply(handle).await;
+                });
+            }
 
             Ok(())
         })
