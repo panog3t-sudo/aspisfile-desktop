@@ -7,21 +7,34 @@ import "./App.css";
 type Mode = "idle" | "viewer";
 
 type ViewerParams = {
-  token: string;
-  sig: string | null;
-  env: string | null;
+  token:   string;
+  sig:     string | null;
+  env:     string | null;
+  present: boolean;
+  coview:  string | null;
 };
 
 function extractFromUrl(url: string): ViewerParams | null {
   try {
     const parsed = new URL(url);
-    const parts = parsed.pathname.split("/access/");
-    const token = parts[1]?.split("?")[0]?.split("/")[0];
+
+    // Token can be in pathname (/access/[token]) for universal links,
+    // OR in a query param (?token=...) for aspisfile://open?token=X deep links.
+    let token: string | undefined;
+    const pathnameParts = parsed.pathname.split("/access/");
+    if (pathnameParts[1]) {
+      token = pathnameParts[1].split("?")[0].split("/")[0];
+    } else {
+      token = parsed.searchParams.get("token") ?? undefined;
+    }
     if (!token) return null;
+
     return {
       token,
-      sig: parsed.searchParams.get("sig"),
-      env: parsed.searchParams.get("env"),
+      sig:     parsed.searchParams.get("sig"),
+      env:     parsed.searchParams.get("env"),
+      present: parsed.searchParams.get("present") === "true",
+      coview:  parsed.searchParams.get("coview"),
     };
   } catch {
     return null;
@@ -77,6 +90,8 @@ export default function App() {
         sig={viewerParams.sig}
         env={viewerParams.env}
         onClose={() => { setMode("idle"); setViewerParams(null); }}
+        present={viewerParams.present}
+        coviewSessionId={viewerParams.coview}
       />
     );
   }
