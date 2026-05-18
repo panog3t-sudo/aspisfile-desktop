@@ -24,6 +24,9 @@ type Props = {
   totalPages: number;
   onClose: () => void;
   onLock: () => void;
+  // Co-viewing page sync — both optional, no behaviour change when unset
+  targetPage?: number;
+  onCurrentPageChange?: (page: number) => void;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -52,8 +55,16 @@ const badgeStyle: React.CSSProperties = {
   cursor: "default",
 };
 
-export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock }: Props) {
+export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Sync external targetPage (e.g. presenter pushed a page_change) into local state
+  useEffect(() => {
+    if (targetPage && targetPage >= 1 && targetPage <= totalPages && targetPage !== currentPage) {
+      setCurrentPage(targetPage);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetPage, totalPages]);
   const [tileUrls, setTileUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [zoomIndex, setZoomIndex] = useState(2); // 100% default
@@ -280,7 +291,11 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
           }}
         >
           <button
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            onClick={() => setCurrentPage((p) => {
+              const next = Math.max(1, p - 1);
+              if (next !== p) onCurrentPageChange?.(next);
+              return next;
+            })}
             disabled={currentPage <= 1}
             style={{
               padding: "6px 16px",
@@ -296,7 +311,11 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
             ‹ Prev
           </button>
           <button
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            onClick={() => setCurrentPage((p) => {
+              const next = Math.min(totalPages, p + 1);
+              if (next !== p) onCurrentPageChange?.(next);
+              return next;
+            })}
             disabled={currentPage >= totalPages}
             style={{
               padding: "6px 16px",

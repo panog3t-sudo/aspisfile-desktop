@@ -28,6 +28,7 @@ export type FileInfo = {
   one_time: boolean;
   personal_message: string | null;
   sender: { full_name: string | null; email: string } | null;
+  is_owner: boolean;
 };
 
 export type RecipientInfo = {

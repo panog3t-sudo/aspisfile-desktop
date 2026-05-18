@@ -8,6 +8,11 @@ import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
+import { CoViewingBanner }    from "../coviewing/CoViewingBanner";
+import { CoViewingRecipient } from "../coviewing/CoViewingRecipient";
+import { PresenterToolbar }   from "../coviewing/PresenterToolbar";
+import { StartSessionModal }  from "../coviewing/StartSessionModal";
+import { SessionEndedScreen } from "../coviewing/SessionEndedScreen";
 
 const IDLE_MS   = 2 * 60 * 1000; // lock after 2 min inactivity
 const BLUR_MS   = 30 * 1000;      // lock 30s after window loses focus
@@ -57,9 +62,16 @@ async function getDesktopFingerprint(platform: string): Promise<string> {
     .join("");
 }
 
-type Props = { token: string; sig: string | null; env: string | null; onClose: () => void };
+type Props = {
+  token: string;
+  sig: string | null;
+  env: string | null;
+  onClose: () => void;
+  present?: boolean;                  // deep link wants presenter modal
+  coviewSessionId?: string | null;    // deep link wants auto-join
+};
 
-export function SecureViewer({ token, sig, env, onClose }: Props) {
+export function SecureViewer({ token, sig, env, onClose, present, coviewSessionId }: Props) {
   const [file, setFile]               = useState<FileInfo | null>(null);
   const [recipient, setRecipient]     = useState<RecipientInfo | null>(null);
   const [sessionId, setSessionId]     = useState<string | null>(null);
@@ -70,6 +82,32 @@ export function SecureViewer({ token, sig, env, onClose }: Props) {
   const [error, setError]             = useState<string | null>(null);
   const [locked, setLocked]           = useState(false);
   const startedRef                    = useRef(false);
+
+  // Co-viewing recipient state
+  const [coViewingBanner, setCoViewingBanner] = useState<{
+    sessionId:     string;
+    presenterName: string;
+    currentPage:   number;
+    channel:       string;
+  } | null>(null);
+  const [activeCoViewSessionId, setActiveCoViewSessionId] = useState<string | null>(null);
+  const [followingPresenter, setFollowingPresenter] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
+
+  // Co-viewing presenter state
+  const [showStartModal, setShowStartModal] = useState(false);
+  const [presenterSession, setPresenterSession] = useState<{
+    sessionId: string; channel: string;
+    mode: 'synchronized' | 'free'; context: 'standalone' | 'teams' | 'zoom';
+  } | null>(null);
+
+  // Step 10d — lifted from TileRenderer so the presenter toolbar / recipient
+  // page sync can read and control it.
+  const [currentPage, setCurrentPage] = useState(1);
+  // Step 10d — channel returned by /co-viewing/join, used by CoViewingRecipient.
+  const [coViewingChannel, setCoViewingChannel] = useState<string | null>(null);
+
+  const canPresent = file?.is_owner === true;
 
   const isViewing = !!(sessionId && totalPages > 0 && !locked);
   useLockGuard(isViewing, useCallback(() => setLocked(true), []));
@@ -157,6 +195,77 @@ export function SecureViewer({ token, sig, env, onClose }: Props) {
     return () => { supabase.removeChannel(channel); };
   }, [sessionId, file]);
 
+  // Co-viewing recipient subscription — email-based channel because desktop has
+  // no Supabase auth → no user.id. Server broadcasts to both user-id and email
+  // channels (app/api/v1/co-viewing/start/route.ts).
+  useEffect(() => {
+    if (!recipient?.email || !file?.id) return;
+
+    const channel = supabase
+      .channel(`notifications-${recipient.email}`)
+      .on('broadcast', { event: 'co_viewing_started' }, ({ payload }: { payload: any }) => {
+        if (payload.file_id !== file.id) return;
+        setCoViewingBanner({
+          sessionId:     payload.session_id,
+          presenterName: payload.presenter_name,
+          currentPage:   payload.current_page,
+          channel:       payload.channel,
+        });
+      })
+      .on('broadcast', { event: 'co_viewing_ended' }, ({ payload }: { payload: any }) => {
+        if (payload.session_id !== activeCoViewSessionId) return;
+        setActiveCoViewSessionId(null);
+        setCoViewingBanner(null);
+        setSessionEnded(true);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [recipient?.email, file?.id, activeCoViewSessionId]);
+
+  // Auto-open presenter modal when arriving from a "Present this file" deep link
+  useEffect(() => {
+    if (present && canPresent && !presenterSession) {
+      setShowStartModal(true);
+    }
+  }, [present, canPresent, presenterSession]);
+
+  // Auto-join when arriving from a co-viewing session deep link
+  useEffect(() => {
+    if (!coviewSessionId) return;
+    if (!recipient || !file || !sessionId) return;
+    if (activeCoViewSessionId) return;
+    joinCoViewingSession(coviewSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coviewSessionId, recipient, file, sessionId, activeCoViewSessionId]);
+
+  async function joinCoViewingSession(sessId: string) {
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessId}/join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':   'application/json',
+          'X-App-Platform': 'desktop',
+          'X-Access-Token': token,
+        },
+      });
+
+      if (!res.ok) {
+        setCoViewingBanner(null);
+        return;
+      }
+
+      const data = await res.json();
+      setActiveCoViewSessionId(sessId);
+      setCoViewingChannel(data.channel ?? null);
+      setFollowingPresenter(true);
+      setCoViewingBanner(null);
+      if (typeof data.current_page === 'number') setCurrentPage(data.current_page);
+    } catch {
+      setCoViewingBanner(null);
+    }
+  }
+
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
@@ -165,6 +274,15 @@ export function SecureViewer({ token, sig, env, onClose }: Props) {
 
   return (
     <>
+      {coViewingBanner && !canPresent && !presenterSession && (
+        <CoViewingBanner
+          presenterName={coViewingBanner.presenterName}
+          currentPage={coViewingBanner.currentPage}
+          onFollow={() => joinCoViewingSession(coViewingBanner.sessionId)}
+          onDismiss={() => setCoViewingBanner(null)}
+        />
+      )}
+
       <TileRenderer
         sessionId={sessionId}
         fileId={file.id}
@@ -172,7 +290,52 @@ export function SecureViewer({ token, sig, env, onClose }: Props) {
         totalPages={totalPages}
         onClose={onClose}
         onLock={() => setLocked(true)}
+        targetPage={currentPage}
+        onCurrentPageChange={setCurrentPage}
       />
+
+      {presenterSession && (
+        <PresenterToolbar
+          sessionId={presenterSession.sessionId}
+          channel={presenterSession.channel}
+          fileId={file.id}
+          mode={presenterSession.mode}
+          context={presenterSession.context}
+          currentPage={currentPage}
+          pageCount={totalPages}
+          onPageChange={setCurrentPage}
+          onStop={() => setPresenterSession(null)}
+        />
+      )}
+
+      {activeCoViewSessionId && coViewingChannel && (
+        <CoViewingRecipient
+          channel={coViewingChannel}
+          mode="synchronized"
+          following={followingPresenter}
+          onPageChange={(page) => setCurrentPage(page)}
+          onSessionEnd={() => setSessionEnded(true)}
+          onToggleFollow={() => setFollowingPresenter(f => !f)}
+        />
+      )}
+
+      {showStartModal && (
+        <StartSessionModal
+          fileId={file.id}
+          fileName={file.name}
+          token={token}
+          onStart={(sessionId, channel, mode, context) => {
+            setPresenterSession({ sessionId, channel, mode, context });
+            setShowStartModal(false);
+          }}
+          onClose={() => setShowStartModal(false)}
+        />
+      )}
+
+      {sessionEnded && (
+        <SessionEndedScreen onClose={() => setSessionEnded(false)} />
+      )}
+
       {locked && (
         <LockScreen
           fileName={file.name}
