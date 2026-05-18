@@ -299,6 +299,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           sessionId={presenterSession.sessionId}
           channel={presenterSession.channel}
           fileId={file.id}
+          token={token}
           mode={presenterSession.mode}
           context={presenterSession.context}
           currentPage={currentPage}

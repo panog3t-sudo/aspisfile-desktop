@@ -10,6 +10,9 @@ interface PresenterToolbarProps {
   sessionId:   string;
   channel:     string;
   fileId:      string;
+  // Desktop owner-token — required for the four authenticated co-viewing
+  // endpoints called from this toolbar (participants, heartbeat, page, end).
+  token:       string;
   mode:        'synchronized' | 'free';
   context:     'standalone' | 'teams' | 'zoom';
   currentPage: number;
@@ -19,7 +22,7 @@ interface PresenterToolbarProps {
 }
 
 export function PresenterToolbar({
-  sessionId, channel: _channel, fileId: _fileId, mode, context, currentPage, pageCount, onPageChange, onStop,
+  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop,
 }: PresenterToolbarProps) {
   const [participantCount, setParticipantCount] = useState(0);
   const [stopping, setStopping] = useState(false);
@@ -29,7 +32,9 @@ export function PresenterToolbar({
   // Fetch participant count periodically
   useEffect(() => {
     const fetch_ = () => {
-      fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/participants`)
+      fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/participants`, {
+        headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
+      })
         .then(r => r.json())
         .then(d => setParticipantCount(d.joined ?? 0))
         .catch(() => {});
@@ -41,7 +46,10 @@ export function PresenterToolbar({
 
   // Presenter heartbeat — keeps session alive if no page changes (free scroll mode)
   useEffect(() => {
-    const beat = () => fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/heartbeat`, { method: 'POST' }).catch(() => {});
+    const beat = () => fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/heartbeat`, {
+      method: 'POST',
+      headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
+    }).catch(() => {});
     beat();
     heartbeatRef.current = setInterval(beat, 30_000);
     return () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); };
@@ -53,7 +61,11 @@ export function PresenterToolbar({
     if (mode === 'synchronized') {
       await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/page`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type':   'application/json',
+          'X-App-Platform': 'desktop',
+          'X-Access-Token': token,
+        },
         body:    JSON.stringify({ page }),
       }).catch(() => {});
     }
@@ -68,7 +80,10 @@ export function PresenterToolbar({
 
   const handleStop = async () => {
     setStopping(true);
-    await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/end`, { method: 'POST' }).catch(() => {});
+    await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/end`, {
+      method: 'POST',
+      headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
+    }).catch(() => {});
     onStop();
   };
 
