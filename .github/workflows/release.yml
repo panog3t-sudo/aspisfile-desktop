@@ -11,7 +11,29 @@ on:
         required: true
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches tauri.conf.json version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG_VERSION="${TAG#v}"
+          CONF_VERSION=$(grep -E '^\s*"version"' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
+          PKG_VERSION=$(grep -E '^\s*"version"' package.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
+          echo "Tag version:    $TAG_VERSION"
+          echo "tauri.conf:     $CONF_VERSION"
+          echo "package.json:   $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$CONF_VERSION" ] || [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo ""
+            echo "❌ Version mismatch — bump tauri.conf.json and package.json to $TAG_VERSION before tagging."
+            echo "macOS Get Info / About reads CFBundleShortVersionString from tauri.conf.json, so the OS would lie about the installed version."
+            exit 1
+          fi
+          echo "✅ Versions aligned"
+
   build-macos:
+    needs: verify-version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
