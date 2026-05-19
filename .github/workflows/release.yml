@@ -93,13 +93,36 @@ jobs:
                    "AspisFile Viewer" artifacts/AspisFile.dmg
           ls -la artifacts/
 
-      # Sign the .dmg container so Gatekeeper doesn't warn on the .dmg
-      # download itself. The .app inside is already notarised by Tauri's
-      # build step, so the install is fully clean.
+      # Tauri's build step set up a temporary keychain via APPLE_CERTIFICATE,
+      # used it for app signing + notarisation, then tore it down. To sign
+      # the .dmg container ourselves we need to import the cert into a
+      # fresh persistent keychain that codesign can read.
+      - name: Import cert for DMG signing
+        if: ${{ env.APPLE_CERT_PRESENT == 'true' }}
+        env:
+          APPLE_CERT_PRESENT:         ${{ secrets.APPLE_CERTIFICATE != '' }}
+          APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/cert.p12
+          KEYCHAIN="$RUNNER_TEMP/dmg-signing.keychain-db"
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+                  -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain
+          rm /tmp/cert.p12
+
+      # Sign the .dmg container. The .app inside is already signed +
+      # notarised by Tauri; this just signs the container so Safari shows
+      # "verified developer" on download instead of an unidentified-source
+      # warning.
       - name: Sign the DMG container
         if: ${{ env.APPLE_CERT_PRESENT == 'true' }}
         env:
-          APPLE_CERT_PRESENT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          APPLE_CERT_PRESENT:     ${{ secrets.APPLE_CERTIFICATE != '' }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp artifacts/AspisFile.dmg
