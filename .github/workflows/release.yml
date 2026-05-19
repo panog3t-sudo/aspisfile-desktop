@@ -57,6 +57,11 @@ jobs:
       # they were the source of the "item could not be found in the keychain"
       # error on the previous attempt (temp keychain wasn't added to the
       # search list, so codesign couldn't see the imported identity).
+      # Build + sign + notarise the .app only. We skip Tauri's own .dmg
+      # bundler (--bundles app) because it doesn't write a .DS_Store, so
+      # Finder ignores the background.png and shows the default
+      # auto-arranged layout. We build a properly-laid-out .dmg with
+      # dmgbuild below.
       - name: Build, sign, notarise universal macOS app
         env:
           APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
@@ -65,18 +70,58 @@ jobs:
           APPLE_ID:                   ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD:             ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID:              ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run tauri build -- --target universal-apple-darwin
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app
 
-      # Rename to stable filenames so the web /downloads/* redirects stay
-      # constant across version bumps. Tauri produces
-      # "AspisFile Viewer_<version>_universal.dmg" with a literal space and
-      # the version embedded — neither matches a stable public URL.
-      - name: Rename dmg to stable name
+      - name: Setup Python (dmgbuild)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dmgbuild
+        run: pip install --upgrade pip dmgbuild
+
+      # dmgbuild generates a .DS_Store programmatically. No AppleScript / GUI
+      # dependency, so this works in headless CI where Tauri's create-dmg
+      # path could not.
+      - name: Build DMG with proper Finder layout
         run: |
-          src=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -1)
+          APP_PATH=$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)
+          echo "App: $APP_PATH"
           mkdir -p artifacts
-          cp "$src" "artifacts/AspisFile.dmg"
+          dmgbuild -s src-tauri/dmg-settings.py \
+                   -D app="$APP_PATH" \
+                   "AspisFile Viewer" artifacts/AspisFile.dmg
           ls -la artifacts/
+
+      # Sign the .dmg container so Gatekeeper doesn't warn on the .dmg
+      # download itself. The .app inside is already notarised by Tauri's
+      # build step, so the install is fully clean.
+      - name: Sign the DMG container
+        if: ${{ env.APPLE_CERT_PRESENT == 'true' }}
+        env:
+          APPLE_CERT_PRESENT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp artifacts/AspisFile.dmg
+          codesign --verify --verbose artifacts/AspisFile.dmg
+
+      # Notarise the .dmg so Gatekeeper on the user's Mac can validate it
+      # offline. Tauri already notarised the .app inside; we now also
+      # notarise the .dmg container itself.
+      - name: Notarise the DMG container
+        if: ${{ env.APPLE_ID_PRESENT == 'true' }}
+        env:
+          APPLE_ID_PRESENT: ${{ secrets.APPLE_ID != '' }}
+          APPLE_ID:       ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID:  ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit artifacts/AspisFile.dmg \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple artifacts/AspisFile.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
