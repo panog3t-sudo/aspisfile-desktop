@@ -1,7 +1,6 @@
 mod security;
 mod commands;
 mod fileassoc;
-mod deeplink;
 mod updater;
 
 use tauri::Manager;
@@ -18,7 +17,10 @@ pub fn run() {
 
             security::apply_window_security(&window);
             fileassoc::register_handler(app.handle().clone());
-            deeplink::register_handler(app.handle().clone());
+            // Deep-link delivery now handled directly in the frontend via
+            // @tauri-apps/plugin-deep-link's getCurrent() + onOpenUrl() —
+            // see src/App.tsx. This avoids the cold-start race where the
+            // Rust-side emit fires before React has registered a listener.
 
             // Skip the auto-updater in dev builds — the /api/releases endpoint
             // doesn't exist yet, and the failed check pollutes dev logs with

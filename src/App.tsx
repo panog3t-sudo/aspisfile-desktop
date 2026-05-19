@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
 import "./App.css";
@@ -61,25 +62,40 @@ export default function App() {
   }
 
   useEffect(() => {
-    // Check if the app was launched with a share link
-    const launchParams = checkLaunchArgs();
-    if (launchParams) { openLink(launchParams); return; }
+    let cancelled = false;
 
-    // Listen for share links opened while running
-    const unlistenLink = listen<string>("open-share-link", (event) => {
-      const params = extractFromUrl(event.payload);
+    // Cold-start URL: pull directly from the plugin instead of relying on the
+    // Rust side's emit racing the React mount. on_open_url events fired during
+    // app setup arrive before this listener is registered and are lost.
+    getCurrent()
+      .then((urls) => {
+        if (cancelled || !urls || urls.length === 0) return;
+        const params = extractFromUrl(urls[0]);
+        if (params) openLink(params);
+      })
+      .catch(() => {});
+
+    // Legacy launch-arg path — opening via `aspisfile-desktop ?url=...`
+    const launchParams = checkLaunchArgs();
+    if (launchParams) openLink(launchParams);
+
+    // Runtime URL deliveries — when the app is already running and a new
+    // aspisfile:// URL arrives, the plugin invokes this callback.
+    const unlistenDeepLinkPromise = onOpenUrl((urls) => {
+      if (cancelled || urls.length === 0) return;
+      const params = extractFromUrl(urls[0]);
       if (params) openLink(params);
     });
 
-    // Listen for .afs file opens — placeholder; .afs format TBD
+    // .afs file opens — placeholder; .afs format TBD
     const unlistenFile = listen<string>("open-afs-file", (event) => {
       console.log("[afs] file opened:", event.payload);
-      // TODO: parse .afs bundle and extract token/sig/env
     });
 
     return () => {
-      unlistenLink.then((f) => f());
-      unlistenFile.then((f) => f());
+      cancelled = true;
+      unlistenDeepLinkPromise.then((f) => f()).catch(() => {});
+      unlistenFile.then((f) => f()).catch(() => {});
     };
   }, []);
 
