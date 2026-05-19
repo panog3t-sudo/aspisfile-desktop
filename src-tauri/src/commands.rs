@@ -79,11 +79,14 @@ async fn windows_authenticate() -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier};
 
+    // The windows crate v0.58's IAsyncOperation doesn't implement Future,
+    // so .get() (blocking) is used instead of .await. This is acceptable
+    // because the call is blocked on user biometric input anyway.
     let result = UserConsentVerifier::RequestVerificationAsync(
         &HSTRING::from("Unlock AspisFile Viewer"),
     )
     .map_err(|e| e.to_string())?
-    .await
+    .get()
     .map_err(|e| e.to_string())?;
 
     if result == UserConsentVerificationResult::Verified {
