@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { fetch } from "@tauri-apps/plugin-http";
 import { sessionStore } from "../lib/sessionStore";
 import { supabase } from "../lib/supabase";
 import { authenticateDesktop, FileInfo, RecipientInfo } from "../lib/desktopAuth";

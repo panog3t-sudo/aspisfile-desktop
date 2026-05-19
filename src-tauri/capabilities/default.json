@@ -6,6 +6,13 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "deep-link:default"
+    "deep-link:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://aspisfile.com/*" },
+        { "url": "https://staging.aspisfile.com/*" }
+      ]
+    }
   ]
 }

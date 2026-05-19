@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetch } from '@tauri-apps/plugin-http';
 
 declare const __API_BASE__: string;
 

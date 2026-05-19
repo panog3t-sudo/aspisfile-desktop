@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fetch } from '@tauri-apps/plugin-http';
 
 declare const __API_BASE__: string;
 
