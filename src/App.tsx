@@ -102,6 +102,12 @@ export default function App() {
   if (mode === "viewer" && viewerParams) {
     return (
       <SecureViewer
+        // key forces a clean unmount + remount when a new deep link arrives
+        // while the viewer is already open. Without this, React reuses the
+        // existing SecureViewer instance and a stale startedRef would
+        // prevent the new session from starting — the viewer would render
+        // the new file metadata but stay stuck on the AuthLoadingScreen.
+        key={viewerParams.token}
         token={viewerParams.token}
         sig={viewerParams.sig}
         env={viewerParams.env}
