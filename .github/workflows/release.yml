@@ -184,15 +184,11 @@ jobs:
             --wait
           xcrun stapler staple artifacts/AspisFile.dmg
 
-      # Internet-Enable the DMG: Safari auto-mounts the DMG immediately
-      # after download instead of leaving it sitting in ~/Downloads as a
-      # file the user has to find and double-click. macOS standard for
-      # downloaded installers (Firefox, Slack, etc. all use this).
-      # Chrome / Firefox / Edge ignore the flag — those users still have
-      # to manually open the .dmg.
-      - name: Internet-Enable the DMG (Safari auto-mount on download)
-        run: |
-          hdiutil internet-enable -yes artifacts/AspisFile.dmg
+      # Internet-Enable used to be the path to "Safari auto-mounts on
+      # download." Apple removed the hdiutil verb in modern macOS for
+      # security reasons. Removed from the workflow. Future v1.2.0
+      # switches to .pkg installer which auto-opens via Installer.app
+      # on download — covered in project roadmap.
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
