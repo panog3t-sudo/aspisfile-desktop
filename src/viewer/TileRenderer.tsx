@@ -49,13 +49,6 @@ const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
   flexShrink: 0,
 });
 
-const badgeStyle: React.CSSProperties = {
-  fontSize: 14,
-  lineHeight: 1,
-  opacity: 0.75,
-  cursor: "default",
-};
-
 export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -206,18 +199,12 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
           </button>
         </div>
 
-        {/* Right: permission badges + page count */}
+        {/* Right: page count.
+            Print and download badges removed — see project memory
+            'Wire up print + download' — the icons advertised capabilities
+            we don't yet implement. Re-add when the actual /file route +
+            print pipeline are wired up. */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          {file.allow_print && (
-            <span title="Printing allowed" style={badgeStyle}>
-              🖨
-            </span>
-          )}
-          {file.allow_download && (
-            <span title="Download allowed" style={badgeStyle}>
-              ⬇
-            </span>
-          )}
           <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui" }}>
             {currentPage} / {totalPages}
           </span>

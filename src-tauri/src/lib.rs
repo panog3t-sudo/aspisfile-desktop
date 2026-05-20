@@ -3,7 +3,39 @@ mod commands;
 mod fileassoc;
 mod updater;
 
-use tauri::Manager;
+use tauri::{
+    Manager,
+    menu::{Menu, MenuBuilder, SubmenuBuilder, PredefinedMenuItem},
+};
+
+// Minimal macOS menu bar: App + Window only.
+//
+// The default Tauri/macOS menu includes File / Edit / View / Help with
+// Cut / Copy / Paste / Select-All / Find. None of those make sense in a
+// tile-based secure viewer — there is no text selection (the document is
+// rasterised JPEGs), no editable surface, and offering Copy implies a
+// capability we explicitly don't provide. App + Window are required by
+// the macOS Human Interface Guidelines (About, Quit, Hide, Minimize,
+// Zoom); everything else is stripped.
+fn build_minimal_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let app_submenu = SubmenuBuilder::new(app, "AspisFile Viewer")
+        .item(&PredefinedMenuItem::about(app, None, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app, None)?)
+        .item(&PredefinedMenuItem::hide_others(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, None)?)
+        .build()?;
+
+    let window_submenu = SubmenuBuilder::new(app, "Window")
+        .item(&PredefinedMenuItem::minimize(app, None)?)
+        .item(&PredefinedMenuItem::maximize(app, None)?)
+        .build()?;
+
+    MenuBuilder::new(app)
+        .items(&[&app_submenu, &window_submenu])
+        .build()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +49,14 @@ pub fn run() {
 
             security::apply_window_security(&window);
             fileassoc::register_handler(app.handle().clone());
+
+            // Replace the default macOS menu with the minimal App + Window
+            // structure. Strips Edit (Copy/Paste/Select All), File, View
+            // (Find), and Help — none of which apply to a rasterised
+            // secure document viewer.
+            if let Ok(menu) = build_minimal_menu(app.handle()) {
+                let _ = app.set_menu(menu);
+            }
             // Deep-link delivery now handled directly in the frontend via
             // @tauri-apps/plugin-deep-link's getCurrent() + onOpenUrl() —
             // see src/App.tsx. This avoids the cold-start race where the
