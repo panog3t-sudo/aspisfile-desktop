@@ -80,6 +80,36 @@ jobs:
       - name: Install dmgbuild
         run: pip install --upgrade pip dmgbuild
 
+      # Generate a proper Finder alias to /Applications via osascript.
+      # Replaces dmgbuild's default Unix symlink (which Finder renders as
+      # a dashed empty placeholder with no drop animation). The proper
+      # alias shows the real Applications folder icon and gives standard
+      # drag-and-drop feedback when the user installs the app.
+      #
+      # continue-on-error: if osascript can't talk to Finder on this
+      # runner, dmg-settings.py falls back to the symlink path — no
+      # regression vs. previous behaviour.
+      - name: Generate Applications alias (via Finder)
+        id: appsalias
+        continue-on-error: true
+        run: |
+          STAGE="$RUNNER_TEMP/dmg-apps-alias"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          osascript -e "tell application \"Finder\" to make alias file to POSIX file \"/Applications\" at POSIX file \"$STAGE\""
+          # Finder names the file "Applications" or "Applications alias"
+          # depending on macOS version. Normalise to exactly "Applications"
+          # so the icon_locations entry in dmg-settings.py matches.
+          ALIAS_RAW=$(find "$STAGE" -maxdepth 1 -not -path "$STAGE" | head -1)
+          if [ -z "$ALIAS_RAW" ]; then
+            echo "osascript ran but produced no alias file"
+            exit 1
+          fi
+          if [ "$ALIAS_RAW" != "$STAGE/Applications" ]; then
+            mv "$ALIAS_RAW" "$STAGE/Applications"
+          fi
+          ls -la "$STAGE/"
+          echo "alias_path=$STAGE/Applications" >> "$GITHUB_OUTPUT"
+
       # dmgbuild generates a .DS_Store programmatically. No AppleScript / GUI
       # dependency, so this works in headless CI where Tauri's create-dmg
       # path could not.
@@ -87,9 +117,17 @@ jobs:
         run: |
           APP_PATH=$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)
           echo "App: $APP_PATH"
+          ALIAS_DEFINE=()
+          if [ -n "${{ steps.appsalias.outputs.alias_path }}" ]; then
+            ALIAS_DEFINE+=(-D "apps_alias=${{ steps.appsalias.outputs.alias_path }}")
+            echo "Using Finder alias for Applications: ${{ steps.appsalias.outputs.alias_path }}"
+          else
+            echo "Falling back to Unix symlink for Applications (osascript step did not produce an alias)"
+          fi
           mkdir -p artifacts
           dmgbuild -s src-tauri/dmg-settings.py \
                    -D app="$APP_PATH" \
+                   "${ALIAS_DEFINE[@]}" \
                    "AspisFile Viewer" artifacts/AspisFile.dmg
           ls -la artifacts/
 
@@ -145,6 +183,16 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait
           xcrun stapler staple artifacts/AspisFile.dmg
+
+      # Internet-Enable the DMG: Safari auto-mounts the DMG immediately
+      # after download instead of leaving it sitting in ~/Downloads as a
+      # file the user has to find and double-click. macOS standard for
+      # downloaded installers (Firefox, Slack, etc. all use this).
+      # Chrome / Firefox / Edge ignore the flag — those users still have
+      # to manually open the .dmg.
+      - name: Internet-Enable the DMG (Safari auto-mount on download)
+        run: |
+          hdiutil internet-enable -yes artifacts/AspisFile.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

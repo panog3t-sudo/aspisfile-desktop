@@ -26,9 +26,25 @@ include_icon_view_settings = True
 # Background image — relative to the cwd of the dmgbuild invocation
 background = 'src-tauri/icons/dmg-background.png'
 
-# Files to ship inside the .dmg
-files = [application]
-symlinks = {'Applications': '/Applications'}
+# Files to ship inside the .dmg.
+#
+# When CI passes `-D apps_alias=<path>`, that path points at a proper
+# Finder alias to /Applications generated via osascript at build time.
+# Including it as a file (rather than a Unix symlink) makes Finder
+# render the real Applications folder icon and animate the drag-drop
+# when the user moves the app into it.
+#
+# Fallback: if no apps_alias was provided (e.g. osascript failed on the
+# runner), we use a regular Unix symlink — same as before. UX degrades
+# to "dashed empty placeholder" but the drag still works functionally.
+apps_alias = defines.get('apps_alias', '')  # type: ignore[name-defined]  # noqa: F821
+
+if apps_alias and os.path.exists(apps_alias):
+    files = [application, apps_alias]
+    symlinks = {}
+else:
+    files = [application]
+    symlinks = {'Applications': '/Applications'}
 
 # Icon layout — coordinates match the arrow in icons/dmg-background.png
 icon_size = 80
