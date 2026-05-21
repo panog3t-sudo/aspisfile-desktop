@@ -240,6 +240,24 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coviewSessionId, recipient, file, sessionId, activeCoViewSessionId]);
 
+  // Phase 2 — recipient publishes its current page to the server so the
+  // presenter's participant list shows each viewer's actual page. Only
+  // active when joined to a co-viewing session as a recipient (not the
+  // presenter — they're the source of truth for the synchronized page).
+  useEffect(() => {
+    if (!activeCoViewSessionId) return;
+    if (presenterSession) return; // skip on presenter side
+    fetch(`${__API_BASE__}/api/v1/co-viewing/${activeCoViewSessionId}/my-page`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':   'application/json',
+        'X-App-Platform': 'desktop',
+        'X-Access-Token': token,
+      },
+      body: JSON.stringify({ page: currentPage }),
+    }).catch(() => {});
+  }, [activeCoViewSessionId, presenterSession, currentPage, token]);
+
   async function joinCoViewingSession(sessId: string) {
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessId}/join`, {
@@ -339,7 +357,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       )}
 
       {sessionEnded && (
-        <SessionEndedScreen onClose={() => setSessionEnded(false)} />
+        // Hard close the file when the session ends. Permanent recipients
+        // re-open via their email link or the recipient portal — no
+        // possibility of a lingering open file after the presenter is done.
+        <SessionEndedScreen onCloseFile={onClose} />
       )}
 
       {locked && (
