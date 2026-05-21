@@ -244,14 +244,17 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
         </div>
       </div>
 
-      {/* Tile — outer div is the scroll container, inner div handles centering.
-           Two-level structure prevents flexbox from clipping the top of tall content. */}
+      {/* Tile — outer div is the scroll container, inner div handles
+          horizontal centering. The image's width is set as a percentage
+          (NOT a transform) so the layout box matches the rendered size
+          and the outer scroll container can overflow vertically AND
+          horizontally when zoomed in. */}
       <div style={{ flex: 1, overflow: "auto" }}>
         <div
           style={{
             minHeight: "100%",
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-start", // top-anchor; scroll container handles vertical overflow
             justifyContent: "center",
             padding: 24,
             boxSizing: "border-box",
@@ -262,14 +265,27 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
               Loading…
             </span>
           ) : tileUrl ? (
-            <div style={{ position: "relative", lineHeight: 0, transform: `scale(${ZOOM_STEPS[zoomIndex] / 100})`, transformOrigin: "top center", transition: "transform 0.15s ease" }}>
+            <div
+              style={{
+                position: "relative",
+                lineHeight: 0,
+                // Width-based scaling: at 100% the image fills the
+                // centering container; >100% overflows the scroll
+                // container so scrollbars appear (transform: scale never
+                // does this because it doesn't affect the layout box).
+                width: `${ZOOM_STEPS[zoomIndex]}%`,
+                maxWidth: "none",
+                flexShrink: 0,
+                transition: "width 0.15s ease",
+              }}
+            >
               <img
                 src={tileUrl}
                 alt=""
                 draggable={false}
                 style={{
                   display: "block",
-                  maxWidth: "100%",
+                  width: "100%",
                   height: "auto",
                   borderRadius: 4,
                   boxShadow: "0 4px 24px rgba(0,0,0,0.4)",

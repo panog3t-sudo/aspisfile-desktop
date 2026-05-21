@@ -339,7 +339,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           following={followingPresenter}
           onPageChange={(page) => setCurrentPage(page)}
           onSessionEnd={() => setSessionEnded(true)}
-          onToggleFollow={() => setFollowingPresenter(f => !f)}
+          onSetFollowing={setFollowingPresenter}
         />
       )}
 
