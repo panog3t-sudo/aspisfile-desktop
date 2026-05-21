@@ -70,7 +70,10 @@ The workflow:
    notarised with the Application cert
 2. Wraps the `.app` in a signed + notarised `.pkg` installer using the
    Installer cert (auto-opens in Installer.app on download, installs to
-   /Applications without a drag step)
+   /Applications without a drag step). The .pkg bundles the postinstall
+   script in `src-tauri/pkg-scripts/postinstall` which moves the .pkg
+   into the user's Trash after install completes, so recipients don't
+   have to clean up their Downloads folder manually.
 3. Builds an unsigned `.msi` on Windows
 4. Renames artifacts to stable names (`AspisFile.pkg`, `AspisFile.msi`) so
    the web `/downloads/*` redirects don't need updating between versions

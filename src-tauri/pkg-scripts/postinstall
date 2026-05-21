@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+# Runs after the .pkg payload is installed. Moves the .pkg file the
+# user double-clicked into their Trash so they don't have to clean up
+# their Downloads folder manually.
+#
+# Best-effort: any failure (file gone, no Trash, wrong volume) is
+# swallowed — exit 0 always so the install itself never fails because
+# of post-install cleanup.
+#
+# Runs as root (the .pkg installs to /Applications which requires
+# admin), but macOS Installer sets $HOME to the *invoking* user's home
+# directory, so $HOME/.Trash is the right destination.
+#
+# Apple-set env vars available here:
+#   PACKAGE_PATH       — absolute path of the .pkg that ran this install
+#   INSTALL_PKG_SESSION_ID — install session identifier
+#   HOME / USER        — invoking user's home / username
+
+set -u
+
+PKG="${PACKAGE_PATH:-}"
+if [ -n "$PKG" ] && [ -e "$PKG" ]; then
+  TRASH="$HOME/.Trash"
+  if [ -d "$TRASH" ]; then
+    /bin/mv -f "$PKG" "$TRASH/" 2>/dev/null || true
+  fi
+fi
+
+exit 0

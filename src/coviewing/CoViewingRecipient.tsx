@@ -4,6 +4,8 @@ import {
   createCoViewingChannel,
   attachBroadcasts,
   type RecipientPresence,
+  type ScrollChangePayload,
+  type ZoomChangePayload,
 } from '../lib/coviewing-realtime';
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif";
@@ -21,6 +23,11 @@ interface CoViewingRecipientProps {
   onPageChange:   (page: number) => void;
   onSessionEnd:   () => void;
   onSetFollowing: (following: boolean) => void;
+  // Scroll + zoom mirror callbacks. Fire when the presenter broadcasts
+  // a change; SecureViewer updates its state and TileRenderer applies
+  // it (only when followingPresenter — free-mode recipients ignore).
+  onScrollChange?: (s: ScrollChangePayload) => void;
+  onZoomChange?:   (z: ZoomChangePayload)   => void;
 }
 
 // Bottom-of-viewer pill shown to recipients in a synchronized session.
@@ -40,9 +47,15 @@ export function CoViewingRecipient({
   onPageChange,
   onSessionEnd,
   onSetFollowing,
+  onScrollChange,
+  onZoomChange,
 }: CoViewingRecipientProps) {
-  const followingRef = useRef(following);
-  followingRef.current = following;
+  const followingRef     = useRef(following);
+  followingRef.current   = following;
+  const onScrollRef      = useRef(onScrollChange);
+  onScrollRef.current    = onScrollChange;
+  const onZoomRef        = useRef(onZoomChange);
+  onZoomRef.current      = onZoomChange;
 
   // One channel object for the lifetime of this component. Subscribes
   // for broadcasts (presenter page sync, session end) AND tracks the
@@ -53,6 +66,10 @@ export function CoViewingRecipient({
     attachBroadcasts(ch, {
       onPageChange: (page) => { if (followingRef.current) onPageChange(page); },
       onSessionEnd: () => onSessionEnd(),
+      // Scroll + zoom mirror only while following. Free-mode recipients
+      // ignore presenter scroll/zoom and navigate independently.
+      onScrollChange: (s) => { if (followingRef.current) onScrollRef.current?.(s); },
+      onZoomChange:   (z) => { if (followingRef.current) onZoomRef.current?.(z); },
     });
     ch.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {

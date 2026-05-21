@@ -15,6 +15,8 @@ import { PresenterToolbar }           from "../coviewing/PresenterToolbar";
 import { PresenterParticipantPanel }  from "../coviewing/PresenterParticipantPanel";
 import { StartSessionModal }          from "../coviewing/StartSessionModal";
 import { SessionEndedScreen }         from "../coviewing/SessionEndedScreen";
+import { broadcastScroll, broadcastZoom, type ScrollChangePayload } from "../lib/coviewing-realtime";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const IDLE_MS   = 2 * 60 * 1000; // lock after 2 min inactivity
 const BLUR_MS   = 30 * 1000;      // lock 30s after window loses focus
@@ -108,6 +110,35 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     sessionId: string; channel: string;
     mode: 'synchronized' | 'free'; context: 'standalone' | 'teams' | 'zoom';
   } | null>(null);
+
+  // Zoom level (shared between presenter and recipient). Index into
+  // TileRenderer's ZOOM_STEPS — 2 = 100% default. Same shape as
+  // currentPage: locally controlled, optionally driven by an external
+  // broadcast (recipient receives zoom_change from presenter).
+  const [currentZoom, setCurrentZoom] = useState(2);
+
+  // Latest scroll position broadcast received from the presenter. Only
+  // populated on the recipient side; passed to TileRenderer as
+  // subscribedScroll where it's applied programmatically in follow mode.
+  const [subscribedScroll, setSubscribedScroll] = useState<ScrollChangePayload | null>(null);
+
+  // Presenter publishing channel — subscribed for the lifetime of the
+  // presenter session so broadcastScroll / broadcastZoom can fire
+  // immediately. Send-only (no listeners attached) and `broadcast.self:
+  // false` so we don't receive our own publishes back as events.
+  const presenterPubChannelRef = useRef<RealtimeChannel | null>(null);
+  useEffect(() => {
+    if (!presenterSession) return;
+    const ch = supabase.channel(presenterSession.channel, {
+      config: { broadcast: { self: false } },
+    });
+    ch.subscribe();
+    presenterPubChannelRef.current = ch;
+    return () => {
+      presenterPubChannelRef.current = null;
+      supabase.removeChannel(ch);
+    };
+  }, [presenterSession?.channel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 10d — lifted from TileRenderer so the presenter toolbar / recipient
   // page sync can read and control it.
@@ -336,6 +367,28 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     }).catch(() => {});
   }, [currentPage, presenterSession?.sessionId, presenterSession?.mode, token]);
 
+  // Broadcast presenter's current zoom whenever it changes. Recipients
+  // in follow mode receive zoom_change and update their own zoomIndex
+  // via the targetZoom prop, so visual size stays in sync.
+  const lastBroadcastZoomRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!presenterSession || presenterSession.mode !== 'synchronized') return;
+    const ch = presenterPubChannelRef.current;
+    if (!ch) return;
+    if (lastBroadcastZoomRef.current === currentZoom) return;
+    lastBroadcastZoomRef.current = currentZoom;
+    broadcastZoom(ch, { zoomIndex: currentZoom });
+  }, [currentZoom, presenterSession?.sessionId, presenterSession?.mode]);
+
+  // Scroll-publish callback for TileRenderer — fires (throttled inside
+  // TileRenderer) when the presenter scrolls. No-op when no presenter
+  // pub channel is available (i.e., recipient side).
+  const handlePublishScroll = useCallback((s: { v: number; h: number }) => {
+    const ch = presenterPubChannelRef.current;
+    if (!ch) return;
+    broadcastScroll(ch, s);
+  }, []);
+
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
@@ -376,13 +429,23 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onLock={() => setLocked(true)}
             targetPage={currentPage}
             onCurrentPageChange={setCurrentPage}
+            targetZoom={currentZoom}
+            onCurrentZoomChange={setCurrentZoom}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
             onPresent={canPresent && !presenterSession ? () => setShowStartModal(true) : undefined}
             // Co-viewing recipient + Follow → mirror the presenter
-            // exactly (no zoom, no scroll, no page navigation).
+            // exactly (no zoom controls, no manual scroll, no page
+            // navigation; subscribedScroll drives the scroll position).
             followMode={!!activeCoViewSessionId && followingPresenter}
+            // Presenter side: publish scroll on user interaction.
+            // Recipient side: this is undefined → TileRenderer's onScroll
+            // is a no-op for publish purposes.
+            onPublishScroll={presenterSession ? handlePublishScroll : undefined}
+            // Recipient side: apply scroll programmatically when the
+            // presenter publishes.
+            subscribedScroll={activeCoViewSessionId && followingPresenter ? subscribedScroll : null}
           />
         </div>
         {presenterSession && participantPanelOpen && (
@@ -424,6 +487,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onPageChange={(page) => setCurrentPage(page)}
           onSessionEnd={() => setSessionEnded(true)}
           onSetFollowing={setFollowingPresenter}
+          onScrollChange={(s) => setSubscribedScroll(s)}
+          onZoomChange={(z) => setCurrentZoom(z.zoomIndex)}
         />
       )}
 

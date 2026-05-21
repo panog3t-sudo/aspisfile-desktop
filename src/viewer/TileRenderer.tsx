@@ -34,9 +34,19 @@ type Props = {
   onPresent?: () => void;
   // Co-viewing recipient lockdown. When true, the viewer mirrors the
   // presenter exactly: Prev/Next disabled, zoom disabled, scroll
-  // container clipped (no scrollbars). Set by SecureViewer when the
-  // recipient is joined to a session AND has chosen Follow.
+  // programmatic-only (user mouse/touch blocked). Set by SecureViewer
+  // when the recipient is joined to a session AND has chosen Follow.
   followMode?: boolean;
+  // Zoom sync — same shape as page sync. targetZoom (controlled by
+  // parent) overrides the internal zoomIndex; onCurrentZoomChange
+  // reports user interactions back to the parent.
+  targetZoom?: number;
+  onCurrentZoomChange?: (zoomIndex: number) => void;
+  // Scroll sync. Presenter side: onPublishScroll fires (throttled) on
+  // local scroll. Recipient side: subscribedScroll, when set, is
+  // applied programmatically to the scroll container.
+  onPublishScroll?: (s: { v: number; h: number }) => void;
+  subscribedScroll?: { v: number; h: number } | null;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -58,7 +68,11 @@ const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
   flexShrink: 0,
 });
 
-export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange, onPresent, followMode }: Props) {
+export function TileRenderer({
+  sessionId, fileId, file, totalPages, onClose, onLock,
+  targetPage, onCurrentPageChange, onPresent, followMode,
+  targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
+}: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Sync external targetPage (e.g. presenter pushed a page_change) into local state
@@ -71,7 +85,58 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
   const [tileUrls, setTileUrls] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
   const [zoomIndex, setZoomIndex] = useState(2); // 100% default
-  const fingerprintRef = useRef<string>("");
+  const fingerprintRef    = useRef<string>("");
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Sync external targetZoom (presenter pushed zoom_change) into local state
+  useEffect(() => {
+    if (typeof targetZoom !== 'number') return;
+    if (targetZoom < 0 || targetZoom >= ZOOM_STEPS.length) return;
+    if (targetZoom !== zoomIndex) setZoomIndex(targetZoom);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetZoom]);
+
+  // Apply subscribedScroll programmatically (recipient side). Percentages
+  // → pixels using the container's current scroll dimensions, so the
+  // recipient ends up at the same relative position even if their
+  // viewport size differs from the presenter's.
+  useEffect(() => {
+    if (!subscribedScroll || !scrollContainerRef.current) return;
+    const el = scrollContainerRef.current;
+    const maxV = el.scrollHeight - el.clientHeight;
+    const maxH = el.scrollWidth  - el.clientWidth;
+    if (maxV > 0) el.scrollTop  = subscribedScroll.v * maxV;
+    if (maxH > 0) el.scrollLeft = subscribedScroll.h * maxH;
+  }, [subscribedScroll]);
+
+  // Throttled scroll publish (presenter side). Trailing-edge timer so the
+  // final position lands within ~80ms even after a fast scroll-then-stop.
+  // No publish when onPublishScroll is undefined (recipient side).
+  const lastPublishedScrollRef = useRef<{ v: number; h: number } | null>(null);
+  const scrollPendingRef       = useRef<{ v: number; h: number } | null>(null);
+  const scrollTimerRef         = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushScroll = useCallback(() => {
+    scrollTimerRef.current = null;
+    const pending = scrollPendingRef.current;
+    if (!pending || !onPublishScroll) return;
+    const last = lastPublishedScrollRef.current;
+    if (last && Math.abs(last.v - pending.v) < 0.001 && Math.abs(last.h - pending.h) < 0.001) return;
+    lastPublishedScrollRef.current = pending;
+    onPublishScroll(pending);
+    scrollPendingRef.current = null;
+  }, [onPublishScroll]);
+  const onScrollEvent = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (!onPublishScroll) return; // recipient side: no publish
+    const el = e.currentTarget;
+    const maxV = el.scrollHeight - el.clientHeight;
+    const maxH = el.scrollWidth  - el.clientWidth;
+    const v = maxV > 0 ? el.scrollTop  / maxV : 0;
+    const h = maxH > 0 ? el.scrollLeft / maxH : 0;
+    scrollPendingRef.current = { v, h };
+    if (!scrollTimerRef.current) {
+      scrollTimerRef.current = setTimeout(flushScroll, 80);
+    }
+  }, [onPublishScroll, flushScroll]);
 
   useEffect(() => {
     getDesktopFingerprint().then((fp) => { fingerprintRef.current = fp; });
@@ -195,7 +260,11 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
         {!followMode && (
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
             <button
-              onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
+              onClick={() => setZoomIndex((i) => {
+                const next = Math.max(0, i - 1);
+                if (next !== i) onCurrentZoomChange?.(next);
+                return next;
+              })}
               disabled={zoomIndex === 0}
               title="Zoom out"
               style={toolbarBtnStyle(zoomIndex === 0)}
@@ -206,7 +275,11 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
               {ZOOM_STEPS[zoomIndex]}%
             </span>
             <button
-              onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
+              onClick={() => setZoomIndex((i) => {
+                const next = Math.min(ZOOM_STEPS.length - 1, i + 1);
+                if (next !== i) onCurrentZoomChange?.(next);
+                return next;
+              })}
               disabled={zoomIndex === ZOOM_STEPS.length - 1}
               title="Zoom in"
               style={toolbarBtnStyle(zoomIndex === ZOOM_STEPS.length - 1)}
@@ -257,14 +330,26 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
         </div>
       </div>
 
-      {/* Tile — outer div is the scroll container, inner div handles
-          horizontal centering. The image's width is set as a percentage
-          (NOT a transform) so the layout box matches the rendered size
-          and the outer scroll container can overflow vertically AND
-          horizontally when zoomed in.
-          Follow mode → overflow: hidden (recipient can't scroll within
-          the page; they mirror the presenter's view). */}
-      <div style={{ flex: 1, overflow: followMode ? "hidden" : "auto" }}>
+      {/* Tile — outer div is the scroll container. Image width is a
+          percentage (NOT a transform) so the layout box matches the
+          rendered size and the scroll container overflows correctly
+          when zoomed in.
+          Follow mode: still overflow:auto so programmatic scroll
+          (subscribedScroll → scrollTop/scrollLeft) works, but user
+          input is blocked via onWheel preventDefault + touch-action:
+          none. The presenter's onScroll publishes scroll position via
+          the ref + throttle so recipients in follow mode mirror it. */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={onScrollEvent}
+        onWheel={(e) => { if (followMode) e.preventDefault(); }}
+        onTouchMove={(e) => { if (followMode) e.preventDefault(); }}
+        style={{
+          flex:       1,
+          overflow:   'auto',
+          touchAction: followMode ? 'none' : 'auto',
+        }}
+      >
         <div
           style={{
             minHeight: "100%",

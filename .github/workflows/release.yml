@@ -109,11 +109,17 @@ jobs:
           echo "App:     $APP_PATH"
           echo "Version: $VERSION"
           mkdir -p artifacts
+          # Postinstall script lives in src-tauri/pkg-scripts/. It moves
+          # the .pkg the user double-clicked into ~/.Trash after install
+          # completes so they don't have to clean up Downloads manually.
+          # The script is included in the signed/notarised payload.
+          chmod 755 src-tauri/pkg-scripts/postinstall
           pkgbuild \
             --component "$APP_PATH" \
             --install-location /Applications \
             --identifier com.aspisfile.viewer.pkg \
             --version "$VERSION" \
+            --scripts src-tauri/pkg-scripts \
             --sign "$APPLE_INSTALLER_SIGNING_IDENTITY" \
             artifacts/AspisFile.pkg
           pkgutil --check-signature artifacts/AspisFile.pkg
