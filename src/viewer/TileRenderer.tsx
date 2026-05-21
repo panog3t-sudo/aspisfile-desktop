@@ -32,6 +32,11 @@ type Props = {
   // a "Present" button (file-owner only — SecureViewer gates the prop on
   // file.is_owner && !presenterSession before passing it in).
   onPresent?: () => void;
+  // Co-viewing recipient lockdown. When true, the viewer mirrors the
+  // presenter exactly: Prev/Next disabled, zoom disabled, scroll
+  // container clipped (no scrollbars). Set by SecureViewer when the
+  // recipient is joined to a session AND has chosen Follow.
+  followMode?: boolean;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -53,7 +58,7 @@ const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
   flexShrink: 0,
 });
 
-export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange, onPresent }: Props) {
+export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange, onPresent, followMode }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Sync external targetPage (e.g. presenter pushed a page_change) into local state
@@ -185,28 +190,31 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
           </span>
         </div>
 
-        {/* Center: zoom controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-          <button
-            onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
-            disabled={zoomIndex === 0}
-            title="Zoom out"
-            style={toolbarBtnStyle(zoomIndex === 0)}
-          >
-            −
-          </button>
-          <span style={{ fontSize: 12, color: "#94A3B8", fontFamily: "system-ui", minWidth: 38, textAlign: "center" }}>
-            {ZOOM_STEPS[zoomIndex]}%
-          </span>
-          <button
-            onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
-            disabled={zoomIndex === ZOOM_STEPS.length - 1}
-            title="Zoom in"
-            style={toolbarBtnStyle(zoomIndex === ZOOM_STEPS.length - 1)}
-          >
-            +
-          </button>
-        </div>
+        {/* Center: zoom controls (hidden in follow mode — recipient
+            mirrors the presenter exactly) */}
+        {!followMode && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+            <button
+              onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
+              disabled={zoomIndex === 0}
+              title="Zoom out"
+              style={toolbarBtnStyle(zoomIndex === 0)}
+            >
+              −
+            </button>
+            <span style={{ fontSize: 12, color: "#94A3B8", fontFamily: "system-ui", minWidth: 38, textAlign: "center" }}>
+              {ZOOM_STEPS[zoomIndex]}%
+            </span>
+            <button
+              onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
+              disabled={zoomIndex === ZOOM_STEPS.length - 1}
+              title="Zoom in"
+              style={toolbarBtnStyle(zoomIndex === ZOOM_STEPS.length - 1)}
+            >
+              +
+            </button>
+          </div>
+        )}
 
         {/* Right: Present button (owner-only) + page count.
             Print and download badges removed — see project memory
@@ -253,8 +261,10 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
           horizontal centering. The image's width is set as a percentage
           (NOT a transform) so the layout box matches the rendered size
           and the outer scroll container can overflow vertically AND
-          horizontally when zoomed in. */}
-      <div style={{ flex: 1, overflow: "auto" }}>
+          horizontally when zoomed in.
+          Follow mode → overflow: hidden (recipient can't scroll within
+          the page; they mirror the presenter's view). */}
+      <div style={{ flex: 1, overflow: followMode ? "hidden" : "auto" }}>
         <div
           style={{
             minHeight: "100%",
@@ -318,8 +328,9 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
         </div>
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
+      {/* Pagination — hidden in follow mode (recipient mirrors the
+          presenter; their own page navigation is disabled). */}
+      {totalPages > 1 && !followMode && (
         <div
           style={{
             display: "flex",

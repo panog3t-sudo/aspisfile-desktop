@@ -312,6 +312,30 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // Broadcast presenter's current page to recipients on EVERY page
+  // change — not just clicks on PresenterToolbar's arrow buttons.
+  // Previously the broadcast was wired into PresenterToolbar.changePage,
+  // which meant the TileRenderer's bottom Prev/Next buttons updated
+  // local state but never reached recipients (silent sync gap).
+  // This effect fires whenever currentPage changes while a presenter
+  // session is active in synchronized mode — covers any page-change
+  // path that updates state.
+  const lastBroadcastPageRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!presenterSession || presenterSession.mode !== 'synchronized') return;
+    if (lastBroadcastPageRef.current === currentPage) return;
+    lastBroadcastPageRef.current = currentPage;
+    fetch(`${__API_BASE__}/api/v1/co-viewing/${presenterSession.sessionId}/page`, {
+      method: 'POST',
+      headers: {
+        'Content-Type':   'application/json',
+        'X-App-Platform': 'desktop',
+        'X-Access-Token': token,
+      },
+      body: JSON.stringify({ page: currentPage }),
+    }).catch(() => {});
+  }, [currentPage, presenterSession?.sessionId, presenterSession?.mode, token]);
+
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
@@ -331,9 +355,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
       {/* Flex row: document on the left, participant panel on the right
           (presenter only, when toggled open). The panel pushes the
-          document width instead of overlaying it — per the product
-          decision (2026-05-21), the panel must not cover the file. */}
-      <div style={{ display: 'flex', height: '100vh' }}>
+          document width instead of overlaying it.
+          When the presenter session is active, the PresenterToolbar
+          (fixed, 44px) overlays the top — push this row down by 44px
+          and shrink its height to compensate so the TileRenderer
+          toolbar (close, lock, zoom) and the panel header sit BELOW
+          the PresenterToolbar instead of being hidden behind it. */}
+      <div style={{
+        display:    'flex',
+        height:     presenterSession ? 'calc(100vh - 44px)' : '100vh',
+        marginTop:  presenterSession ? 44 : 0,
+      }}>
         <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           <TileRenderer
             sessionId={sessionId}
@@ -348,6 +380,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
             onPresent={canPresent && !presenterSession ? () => setShowStartModal(true) : undefined}
+            // Co-viewing recipient + Follow → mirror the presenter
+            // exactly (no zoom, no scroll, no page navigation).
+            followMode={!!activeCoViewSessionId && followingPresenter}
           />
         </div>
         {presenterSession && participantPanelOpen && (

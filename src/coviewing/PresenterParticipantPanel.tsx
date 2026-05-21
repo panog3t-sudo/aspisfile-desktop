@@ -71,13 +71,21 @@ export function PresenterParticipantPanel({
     return () => clearInterval(iv);
   }, [sessionId, token]);
 
-  // Realtime presence subscription
+  // Realtime presence subscription.
+  //
+  // Important: presence_join and presence_leave update `presence` state
+  // directly — we do NOT depend on presence_sync to reconcile after each
+  // delta. In practice sync can lag (or batch) by several seconds, which
+  // surfaced as "the timer keeps running and the name isn't crossed out
+  // until I close and reopen the panel" — the leave event fired but the
+  // panel was waiting on sync to drop the entry from presence state.
+  // Direct updates make the UI react within ~100ms of the event.
+  // presence_sync still runs and acts as a reconciler if there's drift.
   useEffect(() => {
     const ch = createCoViewingChannel(channel);
     attachPresence(ch, {
       onPresenceSync: (state) => {
-        // state: { [presenceKey]: RecipientPresence[] }
-        // Flatten — one entry per key (single device per email).
+        // Reconciliation pass — full current state from server
         const flat: Record<string, PresenceRow> = {};
         for (const arr of Object.values(state)) {
           for (const p of arr) {
@@ -92,22 +100,37 @@ export function PresenterParticipantPanel({
           }
         }
         setPresence(flat);
-        // Anyone now back in presence is no longer "gone"
         setGone(prev => {
           const next = { ...prev };
-          for (const email of Object.keys(flat)) {
-            delete next[email];
-          }
+          for (const email of Object.keys(flat)) delete next[email];
           return next;
         });
       },
       onPresenceJoin: (newPresences) => {
         const ts = Date.now();
         const updates: Record<string, number> = {};
+        const presenceAdditions: Record<string, PresenceRow> = {};
         for (const p of newPresences) {
-          if (p && p.email) updates[p.email.toLowerCase()] = ts;
+          if (!p || !p.email) continue;
+          const key = p.email.toLowerCase();
+          updates[key] = ts;
+          presenceAdditions[key] = {
+            email:     p.email,
+            page:      p.page,
+            following: p.following,
+            joined_at: p.joined_at,
+          };
         }
         if (Object.keys(updates).length === 0) return;
+        // Add to presence immediately
+        setPresence(prev => ({ ...prev, ...presenceAdditions }));
+        // Clear gone for these emails (they're back)
+        setGone(prev => {
+          const next = { ...prev };
+          for (const email of Object.keys(updates)) delete next[email];
+          return next;
+        });
+        // Flash highlight for 3s
         setRecentJoin(prev => ({ ...prev, ...updates }));
         setTimeout(() => {
           setRecentJoin(prev => {
@@ -121,13 +144,24 @@ export function PresenterParticipantPanel({
       },
       onPresenceLeave: (leftPresences) => {
         const ts = Date.now();
-        const updates: Record<string, { at: number }> = {};
+        const leaverEmails: string[] = [];
         for (const p of leftPresences) {
-          if (p && p.email) updates[p.email.toLowerCase()] = { at: ts };
+          if (p && p.email) leaverEmails.push(p.email.toLowerCase());
         }
-        if (Object.keys(updates).length > 0) {
-          setGone(prev => ({ ...prev, ...updates }));
-        }
+        if (leaverEmails.length === 0) return;
+        // Mark gone for the "Left HH:MM" + strikethrough rendering
+        setGone(prev => {
+          const next = { ...prev };
+          for (const email of leaverEmails) next[email] = { at: ts };
+          return next;
+        });
+        // Remove from presence immediately — don't wait for sync to
+        // catch up (was the cause of the stale-row bug).
+        setPresence(prev => {
+          const next = { ...prev };
+          for (const email of leaverEmails) delete next[email];
+          return next;
+        });
       },
     });
     ch.subscribe();
@@ -166,13 +200,16 @@ export function PresenterParticipantPanel({
   return (
     <aside
       style={{
-        width:         320,
+        // Compact width — the previous 320px was too wide. 260 fits
+        // initials avatar + email (with ellipsis at long addresses) +
+        // page badge + close button. SecureViewer's flex container now
+        // handles the PresenterToolbar overlap by pushing the whole
+        // row down 44px, so we no longer carry paddingTop here.
+        width:         260,
         flexShrink:    0,
-        height:        '100vh',
+        height:        '100%',
         background:    '#0F172A',
         borderLeft:    '0.5px solid rgba(59,130,246,0.4)',
-        // Account for fixed PresenterToolbar overlay at top
-        paddingTop:    44,
         display:       'flex',
         flexDirection: 'column',
         fontFamily:    FONT,
