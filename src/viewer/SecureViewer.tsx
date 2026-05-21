@@ -9,11 +9,12 @@ import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
-import { CoViewingBanner }    from "../coviewing/CoViewingBanner";
-import { CoViewingRecipient } from "../coviewing/CoViewingRecipient";
-import { PresenterToolbar }   from "../coviewing/PresenterToolbar";
-import { StartSessionModal }  from "../coviewing/StartSessionModal";
-import { SessionEndedScreen } from "../coviewing/SessionEndedScreen";
+import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
+import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
+import { PresenterToolbar }           from "../coviewing/PresenterToolbar";
+import { PresenterParticipantPanel }  from "../coviewing/PresenterParticipantPanel";
+import { StartSessionModal }          from "../coviewing/StartSessionModal";
+import { SessionEndedScreen }         from "../coviewing/SessionEndedScreen";
 
 const IDLE_MS   = 2 * 60 * 1000; // lock after 2 min inactivity
 const BLUR_MS   = 30 * 1000;      // lock 30s after window loses focus
@@ -94,9 +95,15 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [activeCoViewSessionId, setActiveCoViewSessionId] = useState<string | null>(null);
   const [followingPresenter, setFollowingPresenter] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
+  // ISO captured when /join succeeded — drives the recipient's presence
+  // joined_at metadata so the presenter's panel can show "viewing for Xm".
+  const [coViewingJoinedAt, setCoViewingJoinedAt] = useState<string | null>(null);
 
   // Co-viewing presenter state
   const [showStartModal, setShowStartModal] = useState(false);
+  // Participant panel — open by default whenever a presentation starts.
+  // Auto-collapses below 900px window width.
+  const [participantPanelOpen, setParticipantPanelOpen] = useState(true);
   const [presenterSession, setPresenterSession] = useState<{
     sessionId: string; channel: string;
     mode: 'synchronized' | 'free'; context: 'standalone' | 'teams' | 'zoom';
@@ -279,11 +286,31 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       setCoViewingChannel(data.channel ?? null);
       setFollowingPresenter(true);
       setCoViewingBanner(null);
+      setCoViewingJoinedAt(new Date().toISOString());
       if (typeof data.current_page === 'number') setCurrentPage(data.current_page);
     } catch {
       setCoViewingBanner(null);
     }
   }
+
+  // Open the participant panel whenever a presentation starts. Auto-
+  // collapse on narrow windows so the document isn't squeezed.
+  useEffect(() => {
+    if (!presenterSession) return;
+    setParticipantPanelOpen(window.innerWidth >= 900);
+  }, [!!presenterSession]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // One-way auto-collapse: cross below 900px → close the panel. Crossing
+  // back up doesn't auto-open — presenter can toggle if they want.
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 900) {
+        setParticipantPanelOpen(open => (open ? false : open));
+      }
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen reason={error} isError />;
@@ -302,20 +329,37 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         />
       )}
 
-      <TileRenderer
-        sessionId={sessionId}
-        fileId={file.id}
-        file={file}
-        totalPages={totalPages}
-        onClose={onClose}
-        onLock={() => setLocked(true)}
-        targetPage={currentPage}
-        onCurrentPageChange={setCurrentPage}
-        // Owner-only entry point for co-viewing. Hidden while a presenter
-        // session is already active (PresenterToolbar takes over that
-        // role in the overlay).
-        onPresent={canPresent && !presenterSession ? () => setShowStartModal(true) : undefined}
-      />
+      {/* Flex row: document on the left, participant panel on the right
+          (presenter only, when toggled open). The panel pushes the
+          document width instead of overlaying it — per the product
+          decision (2026-05-21), the panel must not cover the file. */}
+      <div style={{ display: 'flex', height: '100vh' }}>
+        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          <TileRenderer
+            sessionId={sessionId}
+            fileId={file.id}
+            file={file}
+            totalPages={totalPages}
+            onClose={onClose}
+            onLock={() => setLocked(true)}
+            targetPage={currentPage}
+            onCurrentPageChange={setCurrentPage}
+            // Owner-only entry point for co-viewing. Hidden while a
+            // presenter session is already active (PresenterToolbar
+            // takes over in the top overlay).
+            onPresent={canPresent && !presenterSession ? () => setShowStartModal(true) : undefined}
+          />
+        </div>
+        {presenterSession && participantPanelOpen && (
+          <PresenterParticipantPanel
+            sessionId={presenterSession.sessionId}
+            channel={presenterSession.channel}
+            token={token}
+            currentPage={currentPage}
+            onClose={() => setParticipantPanelOpen(false)}
+          />
+        )}
+      </div>
 
       {presenterSession && (
         <PresenterToolbar
@@ -329,14 +373,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           pageCount={totalPages}
           onPageChange={setCurrentPage}
           onStop={() => setPresenterSession(null)}
+          panelOpen={participantPanelOpen}
+          onTogglePanel={() => setParticipantPanelOpen(o => !o)}
         />
       )}
 
-      {activeCoViewSessionId && coViewingChannel && (
+      {activeCoViewSessionId && coViewingChannel && coViewingJoinedAt && recipient && (
         <CoViewingRecipient
           channel={coViewingChannel}
           mode="synchronized"
           following={followingPresenter}
+          email={recipient.email}
+          currentPage={currentPage}
+          joinedAt={coViewingJoinedAt}
           onPageChange={(page) => setCurrentPage(page)}
           onSessionEnd={() => setSessionEnded(true)}
           onSetFollowing={setFollowingPresenter}

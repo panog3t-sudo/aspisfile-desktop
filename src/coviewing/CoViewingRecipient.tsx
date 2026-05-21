@@ -1,5 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { subscribeCoViewingChannel } from '../lib/coviewing-realtime';
+import { supabase } from '../lib/supabase';
+import {
+  createCoViewingChannel,
+  attachBroadcasts,
+  type RecipientPresence,
+} from '../lib/coviewing-realtime';
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif";
 
@@ -7,6 +12,12 @@ interface CoViewingRecipientProps {
   channel:        string;
   mode:           'synchronized' | 'free';
   following:      boolean;
+  // Recipient identity + page state — published as Realtime presence so
+  // the presenter's participant panel can render live status (page,
+  // follow mode, joined/left).
+  email:          string;
+  currentPage:    number;
+  joinedAt:       string; // ISO from the moment /join succeeded
   onPageChange:   (page: number) => void;
   onSessionEnd:   () => void;
   onSetFollowing: (following: boolean) => void;
@@ -14,25 +25,62 @@ interface CoViewingRecipientProps {
 
 // Bottom-of-viewer pill shown to recipients in a synchronized session.
 // Two-cell segmented control — the active cell is highlighted; clicking
-// the other cell switches mode. No more "toggle button" pattern (the old
-// version was confusing because the button label was the opposite action
-// of the current state).
+// the other cell switches mode.
+//
+// In addition to UI, this component subscribes to the co-viewing channel
+// and tracks Realtime presence so the presenter sees this recipient as
+// live with their current page + follow mode.
 export function CoViewingRecipient({
-  channel, mode, following, onPageChange, onSessionEnd, onSetFollowing,
+  channel,
+  mode,
+  following,
+  email,
+  currentPage,
+  joinedAt,
+  onPageChange,
+  onSessionEnd,
+  onSetFollowing,
 }: CoViewingRecipientProps) {
   const followingRef = useRef(following);
   followingRef.current = following;
 
+  // One channel object for the lifetime of this component. Subscribes
+  // for broadcasts (presenter page sync, session end) AND tracks the
+  // recipient's presence. The channel auto-publishes presence_leave on
+  // teardown.
   useEffect(() => {
-    const unsub = subscribeCoViewingChannel(channel, {
-      onPageChange: (page) => {
-        if (followingRef.current) onPageChange(page);
-      },
+    const ch = createCoViewingChannel(channel);
+    attachBroadcasts(ch, {
+      onPageChange: (page) => { if (followingRef.current) onPageChange(page); },
       onSessionEnd: () => onSessionEnd(),
     });
-    return unsub;
+    ch.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await ch.track({
+          email,
+          page:      currentPage,
+          following,
+          joined_at: joinedAt,
+        } as RecipientPresence);
+      }
+    });
+    return () => { supabase.removeChannel(ch); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel]);
+
+  // Re-publish presence whenever page or following changes. The track
+  // helper merges into the existing presence entry so the presenter sees
+  // an update instantly via presence_sync.
+  useEffect(() => {
+    const ch = supabase.getChannels().find(c => c.topic === `realtime:${channel}`);
+    if (!ch) return;
+    ch.track({
+      email,
+      page:      currentPage,
+      following,
+      joined_at: joinedAt,
+    } as RecipientPresence).catch(() => {});
+  }, [channel, email, currentPage, following, joinedAt]);
 
   if (mode === 'free') return null;
 

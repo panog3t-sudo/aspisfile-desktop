@@ -131,7 +131,12 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
   return (
     <div
       style={{
-        height: "100vh",
+        // 100% so the flex-row parent in SecureViewer can size this
+        // (RHS participant panel takes 320px; document gets the rest).
+        // The flex parent has height: 100vh, so we still fill the
+        // viewport vertically.
+        height: "100%",
+        width:  "100%",
         display: "flex",
         flexDirection: "column",
         background: "#0F172A",

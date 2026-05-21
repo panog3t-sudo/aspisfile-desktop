@@ -20,40 +20,18 @@ interface PresenterToolbarProps {
   pageCount:   number;
   onPageChange: (page: number) => void;
   onStop:      () => void;
-}
-
-interface Participant {
-  recipient_email: string;
-  access_type:     'permanent' | 'session_only';
-  joined_at:       string;
-  last_seen_page:  number;
+  // Participant panel toggle — SecureViewer owns the panelOpen state so
+  // it can also size the document area (panel pushes TileRenderer width)
+  panelOpen:   boolean;
+  onTogglePanel: () => void;
 }
 
 export function PresenterToolbar({
-  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop,
+  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel,
 }: PresenterToolbarProps) {
-  const [participants, setParticipants] = useState<Participant[]>([]);
-  const [showRoster,   setShowRoster]   = useState(false);
   const [stopping,     setStopping]     = useState(false);
   const [linkCopied,   setLinkCopied]   = useState(false);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const participantCount = participants.length;
-
-  // Fetch participant list periodically
-  useEffect(() => {
-    const fetch_ = () => {
-      fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/participants`, {
-        headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
-      })
-        .then(r => r.json())
-        .then(d => setParticipants(d.participants ?? []))
-        .catch(() => {});
-    };
-    fetch_();
-    const iv = setInterval(fetch_, 10_000);
-    return () => clearInterval(iv);
-  }, [sessionId]);
 
   // Presenter heartbeat — keeps session alive if no page changes (free scroll mode)
   useEffect(() => {
@@ -134,94 +112,33 @@ export function PresenterToolbar({
 
       <div style={{ flex: 1 }} />
 
-      {/* Participant count — click to expand the roster popover */}
-      <div style={{ position: 'relative', flexShrink: 0 }}>
-        <button
-          onClick={() => setShowRoster(s => !s)}
-          disabled={participantCount === 0}
-          style={{
-            fontSize:     11,
-            padding:      '4px 10px',
-            borderRadius: 5,
-            background:   participantCount > 0 ? 'rgba(59,130,246,0.18)' : 'transparent',
-            border:       `0.5px solid ${participantCount > 0 ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.15)'}`,
-            color:        participantCount > 0 ? '#93C5FD' : 'rgba(255,255,255,0.5)',
-            cursor:       participantCount === 0 ? 'default' : 'pointer',
-            fontFamily:   FONT,
-            whiteSpace:   'nowrap',
-          }}
-        >
-          {participantCount > 0 ? `${participantCount} viewing ${showRoster ? '▴' : '▾'}` : 'Waiting…'}
-        </button>
-        {showRoster && participantCount > 0 && (
-          <div
-            style={{
-              position:     'absolute',
-              top:          'calc(100% + 6px)',
-              right:        0,
-              minWidth:     260,
-              maxWidth:     320,
-              maxHeight:    260,
-              overflowY:    'auto',
-              background:   '#0F172A',
-              border:       '0.5px solid rgba(59,130,246,0.4)',
-              borderRadius: 6,
-              padding:      6,
-              zIndex:       70,
-              boxShadow:    '0 8px 24px rgba(0,0,0,0.4)',
-              fontFamily:   FONT,
-            }}
-          >
-            {participants.map(p => {
-              const onSamePage = p.last_seen_page === currentPage;
-              return (
-                <div
-                  key={p.recipient_email}
-                  style={{
-                    display:        'flex',
-                    alignItems:     'center',
-                    gap:            8,
-                    padding:        '6px 8px',
-                    borderRadius:   4,
-                    background:     'transparent',
-                  }}
-                >
-                  <span
-                    style={{
-                      flex:           1,
-                      fontSize:       11,
-                      color:          'rgba(255,255,255,0.85)',
-                      whiteSpace:     'nowrap',
-                      overflow:       'hidden',
-                      textOverflow:   'ellipsis',
-                    }}
-                  >
-                    {p.recipient_email}
-                  </span>
-                  {p.access_type === 'session_only' && (
-                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 8 }}>
-                      guest
-                    </span>
-                  )}
-                  <span
-                    style={{
-                      fontSize:     10,
-                      color:        onSamePage ? '#86EFAC' : '#FDE68A',
-                      background:   onSamePage ? 'rgba(134,239,172,0.10)' : 'rgba(253,230,138,0.10)',
-                      padding:      '1px 6px',
-                      borderRadius: 8,
-                      whiteSpace:   'nowrap',
-                    }}
-                    title={onSamePage ? 'On the same page as you' : `${currentPage - p.last_seen_page > 0 ? `${currentPage - p.last_seen_page} page(s) behind` : `${p.last_seen_page - currentPage} page(s) ahead`}`}
-                  >
-                    p{p.last_seen_page}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* Participant panel toggle — opens/closes the persistent RHS
+          sidebar that lives outside this toolbar. The detailed roster
+          (emails, pages, follow mode, timers) renders there. */}
+      <button
+        onClick={onTogglePanel}
+        title={panelOpen ? 'Hide participant panel' : 'Show participant panel'}
+        style={{
+          fontSize:     11,
+          padding:      '4px 10px',
+          borderRadius: 5,
+          background:   panelOpen ? 'rgba(59,130,246,0.18)' : 'transparent',
+          border:       `0.5px solid ${panelOpen ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.15)'}`,
+          color:        panelOpen ? '#93C5FD' : 'rgba(255,255,255,0.7)',
+          cursor:       'pointer',
+          fontFamily:   FONT,
+          whiteSpace:   'nowrap',
+          flexShrink:   0,
+          display:      'flex',
+          alignItems:   'center',
+          gap:          6,
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="9" cy="7" r="3"/><path d="M3 21v-1a6 6 0 0 1 12 0v1"/><circle cx="17" cy="7" r="3"/><path d="M21 21v-1a6 6 0 0 0-3-5.2"/>
+        </svg>
+        Participants {panelOpen ? '▸' : '◂'}
+      </button>
 
       {/* Copy link */}
       <button
