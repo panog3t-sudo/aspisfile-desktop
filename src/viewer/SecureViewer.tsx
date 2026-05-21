@@ -293,6 +293,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         onLock={() => setLocked(true)}
         targetPage={currentPage}
         onCurrentPageChange={setCurrentPage}
+        // Owner-only entry point for co-viewing. Hidden while a presenter
+        // session is already active (PresenterToolbar takes over that
+        // role in the overlay).
+        onPresent={canPresent && !presenterSession ? () => setShowStartModal(true) : undefined}
       />
 
       {presenterSession && (

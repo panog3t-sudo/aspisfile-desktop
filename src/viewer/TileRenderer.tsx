@@ -28,6 +28,10 @@ type Props = {
   // Co-viewing page sync — both optional, no behaviour change when unset
   targetPage?: number;
   onCurrentPageChange?: (page: number) => void;
+  // Co-viewing presenter entry point. When defined, the toolbar renders
+  // a "Present" button (file-owner only — SecureViewer gates the prop on
+  // file.is_owner && !presenterSession before passing it in).
+  onPresent?: () => void;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -49,7 +53,7 @@ const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
   flexShrink: 0,
 });
 
-export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange }: Props) {
+export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onLock, targetPage, onCurrentPageChange, onPresent }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Sync external targetPage (e.g. presenter pushed a page_change) into local state
@@ -199,12 +203,41 @@ export function TileRenderer({ sessionId, fileId, file, totalPages, onClose, onL
           </button>
         </div>
 
-        {/* Right: page count.
+        {/* Right: Present button (owner-only) + page count.
             Print and download badges removed — see project memory
             'Wire up print + download' — the icons advertised capabilities
-            we don't yet implement. Re-add when the actual /file route +
-            print pipeline are wired up. */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            we don't yet implement. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {onPresent && (
+            <button
+              onClick={onPresent}
+              title="Start a co-viewing presentation"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                height: 26,
+                padding: "0 10px",
+                borderRadius: 4,
+                border: "0.5px solid #1D4ED8",
+                background: "#1D4ED8",
+                color: "#FFFFFF",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 500,
+                lineHeight: 1,
+                fontFamily: "system-ui",
+                flexShrink: 0,
+              }}
+            >
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1" y="2" width="12" height="9" rx="1.2" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M5 12.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                <path d="M6 5.5 L9 7 L6 8.5 Z" fill="currentColor" />
+              </svg>
+              Present
+            </button>
+          )}
           <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui" }}>
             {currentPage} / {totalPages}
           </span>
