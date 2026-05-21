@@ -53,15 +53,10 @@ jobs:
         run: npm ci
 
       # Tauri handles keychain creation, cert import, signing, and notarisation
-      # when these env vars are present. No manual `security` steps needed —
-      # they were the source of the "item could not be found in the keychain"
-      # error on the previous attempt (temp keychain wasn't added to the
-      # search list, so codesign couldn't see the imported identity).
-      # Build + sign + notarise the .app only. We skip Tauri's own .dmg
-      # bundler (--bundles app) because it doesn't write a .DS_Store, so
-      # Finder ignores the background.png and shows the default
-      # auto-arranged layout. We build a properly-laid-out .dmg with
-      # dmgbuild below.
+      # of the .app when APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY are present.
+      # We use --bundles app to skip Tauri's own .dmg bundler — the macOS
+      # installer is built as a .pkg below (signed with the separate
+      # Developer ID Installer cert).
       - name: Build, sign, notarise universal macOS app
         env:
           APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
@@ -72,104 +67,63 @@ jobs:
           APPLE_TEAM_ID:              ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target universal-apple-darwin --bundles app
 
-      - name: Setup Python (dmgbuild)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install dmgbuild
-        run: pip install --upgrade pip dmgbuild
-
-      # Generate a proper Finder alias to /Applications via osascript.
-      # Replaces dmgbuild's default Unix symlink (which Finder renders as
-      # a dashed empty placeholder with no drop animation). The proper
-      # alias shows the real Applications folder icon and gives standard
-      # drag-and-drop feedback when the user installs the app.
+      # pkgbuild needs the Developer ID Installer cert in a keychain it can
+      # read. Tauri's build step tore down its own temp keychain, so we
+      # create a fresh one and import the Installer .p12 here.
       #
-      # continue-on-error: if osascript can't talk to Finder on this
-      # runner, dmg-settings.py falls back to the symlink path — no
-      # regression vs. previous behaviour.
-      - name: Generate Applications alias (via Finder)
-        id: appsalias
-        continue-on-error: true
-        run: |
-          STAGE="$RUNNER_TEMP/dmg-apps-alias"
-          rm -rf "$STAGE" && mkdir -p "$STAGE"
-          osascript -e "tell application \"Finder\" to make alias file to POSIX file \"/Applications\" at POSIX file \"$STAGE\""
-          # Finder names the file "Applications" or "Applications alias"
-          # depending on macOS version. Normalise to exactly "Applications"
-          # so the icon_locations entry in dmg-settings.py matches.
-          ALIAS_RAW=$(find "$STAGE" -maxdepth 1 -not -path "$STAGE" | head -1)
-          if [ -z "$ALIAS_RAW" ]; then
-            echo "osascript ran but produced no alias file"
-            exit 1
-          fi
-          if [ "$ALIAS_RAW" != "$STAGE/Applications" ]; then
-            mv "$ALIAS_RAW" "$STAGE/Applications"
-          fi
-          ls -la "$STAGE/"
-          echo "alias_path=$STAGE/Applications" >> "$GITHUB_OUTPUT"
-
-      # dmgbuild generates a .DS_Store programmatically. No AppleScript / GUI
-      # dependency, so this works in headless CI where Tauri's create-dmg
-      # path could not.
-      - name: Build DMG with proper Finder layout
-        run: |
-          APP_PATH=$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)
-          echo "App: $APP_PATH"
-          ALIAS_DEFINE=()
-          if [ -n "${{ steps.appsalias.outputs.alias_path }}" ]; then
-            ALIAS_DEFINE+=(-D "apps_alias=${{ steps.appsalias.outputs.alias_path }}")
-            echo "Using Finder alias for Applications: ${{ steps.appsalias.outputs.alias_path }}"
-          else
-            echo "Falling back to Unix symlink for Applications (osascript step did not produce an alias)"
-          fi
-          mkdir -p artifacts
-          dmgbuild -s src-tauri/dmg-settings.py \
-                   -D app="$APP_PATH" \
-                   "${ALIAS_DEFINE[@]}" \
-                   "AspisFile Viewer" artifacts/AspisFile.dmg
-          ls -la artifacts/
-
-      # Tauri's build step set up a temporary keychain via APPLE_CERTIFICATE,
-      # used it for app signing + notarisation, then tore it down. To sign
-      # the .dmg container ourselves we need to import the cert into a
-      # fresh persistent keychain that codesign can read.
-      - name: Import cert for DMG signing
-        if: ${{ env.APPLE_CERT_PRESENT == 'true' }}
+      # Note: this is a *different* certificate from APPLE_CERTIFICATE
+      # (which is the Developer ID Application cert used to sign the .app).
+      # Apple issues two separate cert types from the same Developer account.
+      - name: Import Installer cert for PKG signing
         env:
-          APPLE_CERT_PRESENT:         ${{ secrets.APPLE_CERTIFICATE != '' }}
-          APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_CERTIFICATE:          ${{ secrets.APPLE_INSTALLER_CERTIFICATE }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
         run: |
-          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/cert.p12
-          KEYCHAIN="$RUNNER_TEMP/dmg-signing.keychain-db"
+          echo "$APPLE_INSTALLER_CERTIFICATE" | base64 --decode > /tmp/installer-cert.p12
+          KEYCHAIN="$RUNNER_TEMP/pkg-signing.keychain-db"
           security create-keychain -p "" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "" "$KEYCHAIN"
-          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
-                  -T /usr/bin/codesign
+          security import /tmp/installer-cert.p12 -k "$KEYCHAIN" -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" \
+                  -T /usr/bin/pkgbuild -T /usr/bin/productbuild
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN" login.keychain
-          rm /tmp/cert.p12
+          rm /tmp/installer-cert.p12
 
-      # Sign the .dmg container. The .app inside is already signed +
-      # notarised by Tauri; this just signs the container so Safari shows
-      # "verified developer" on download instead of an unidentified-source
-      # warning.
-      - name: Sign the DMG container
-        if: ${{ env.APPLE_CERT_PRESENT == 'true' }}
+      # Build the .pkg. pkgbuild signs inline with --sign — no separate
+      # codesign step needed for the container (unlike the previous .dmg
+      # flow). Install location is hardcoded to /Applications so the
+      # recipient doesn't see a "choose destination" page in Installer.app.
+      #
+      # Package identifier is intentionally distinct from the .app bundle
+      # id (com.aspisfile.viewer) — the .pkg id (.viewer.pkg) tracks the
+      # installer payload, the bundle id tracks the app. Standard Apple
+      # convention.
+      - name: Build and sign .pkg installer
         env:
-          APPLE_CERT_PRESENT:     ${{ secrets.APPLE_CERTIFICATE != '' }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ secrets.APPLE_INSTALLER_SIGNING_IDENTITY }}
         run: |
-          codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp artifacts/AspisFile.dmg
-          codesign --verify --verbose artifacts/AspisFile.dmg
+          APP_PATH=$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "App:     $APP_PATH"
+          echo "Version: $VERSION"
+          mkdir -p artifacts
+          pkgbuild \
+            --component "$APP_PATH" \
+            --install-location /Applications \
+            --identifier com.aspisfile.viewer.pkg \
+            --version "$VERSION" \
+            --sign "$APPLE_INSTALLER_SIGNING_IDENTITY" \
+            artifacts/AspisFile.pkg
+          pkgutil --check-signature artifacts/AspisFile.pkg
+          ls -la artifacts/
 
-      # Notarise the .dmg so Gatekeeper on the user's Mac can validate it
-      # offline. Tauri already notarised the .app inside; we now also
-      # notarise the .dmg container itself.
-      - name: Notarise the DMG container
+      # Notarise the .pkg. Same notarytool flow we used for the .dmg
+      # before — Apple's notary service treats .pkg identically. Stapling
+      # embeds the notarisation ticket so Gatekeeper validates the
+      # installer offline on the recipient's Mac.
+      - name: Notarise the PKG
         if: ${{ env.APPLE_ID_PRESENT == 'true' }}
         env:
           APPLE_ID_PRESENT: ${{ secrets.APPLE_ID != '' }}
@@ -177,24 +131,19 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID:  ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcrun notarytool submit artifacts/AspisFile.dmg \
+          xcrun notarytool submit artifacts/AspisFile.pkg \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
-          xcrun stapler staple artifacts/AspisFile.dmg
-
-      # Internet-Enable used to be the path to "Safari auto-mounts on
-      # download." Apple removed the hdiutil verb in modern macOS for
-      # security reasons. Removed from the workflow. Future v1.2.0
-      # switches to .pkg installer which auto-opens via Installer.app
-      # on download — covered in project roadmap.
+          xcrun stapler staple artifacts/AspisFile.pkg
+          xcrun stapler validate artifacts/AspisFile.pkg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
-          path: artifacts/AspisFile.dmg
+          name: macos-pkg
+          path: artifacts/AspisFile.pkg
           retention-days: 1
 
   build-windows:
@@ -243,7 +192,7 @@ jobs:
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: macos-dmg
+          name: macos-pkg
           path: artifacts/macos
 
       - name: Download Windows artifact
@@ -261,7 +210,7 @@ jobs:
             ## AspisFile Desktop ${{ github.event.inputs.tag || github.ref_name }}
 
             ### Download
-            - **macOS** — `AspisFile.dmg` (universal: Apple Silicon + Intel)
+            - **macOS** — `AspisFile.pkg` (universal: Apple Silicon + Intel)
             - **Windows** — `AspisFile.msi`
 
             ### Requirements
@@ -269,10 +218,10 @@ jobs:
             - Windows 10 or later
 
             ### Installation
-            **macOS**: Double-click the .dmg and drag AspisFile to Applications. If a security warning appears, right-click the app and choose Open.
+            **macOS**: Double-click the .pkg and follow the installer prompts. The app installs to /Applications automatically.
             **Windows**: Run the .msi installer. If SmartScreen appears, click "More info → Run anyway".
           files: |
-            artifacts/macos/AspisFile.dmg
+            artifacts/macos/AspisFile.pkg
             artifacts/windows/AspisFile.msi
           draft: false
           prerelease: false

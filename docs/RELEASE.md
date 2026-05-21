@@ -9,12 +9,19 @@ at https://github.com/panog3t-sudo/aspisfile-desktop/settings/secrets/actions.
 
 | Secret | Purpose | Where it comes from |
 |---|---|---|
-| `APPLE_CERTIFICATE` | Developer ID Application cert (base64 .p12) | Exported from Keychain Access — see below |
+| `APPLE_CERTIFICATE` | Developer ID **Application** cert (base64 .p12) — signs the .app | Exported from Keychain Access — see below |
 | `APPLE_CERTIFICATE_PASSWORD` | Password used when exporting the .p12 | Set during the Keychain export dialog |
 | `APPLE_SIGNING_IDENTITY` | Full identity string e.g. `Developer ID Application: Your Name (37M8KCP95L)` | Run `security find-identity -v -p codesigning` locally and copy the matching line |
+| `APPLE_INSTALLER_CERTIFICATE` | Developer ID **Installer** cert (base64 .p12) — signs the .pkg | Exported from Keychain Access — same flow as the Application cert |
+| `APPLE_INSTALLER_CERTIFICATE_PASSWORD` | Password used when exporting the Installer .p12 | Set during the Keychain export dialog |
+| `APPLE_INSTALLER_SIGNING_IDENTITY` | Full identity string e.g. `Developer ID Installer: Your Name (37M8KCP95L)` | Run `security find-identity -v` locally and copy the matching line |
 | `APPLE_ID` | Apple ID email used for the developer account | The email you log into developer.apple.com with |
 | `APPLE_PASSWORD` | App-specific password (not your Apple ID password) | Generate at https://appleid.apple.com → Sign-In and Security → App-Specific Passwords |
 | `APPLE_TEAM_ID` | 10-character team identifier | Visible at https://developer.apple.com/account, "Membership" tab |
+
+Note: Apple issues the Application and Installer certificates separately from
+the same Developer account. Both are required — the Application cert signs the
+`.app` binary, the Installer cert signs the `.pkg` container that wraps it.
 
 A Windows code-signing certificate is not yet provisioned — the workflow produces
 an unsigned `.msi` for now. Users see a SmartScreen warning on first run and click
@@ -59,11 +66,15 @@ git push origin v1.0.0
 ```
 
 The workflow:
-1. Builds a universal `.dmg` on macOS (Apple Silicon + Intel)
-2. Builds an unsigned `.msi` on Windows
-3. Renames both to stable names (`AspisFile.dmg`, `AspisFile.msi`) so the
-   web `/downloads/*` redirects don't need updating between versions
-4. Creates a published GitHub Release with both files attached
+1. Builds a universal `.app` on macOS (Apple Silicon + Intel), signed +
+   notarised with the Application cert
+2. Wraps the `.app` in a signed + notarised `.pkg` installer using the
+   Installer cert (auto-opens in Installer.app on download, installs to
+   /Applications without a drag step)
+3. Builds an unsigned `.msi` on Windows
+4. Renames artifacts to stable names (`AspisFile.pkg`, `AspisFile.msi`) so
+   the web `/downloads/*` redirects don't need updating between versions
+5. Creates a published GitHub Release with both files attached
 
 Monitor at: https://github.com/panog3t-sudo/aspisfile-desktop/actions
 
@@ -99,9 +110,10 @@ the tag — Tauri embeds the version in the binary and the updater compares agai
 ## Download URLs
 
 End users reach the artifacts via the web app:
-- `https://aspisfile.com/downloads/AspisFile.dmg`
-- `https://aspisfile.com/downloads/AspisFile.msi`
+- `https://aspisfile.com/downloads/AspisFile.pkg` (macOS — current)
+- `https://aspisfile.com/downloads/AspisFile.dmg` (legacy — bounces to the .pkg for backward compat)
+- `https://aspisfile.com/downloads/AspisFile.msi` (Windows)
 
-Both are 307 redirects to `https://github.com/panog3t-sudo/aspisfile-desktop/releases/latest/download/<file>`.
+All are 307 redirects to `https://github.com/panog3t-sudo/aspisfile-desktop/releases/latest/download/<file>`.
 This URL always points at the newest release, so the redirect destinations
 never need updating.
