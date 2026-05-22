@@ -40,6 +40,10 @@ export default defineConfig(async ({ mode }) => {
       __API_BASE__: JSON.stringify(mode === "development" ? "" : (env.VITE_API_BASE || "https://aspisfile.com")),
       __SUPABASE_URL__: JSON.stringify(supabaseUrl),
       __SUPABASE_ANON_KEY__: JSON.stringify(supabaseAnonKey),
+      // Read from npm-set env var (auto-populated when build runs via npm/yarn/pnpm).
+      // Used by src/lib/audit.ts to populate the X-App-Version header per Unified
+      // Tracking Brief §1.1. Falls back to "0.0.0" if absent (edge case in ad-hoc dev).
+      __APP_VERSION__: JSON.stringify(env.npm_package_version ?? "0.0.0"),
     },
   };
 });

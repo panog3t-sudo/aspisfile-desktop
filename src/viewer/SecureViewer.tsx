@@ -4,6 +4,13 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { sessionStore } from "../lib/sessionStore";
 import { supabase } from "../lib/supabase";
 import { authenticateDesktop, FileInfo, RecipientInfo } from "../lib/desktopAuth";
+import {
+  sendEvent,
+  startPageTracking,
+  recordPageView,
+  stopPageTracking,
+  type AccessMethod,
+} from "../lib/audit";
 import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
@@ -86,6 +93,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [error, setError]             = useState<string | null>(null);
   const [locked, setLocked]           = useState(false);
   const startedRef                    = useRef(false);
+
+  // ─── Sprint 3 — Unified Tracking: per-session telemetry ──────────
+  // accessMethod is currently always 'link' (native app opened via share
+  // link). Phase B will pass 'afs_local' when opening a locally-stored
+  // .afs file — flip this const at that integration point. page_views_batch
+  // only fires for 'afs_local' sessions per Unified Tracking Brief §1.2
+  // (link sessions already log every page turn via tile requests).
+  // Widened cast keeps TypeScript from narrowing accessMethod down to
+  // the literal 'link' — which would make trackPages a dead-code false
+  // and trip TS2367 on the comparison. Phase B flips the cast value to
+  // 'afs_local' for local-file opens.
+  const accessMethod = 'link' as AccessMethod;
+  const trackPages = accessMethod === 'afs_local';
+
+  const sessionStartTsRef    = useRef<number>(Date.now());
+  const endReasonRef         = useRef<'user_close' | 'revoked' | 'app_close' | 'session_expired'>('user_close');
+  const uniquePagesRef       = useRef<Set<number>>(new Set());
+  const fileOpenedFiredRef   = useRef(false);
+  const sessionEndedFiredRef = useRef(false);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -215,8 +241,73 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         const pagesData = await pagesRes.json();
         setTotalPages(pagesData.count ?? 1);
       }
+
+      // ─── Sprint 3 — file_opened audit event ──────────────────────
+      // Fires once per viewer mount, after the session key has been
+      // issued AND page count fetched (i.e., the viewer is genuinely
+      // ready to render). Idempotent via fileOpenedFiredRef.
+      if (!fileOpenedFiredRef.current) {
+        fileOpenedFiredRef.current = true;
+        sessionStartTsRef.current = Date.now();
+        const deviceFingerprint = await getDesktopFingerprint(platform);
+        await sendEvent({
+          event_type:    'file_opened',
+          file_id:       file.id,
+          session_id:    data.session_id,
+          access_method: accessMethod,
+          payload:       { device_fingerprint: deviceFingerprint },
+        }, token);
+        if (trackPages) startPageTracking(data.session_id, file.id, token);
+      }
     })().catch((e: Error) => setError(e.message));
   }, [legalAccepted, file, token, sig, env]);
+
+  // Sprint 3 — track unique pages seen for session_ended.pages_viewed_count.
+  // recordPageView only fires when trackPages is true (Phase B); the Set
+  // accumulates regardless because last_page_seen / pages_viewed_count
+  // remain useful even when page_views_batch is dormant.
+  useEffect(() => {
+    if (!sessionId) return;
+    uniquePagesRef.current.add(currentPage);
+    if (trackPages) recordPageView(currentPage);
+  }, [currentPage, sessionId, trackPages]);
+
+  // Sprint 3 — session_ended audit event. Fires once on unmount. The
+  // endReasonRef is mutated by the paths that lead to teardown —
+  // revocation listener sets 'revoked'; default is 'user_close' (close
+  // button or nav). 'app_close' would be wired via a Tauri close event
+  // listener — deferred to a follow-up since Tauri's window close
+  // sequence already destroys this component (cleanup runs naturally).
+  useEffect(() => {
+    if (!sessionId || !file) return;
+    return () => {
+      if (sessionEndedFiredRef.current) return;
+      sessionEndedFiredRef.current = true;
+      const finalSessionId = sessionId;
+      const finalFileId    = file.id;
+      const lastPage       = currentPage;
+      const uniqueCount    = uniquePagesRef.current.size;
+      const duration       = Math.floor((Date.now() - sessionStartTsRef.current) / 1000);
+      const reason         = endReasonRef.current;
+
+      (async () => {
+        if (trackPages) await stopPageTracking(finalSessionId, finalFileId);
+        await sendEvent({
+          event_type:    'session_ended',
+          file_id:       finalFileId,
+          session_id:    finalSessionId,
+          access_method: accessMethod,
+          payload: {
+            duration_seconds:   duration,
+            pages_viewed_count: uniqueCount,
+            last_page_seen:     lastPage,
+            end_reason:         reason,
+          },
+        }, token);
+      })().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, file?.id]);
 
   // Realtime revocation listener
   useEffect(() => {
@@ -226,6 +317,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       .channel(`file-${file.id}`)
       .on("broadcast", { event: "revocation" }, (payload: { payload?: { reason?: string } }) => {
         setRevokeReason(payload.payload?.reason);
+        endReasonRef.current = 'revoked';
         setRevoked(true);
         sessionStore.clear();
       })
