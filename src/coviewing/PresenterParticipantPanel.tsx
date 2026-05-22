@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetch } from '@tauri-apps/plugin-http';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
   createCoViewingChannel,
@@ -55,6 +56,44 @@ export function PresenterParticipantPanel({
   const [gone, setGone]             = useState<Record<string, { at: number }>>({});
   const [recentJoin, setRecentJoin] = useState<Record<string, number>>({});
   const [, setTick]                 = useState(0);
+  const channelRef                  = useRef<RealtimeChannel | null>(null);
+
+  // Reconcile local state from a presenceState snapshot. Two paths
+  // call this: presence_sync event handler (fast), and a 3s defensive
+  // poll (backup for when sync/leave events don't arrive — sometimes
+  // happens after a recipient hard-closes their file).
+  const reconcilePresence = useCallback((state: Record<string, unknown[]>) => {
+    const flat: Record<string, PresenceRow> = {};
+    for (const arr of Object.values(state)) {
+      for (const p of arr as Array<Partial<PresenceRow>>) {
+        if (p && typeof p.email === 'string') {
+          flat[p.email.toLowerCase()] = {
+            email:     p.email,
+            page:      p.page ?? 1,
+            following: p.following ?? false,
+            joined_at: p.joined_at ?? new Date().toISOString(),
+          };
+        }
+      }
+    }
+    setPresence(prev => {
+      // Anyone in prev but not in flat is newly gone — record the moment.
+      const ts = Date.now();
+      const newlyGone: Record<string, { at: number }> = {};
+      for (const email of Object.keys(prev)) {
+        if (!flat[email]) newlyGone[email] = { at: ts };
+      }
+      if (Object.keys(newlyGone).length > 0) {
+        setGone(g => ({ ...newlyGone, ...g })); // existing wins (preserve first detection time)
+      }
+      return flat;
+    });
+    setGone(prev => {
+      const next = { ...prev };
+      for (const email of Object.keys(flat)) delete next[email]; // back live
+      return next;
+    });
+  }, []);
 
   // DB roster poll
   useEffect(() => {
@@ -71,40 +110,24 @@ export function PresenterParticipantPanel({
     return () => clearInterval(iv);
   }, [sessionId, token]);
 
-  // Realtime presence subscription.
+  // Realtime presence subscription + 3s defensive poll.
   //
-  // Important: presence_join and presence_leave update `presence` state
-  // directly — we do NOT depend on presence_sync to reconcile after each
-  // delta. In practice sync can lag (or batch) by several seconds, which
-  // surfaced as "the timer keeps running and the name isn't crossed out
-  // until I close and reopen the panel" — the leave event fired but the
-  // panel was waiting on sync to drop the entry from presence state.
-  // Direct updates make the UI react within ~100ms of the event.
-  // presence_sync still runs and acts as a reconciler if there's drift.
+  // Three layers of detection, in order of preference:
+  //   1. presence_join / presence_leave events — immediate updates when
+  //      they fire reliably.
+  //   2. presence_sync events — full state reconcile.
+  //   3. 3s poll of ch.presenceState() — backup for cases where Supabase
+  //      doesn't deliver the leave event to a long-lived subscriber.
+  //      This was the actual fix for "timer keeps running and the name
+  //      isn't crossed out until I close/reopen the panel": leave fired
+  //      on the recipient side but the presenter's subscription never
+  //      saw it. Poll catches the stale "live" entry within 3s.
   useEffect(() => {
     const ch = createCoViewingChannel(channel);
+    channelRef.current = ch;
     attachPresence(ch, {
       onPresenceSync: (state) => {
-        // Reconciliation pass — full current state from server
-        const flat: Record<string, PresenceRow> = {};
-        for (const arr of Object.values(state)) {
-          for (const p of arr) {
-            if (p && typeof p.email === 'string') {
-              flat[p.email.toLowerCase()] = {
-                email:     p.email,
-                page:      p.page,
-                following: p.following,
-                joined_at: p.joined_at,
-              };
-            }
-          }
-        }
-        setPresence(flat);
-        setGone(prev => {
-          const next = { ...prev };
-          for (const email of Object.keys(flat)) delete next[email];
-          return next;
-        });
+        reconcilePresence(state as unknown as Record<string, unknown[]>);
       },
       onPresenceJoin: (newPresences) => {
         const ts = Date.now();
@@ -165,8 +188,29 @@ export function PresenterParticipantPanel({
       },
     });
     ch.subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [channel]);
+    return () => {
+      channelRef.current = null;
+      supabase.removeChannel(ch);
+    };
+  }, [channel, reconcilePresence]);
+
+  // Defensive presence poll — Supabase Realtime occasionally fails to
+  // deliver presence_leave events to a long-lived subscriber. Polling
+  // ch.presenceState() and re-running the reconcile keeps the panel
+  // accurate within 3s regardless.
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const ch = channelRef.current;
+      if (!ch) return;
+      try {
+        const state = ch.presenceState();
+        reconcilePresence(state as unknown as Record<string, unknown[]>);
+      } catch {
+        // ignore — channel might be torn down
+      }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [reconcilePresence]);
 
   // 1s tick to drive live timers
   useEffect(() => {
