@@ -95,6 +95,25 @@ export function TileRenderer({
   const fingerprintRef    = useRef<string>("");
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // Follow-mode scroll lock — attach wheel + touchmove as non-passive
+  // native listeners. React 17+ treats JSX onWheel / onTouchMove as
+  // passive by default, so preventDefault() in a synthetic handler is
+  // silently ignored by Chromium/WebKit. Tauri 2 ships a strict
+  // WebKit; without explicit { passive: false }, the recipient can
+  // scroll their viewport in follow mode and breaks page sync. Fix
+  // confirmed against the v1.4.x → v1.5.0 regression report.
+  useEffect(() => {
+    const node = scrollContainerRef.current;
+    if (!node || !followMode) return;
+    const block = (e: Event) => e.preventDefault();
+    node.addEventListener('wheel',     block, { passive: false });
+    node.addEventListener('touchmove', block, { passive: false });
+    return () => {
+      node.removeEventListener('wheel',     block);
+      node.removeEventListener('touchmove', block);
+    };
+  }, [followMode]);
+
   // Sync external targetZoom (presenter pushed zoom_change) into local state
   useEffect(() => {
     if (typeof targetZoom !== 'number') return;
@@ -380,8 +399,12 @@ export function TileRenderer({
       <div
         ref={scrollContainerRef}
         onScroll={onScrollEvent}
-        onWheel={(e) => { if (followMode) e.preventDefault(); }}
-        onTouchMove={(e) => { if (followMode) e.preventDefault(); }}
+        // onWheel / onTouchMove are NOT specified here as JSX synthetic
+        // handlers — React makes those passive by default and
+        // preventDefault() is a no-op. The native listeners attached via
+        // the useEffect above (keyed on followMode) carry { passive:
+        // false } so the scroll-lock actually fires. touch-action:none
+        // is the CSS-level belt-and-braces for touch scrolling.
         style={{
           flex:       1,
           overflow:   'auto',

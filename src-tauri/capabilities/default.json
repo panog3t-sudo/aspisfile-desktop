@@ -14,7 +14,9 @@
       "identifier": "http:default",
       "allow": [
         { "url": "https://aspisfile.com/*" },
-        { "url": "https://staging.aspisfile.com/*" }
+        { "url": "https://staging.aspisfile.com/*" },
+        { "url": "https://aspisfile-prod.s3.eu-north-1.amazonaws.com/*" },
+        { "url": "https://aspisfile-dev.s3.eu-north-1.amazonaws.com/*" }
       ]
     }
   ]
