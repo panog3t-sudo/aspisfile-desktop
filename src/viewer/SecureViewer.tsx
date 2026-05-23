@@ -202,13 +202,18 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     else                                              setDownloadState('available');
   }, [recipient]);
 
-  // Effective gate for showing the download button.
+  // Effective gate for showing the download button. The button is also
+  // hidden for the duration of any joined co-viewing session so that
+  // recipients can't exfiltrate the file mid-presentation. The
+  // hide-during-co-view rule applies in both follow mode and free roam
+  // — the presenter is actively sharing throughout the session.
   const canDownload = !!file
     && !file.is_owner
     && file.allow_download
     && !!recipient
     && recipient.recipient_allow_download
-    && !blobDeleted;
+    && !blobDeleted
+    && !activeCoViewSessionId;
 
   async function handleDownload() {
     if (!file) return;
