@@ -7,6 +7,9 @@
     "core:default",
     "opener:default",
     "deep-link:default",
+    "dialog:allow-save",
+    "fs:allow-write-file",
+    "fs:scope-download-recursive",
     {
       "identifier": "http:default",
       "allow": [

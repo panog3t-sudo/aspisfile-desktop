@@ -16,6 +16,9 @@ import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
+import { DownloadModal } from "../components/DownloadModal";
+import { DownloadDeletedScreen } from "../components/DownloadDeletedScreen";
+import { runDownload, DownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
 import { PresenterToolbar }           from "../coviewing/PresenterToolbar";
@@ -107,6 +110,15 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const accessMethod = 'link' as AccessMethod;
   const trackPages = accessMethod === 'afs_local';
 
+  // ─── Sprint 2 — .afs download state machine ─────────────────────
+  // Derived from recipient.download_* fields after authenticateDesktop
+  // resolves. Owner tokens skip the button entirely via canDownload.
+  const [downloadState,      setDownloadState]      = useState<'available' | 'in_progress' | 'confirmed'>('available');
+  const [downloadModalOpen,  setDownloadModalOpen]  = useState(false);
+  const [blobDeleted,        setBlobDeleted]        = useState(false);
+  const [downloadError,      setDownloadError]      = useState<string | null>(null);
+  const [savedFileName,      setSavedFileName]      = useState<string>('');
+
   const sessionStartTsRef    = useRef<number>(Date.now());
   const endReasonRef         = useRef<'user_close' | 'revoked' | 'app_close' | 'session_expired'>('user_close');
   const uniquePagesRef       = useRef<Set<number>>(new Set());
@@ -176,6 +188,46 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
   const isViewing = !!(sessionId && totalPages > 0 && !locked);
   useLockGuard(isViewing, useCallback(() => setLocked(true), []));
+
+  // ─── Sprint 2 — derive initial download state from recipient fields ─
+  // recipient comes from authenticateDesktop. Stale in-progress lock
+  // (older than 1h) means an aborted prior session — treat as available.
+  useEffect(() => {
+    if (!recipient) return;
+    const initiated = recipient.download_initiated_at;
+    const stale     = initiated && (Date.now() - new Date(initiated).getTime()) > 60 * 60 * 1000;
+
+    if (recipient.download_confirmed_at)              setDownloadState('confirmed');
+    else if (recipient.download_in_progress && !stale) setDownloadState('in_progress');
+    else                                              setDownloadState('available');
+  }, [recipient]);
+
+  // Effective gate for showing the download button.
+  const canDownload = !!file
+    && !file.is_owner
+    && file.allow_download
+    && !!recipient
+    && recipient.recipient_allow_download
+    && !blobDeleted;
+
+  async function handleDownload() {
+    if (!file) return;
+    setDownloadState('in_progress');
+    setDownloadError(null);
+    try {
+      await runDownload(file.id, token);
+      setSavedFileName(file.name + '.afs');
+      setDownloadState('confirmed');
+      setDownloadModalOpen(true);
+    } catch (e) {
+      const err = e instanceof DownloadError ? e : new DownloadError('UNKNOWN', String(e));
+      // Already-downloaded race → silently jump to confirmed state
+      setDownloadState(err.code === 'ALREADY_DOWNLOADED' ? 'confirmed' : 'available');
+      if (err.code === 'BLOB_DELETED')                                       setBlobDeleted(true);
+      else if (err.code === 'USER_CANCELLED' || err.code === 'WRITE_FAILED') { /* silent — user retries */ }
+      else                                                                    setDownloadError(err.message);
+    }
+  }
 
   // Step 1: fetch file + recipient info (no auth required)
   useEffect(() => {
@@ -481,6 +533,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     broadcastScroll(ch, s);
   }, []);
 
+  if (blobDeleted)                    return <DownloadDeletedScreen onClose={() => { sessionStore.clear(); onClose(); }} />;
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
@@ -538,6 +591,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // Recipient side: apply scroll programmatically when the
             // presenter publishes.
             subscribedScroll={activeCoViewSessionId && followingPresenter ? subscribedScroll : null}
+            // Sprint 2 — recipient .afs download. Prop omitted entirely
+            // for owners / disabled / already-deleted-blob so the button
+            // does not render at all (per state-machine §1.2).
+            onDownload={canDownload ? handleDownload : undefined}
+            downloadState={canDownload ? downloadState : undefined}
           />
         </div>
         {presenterSession && participantPanelOpen && (
@@ -609,6 +667,34 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           fileName={file.name}
           onUnlock={() => setLocked(false)}
         />
+      )}
+
+      {downloadModalOpen && (
+        <DownloadModal
+          fileName={savedFileName}
+          onDone={() => setDownloadModalOpen(false)}
+        />
+      )}
+
+      {downloadError && (
+        // Non-blocking error banner for codes that don't justify a
+        // full-screen takeover (DOWNLOAD_DISABLED, RECIPIENT_REVOKED on
+        // race, generic). BLOB_DELETED takes priority via the
+        // DownloadDeletedScreen early-return above.
+        <div style={{
+          position: 'fixed', bottom: 16, right: 16, zIndex: 999,
+          background: '#A32D2D', color: '#fff',
+          padding: '10px 14px', borderRadius: 6,
+          fontSize: 12, maxWidth: 320,
+          fontFamily: 'system-ui',
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <span style={{ flex: 1 }}>{downloadError}</span>
+          <button
+            onClick={() => setDownloadError(null)}
+            style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
+          >×</button>
+        </div>
       )}
     </>
   );

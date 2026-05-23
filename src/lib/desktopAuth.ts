@@ -37,6 +37,13 @@ export type RecipientInfo = {
   email: string;
   legal_accepted: boolean;
   one_time_used: boolean;
+  // Sprint 2 — download state machine. Owner tokens come back with
+  // recipient_allow_download:false → button hidden for owners (combined
+  // with FileInfo.is_owner check in SecureViewer).
+  recipient_allow_download: boolean;
+  download_confirmed_at:    string | null;
+  download_in_progress:     boolean;
+  download_initiated_at:    string | null;
 };
 
 export async function authenticateDesktop(

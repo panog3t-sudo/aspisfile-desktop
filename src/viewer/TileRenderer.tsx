@@ -47,6 +47,12 @@ type Props = {
   // applied programmatically to the scroll container.
   onPublishScroll?: (s: { v: number; h: number }) => void;
   subscribedScroll?: { v: number; h: number } | null;
+  // Sprint 2 — .afs download entry point. SecureViewer passes onDownload
+  // only when canDownload is true (file.allow_download && recipient_allow_download
+  // && !is_owner && !blobDeleted), so the button is fully hidden in those
+  // cases. downloadState drives label + disabled state once the button shows.
+  onDownload?:    () => void;
+  downloadState?: 'available' | 'in_progress' | 'confirmed';
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -72,6 +78,7 @@ export function TileRenderer({
   sessionId, fileId, file, totalPages, onClose, onLock,
   targetPage, onCurrentPageChange, onPresent, followMode,
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
+  onDownload, downloadState,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -289,11 +296,42 @@ export function TileRenderer({
           </div>
         )}
 
-        {/* Right: Present button (owner-only) + page count.
-            Print and download badges removed — see project memory
-            'Wire up print + download' — the icons advertised capabilities
-            we don't yet implement. */}
+        {/* Right: Download button (recipient-only, gated by SecureViewer),
+            Present button (owner-only), and page count. The Download
+            button is fully hidden when onDownload prop is absent —
+            SecureViewer omits it when the user can't or shouldn't
+            download (owner, blob deleted, allow_download false). */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {onDownload && downloadState && (
+            <button
+              onClick={downloadState === 'available' ? onDownload : undefined}
+              disabled={downloadState !== 'available'}
+              title={
+                downloadState === 'confirmed'
+                  ? 'Already downloaded'
+                  : downloadState === 'in_progress'
+                  ? 'Download in progress'
+                  : 'Download this file'
+              }
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                height: 26, padding: '0 10px',
+                borderRadius: 4,
+                border: `0.5px solid ${downloadState === 'confirmed' ? '#3B6D11' : '#334155'}`,
+                background: downloadState === 'confirmed' ? '#1A2E10' : 'transparent',
+                color: downloadState === 'available' ? '#F1F5F9' : '#94A3B8',
+                cursor: downloadState === 'available' ? 'pointer' : 'default',
+                fontSize: 12, fontWeight: 500, lineHeight: 1,
+                fontFamily: 'system-ui',
+                flexShrink: 0,
+                opacity: downloadState === 'in_progress' ? 0.6 : 1,
+              }}
+            >
+              {downloadState === 'available'   && <>↓ Download</>}
+              {downloadState === 'in_progress' && <>↓ Downloading…</>}
+              {downloadState === 'confirmed'   && <>✓ Downloaded</>}
+            </button>
+          )}
           {onPresent && (
             <button
               onClick={onPresent}
