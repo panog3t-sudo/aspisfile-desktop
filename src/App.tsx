@@ -191,9 +191,40 @@ function AppContent() {
       if (params) openLink(params);
     });
 
-    // .afs file opens — placeholder; .afs format TBD
-    const unlistenFile = listen<string>("open-afs-file", (event) => {
-      console.log("[afs] file opened:", event.payload);
+    // Phase A close-out — .afs file double-click handler. The Rust side
+    // parses the v1 link container JSON and emits `open-afs-link` with
+    // the structured AfsLink payload (token + sig + env + optional otp).
+    // We convert that to ViewerParams and route through the same
+    // openLink() the deep-link pathway uses, so .afs double-click is
+    // observationally identical to clicking a magic-link.
+    type AfsLink = {
+      v:           number;
+      type:        string;
+      token:       string;
+      sig?:        string | null;
+      env?:        string | null;
+      otp?:        string | null;
+      share_url?:  string | null;
+      file_name?:  string | null;
+      sender_name?: string | null;
+    };
+    const unlistenFile = listen<AfsLink>("open-afs-link", async (event) => {
+      const link = event.payload;
+      if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) {
+        console.warn("[afs] discarded malformed payload:", link);
+        return;
+      }
+      // Bring the window forward — same dance as deep-link arrival.
+      await bringWindowToFront();
+      const params: ViewerParams = {
+        token:   link.token,
+        sig:     link.sig ?? null,
+        env:     link.env ?? null,
+        otp:     link.otp ?? null,
+        present: false,
+        coview:  null,
+      };
+      openLink(params);
     });
 
     return () => {

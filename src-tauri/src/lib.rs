@@ -81,7 +81,27 @@ pub fn run() {
             commands::open_external,
             commands::log_security_event,
             commands::authenticate_biometric,
+            fileassoc::read_afs,
         ])
-        .run(tauri::generate_context!())
-        .expect("AspisFile Viewer failed to start");
+        .build(tauri::generate_context!())
+        .expect("AspisFile Viewer failed to start")
+        .run(|_app, _event| {
+            // macOS routes .afs double-clicks through Apple Events
+            // (NSApplicationDelegate openURLs) which Tauri 2 surfaces as
+            // RunEvent::Opened. Same convergence point as the cold-start
+            // argv path on Windows/Linux — handed to fileassoc::try_open_afs.
+            // The Opened variant is macOS/mobile-only — cfg-guard so this
+            // still compiles for Windows/Linux targets.
+            #[cfg(any(target_os = "macos", mobile))]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path() {
+                        let path_str = path.to_string_lossy().to_string();
+                        if path_str.ends_with(".afs") {
+                            fileassoc::try_open_afs(_app, &path_str);
+                        }
+                    }
+                }
+            }
+        });
 }
