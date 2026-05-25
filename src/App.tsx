@@ -70,6 +70,34 @@ async function tryVerifyMagicLink(otp: string): Promise<void> {
   }
 }
 
+// Phase 1 Day 12.5 — recognise OAuth callbacks (aspisfile://auth/
+// callback?code=…) coming back from the external browser after
+// StepUpScreen launches a Google/Microsoft/Apple sign-in. Returns
+// true when the URL was handled (caller skips access-token routing).
+async function tryHandleOAuthCallback(url: string): Promise<boolean> {
+  try {
+    const u = new URL(url);
+    const isCallback =
+      (u.host === "auth" && u.pathname === "/callback") ||
+      // Some URL parsers route the path differently for custom schemes
+      u.pathname.endsWith("/auth/callback");
+    if (!isCallback) return false;
+
+    const code = u.searchParams.get("code");
+    if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) console.warn("[oauth-cb] exchangeCodeForSession failed:", error.message);
+    }
+    // StepUpScreen's window-focus listener picks up the new session
+    // from the Supabase client and calls /resolve-oauth itself —
+    // App.tsx just owns the code exchange, not the approval lifecycle.
+    return true;
+  } catch (err) {
+    console.warn("[oauth-cb] handler threw:", err);
+    return false;
+  }
+}
+
 function checkLaunchArgs(): ViewerParams | null {
   // Tauri passes the URL as a launch argument when opened via deep link
   const args = window.location.search;
@@ -113,8 +141,9 @@ function AppContent() {
     // Rust side's emit racing the React mount. on_open_url events fired during
     // app setup arrive before this listener is registered and are lost.
     getCurrent()
-      .then((urls) => {
+      .then(async (urls) => {
         if (cancelled || !urls || urls.length === 0) return;
+        if (await tryHandleOAuthCallback(urls[0])) return;
         const params = extractFromUrl(urls[0]);
         if (params) openLink(params);
       })
@@ -126,8 +155,9 @@ function AppContent() {
 
     // Runtime URL deliveries — when the app is already running and a new
     // aspisfile:// URL arrives, the plugin invokes this callback.
-    const unlistenDeepLinkPromise = onOpenUrl((urls) => {
+    const unlistenDeepLinkPromise = onOpenUrl(async (urls) => {
       if (cancelled || urls.length === 0) return;
+      if (await tryHandleOAuthCallback(urls[0])) return;
       const params = extractFromUrl(urls[0]);
       if (params) openLink(params);
     });
