@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
@@ -67,6 +68,29 @@ async function tryVerifyMagicLink(otp: string): Promise<void> {
     });
   } catch (err) {
     console.warn("[deep-link] verifyOtp failed:", err);
+  }
+}
+
+// Phase 1 post-sprint fix — bring the Tauri window to the foreground
+// whenever a deep-link arrives. Without this, the browser-side
+// AppRequiredScreen waits 2-8 seconds for `document.hidden` to fire
+// as its proxy for "the OS routed to the viewer", but Tauri's
+// plugin-deep-link doesn't automatically surface the window — the
+// JS callback fires while the window stays in the same focus state.
+// On cold-start this usually works because Tauri creates the window
+// visible+focused; on warm-start the running window may stay hidden
+// or minimised. Calling show + unminimize + setFocus from JS makes
+// the browser tab reliably lose visibility, which the web side
+// detects as "viewer opened" and suppresses the download modal.
+async function bringWindowToFront(): Promise<void> {
+  try {
+    const win = getCurrentWindow();
+    await win.show();
+    await win.unminimize();
+    await win.setFocus();
+  } catch (err) {
+    // Non-fatal — focus is a UX nicety, not a security requirement.
+    console.warn("[deep-link] bringWindowToFront failed:", err);
   }
 }
 
@@ -143,6 +167,9 @@ function AppContent() {
     getCurrent()
       .then(async (urls) => {
         if (cancelled || !urls || urls.length === 0) return;
+        // Surface the window before any URL processing — gives the
+        // browser-side detection a deterministic focus-shift to read.
+        await bringWindowToFront();
         if (await tryHandleOAuthCallback(urls[0])) return;
         const params = extractFromUrl(urls[0]);
         if (params) openLink(params);
@@ -154,9 +181,11 @@ function AppContent() {
     if (launchParams) openLink(launchParams);
 
     // Runtime URL deliveries — when the app is already running and a new
-    // aspisfile:// URL arrives, the plugin invokes this callback.
+    // aspisfile:// URL arrives, the plugin invokes this callback. Same
+    // window-focus dance as cold-start: surface before processing.
     const unlistenDeepLinkPromise = onOpenUrl(async (urls) => {
       if (cancelled || urls.length === 0) return;
+      await bringWindowToFront();
       if (await tryHandleOAuthCallback(urls[0])) return;
       const params = extractFromUrl(urls[0]);
       if (params) openLink(params);
