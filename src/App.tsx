@@ -3,6 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
+import { SetupModal } from "./components/SetupModal";
+import { LockProvider, useLock } from "./contexts/LockContext";
+import { supabase } from "./lib/supabase";
 import "./App.css";
 
 type Mode = "idle" | "viewer";
@@ -11,6 +14,12 @@ type ViewerParams = {
   token:   string;
   sig:     string | null;
   env:     string | null;
+  // Phase 1 Day 9 — magic-link token_hash carried on the share URL by
+  // Day 2's email-embed work. Extracted here so the deep-link handler
+  // can call supabase.auth.verifyOtp before the SecureViewer mounts.
+  // Establishes the Supabase session that the resolve-* endpoints
+  // require via Bearer.
+  otp:     string | null;
   present: boolean;
   coview:  string | null;
 };
@@ -34,11 +43,30 @@ function extractFromUrl(url: string): ViewerParams | null {
       token,
       sig:     parsed.searchParams.get("sig"),
       env:     parsed.searchParams.get("env"),
+      otp:     parsed.searchParams.get("otp"),
       present: parsed.searchParams.get("present") === "true",
       coview:  parsed.searchParams.get("coview"),
     };
   } catch {
     return null;
+  }
+}
+
+// Phase 1 Day 9 — establish the Supabase session from the share URL's
+// magic-link token before we hand off to SecureViewer. Best-effort:
+// missing or expired tokens just leave the recipient unsigned-in,
+// which still works for clean-tier access (the existing /mobile/access
+// flow doesn't require a Supabase session for envelope-validated
+// recipients). Step-up paths will fail without a session and the
+// StepUpScreen will surface that.
+async function tryVerifyMagicLink(otp: string): Promise<void> {
+  try {
+    await supabase.auth.verifyOtp({
+      token_hash: otp,
+      type:       "magiclink",
+    });
+  } catch (err) {
+    console.warn("[deep-link] verifyOtp failed:", err);
   }
 }
 
@@ -52,14 +80,31 @@ function checkLaunchArgs(): ViewerParams | null {
   return null;
 }
 
-export default function App() {
+function AppContent() {
   const [mode, setMode] = useState<Mode>("idle");
   const [viewerParams, setViewerParams] = useState<ViewerParams | null>(null);
+  const { setupComplete } = useLock();
+  const [hasSession, setHasSession] = useState(false);
 
-  function openLink(params: ViewerParams) {
+  async function openLink(params: ViewerParams) {
+    if (params.otp) {
+      await tryVerifyMagicLink(params.otp);
+    }
     setViewerParams(params);
     setMode("viewer");
   }
+
+  // Track Supabase session presence so SetupModal renders only when
+  // the recipient is actually signed in (post-magic-link verifyOtp).
+  // Clean-tier accesses without a magic-link still work — they just
+  // don't trigger setup, which is fine for Phase 1.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setHasSession(!!session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setHasSession(!!session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,22 +146,37 @@ export default function App() {
 
   if (mode === "viewer" && viewerParams) {
     return (
-      <SecureViewer
-        // key forces a clean unmount + remount when a new deep link arrives
-        // while the viewer is already open. Without this, React reuses the
-        // existing SecureViewer instance and a stale startedRef would
-        // prevent the new session from starting — the viewer would render
-        // the new file metadata but stay stuck on the AuthLoadingScreen.
-        key={viewerParams.token}
-        token={viewerParams.token}
-        sig={viewerParams.sig}
-        env={viewerParams.env}
-        onClose={() => { setMode("idle"); setViewerParams(null); }}
-        present={viewerParams.present}
-        coviewSessionId={viewerParams.coview}
-      />
+      <>
+        <SecureViewer
+          // key forces a clean unmount + remount when a new deep link arrives
+          // while the viewer is already open. Without this, React reuses the
+          // existing SecureViewer instance and a stale startedRef would
+          // prevent the new session from starting — the viewer would render
+          // the new file metadata but stay stuck on the AuthLoadingScreen.
+          key={viewerParams.token}
+          token={viewerParams.token}
+          sig={viewerParams.sig}
+          env={viewerParams.env}
+          onClose={() => { setMode("idle"); setViewerParams(null); }}
+          present={viewerParams.present}
+          coviewSessionId={viewerParams.coview}
+        />
+        {/* Phase 1 Day 9 — setup modal blocks the viewer until the
+            recipient picks a lock mechanism (or skips). Mounts only
+            once per session because markSetupComplete persists to
+            localStorage. */}
+        {hasSession && !setupComplete && <SetupModal />}
+      </>
     );
   }
 
   return <IdleScreen onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }} />;
+}
+
+export default function App() {
+  return (
+    <LockProvider>
+      <AppContent />
+    </LockProvider>
+  );
 }

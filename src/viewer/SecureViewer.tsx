@@ -16,6 +16,8 @@ import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
+import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
+import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
 import { DownloadDeletedScreen } from "../components/DownloadDeletedScreen";
 import { runDownload, DownloadError } from "../lib/download";
@@ -29,7 +31,11 @@ import { broadcastScroll, broadcastZoom, type ScrollChangePayload } from "../lib
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const IDLE_MS   = 2 * 60 * 1000; // lock after 2 min inactivity
-const BLUR_MS   = 30 * 1000;      // lock 30s after window loses focus
+// Phase 1 Day 9 — bumped from 30s to 60s to match mobile and the brief's
+// "uniform auth model" guidance. Brief 60s threshold balances "person
+// stepped away" detection against legitimate window-switching during
+// multi-app workflow. v1.5 and earlier shipped 30s.
+const BLUR_MS   = 60 * 1000;
 
 function useLockGuard(enabled: boolean, onLock: () => void) {
   const onLockRef = useRef(onLock);
@@ -95,6 +101,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
   const [error, setError]             = useState<string | null>(null);
   const [locked, setLocked]           = useState(false);
+  // Phase 1 Day 9 — pre-approval gate state (suspicious tier).
+  // pendingApprovalId is set when /mobile/access returns status:
+  // 'pending_approval' with mechanism: null. The StepUpScreen overlay
+  // takes over until the recipient resolves via OTP (OAuth deferred).
+  // delegationApprovalId fires when /resolve-otp returns delegation_
+  // required — recipient must explicitly confirm cross-device approval.
+  const [pendingApprovalId, setPendingApprovalId]       = useState<string | null>(null);
+  const [delegationApprovalId, setDelegationApprovalId] = useState<string | null>(null);
   const startedRef                    = useRef(false);
 
   // ─── Sprint 3 — Unified Tracking: per-session telemetry ──────────
@@ -124,6 +138,49 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const uniquePagesRef       = useRef<Set<number>>(new Set());
   const fileOpenedFiredRef   = useRef(false);
   const sessionEndedFiredRef = useRef(false);
+
+  // Phase 1 Day 9 — applied by StepUpScreen and DelegationScreen
+  // after their resolve calls land. Mirrors the post-/mobile/access
+  // success block (sessionStore.set → setSessionId → fetch pages →
+  // file_opened audit) so a step-up unlock produces the same client
+  // state as a clean-tier access.
+  const applyStepUpCredentials = useCallback(async (creds: StepUpCreds) => {
+    if (!file) return;
+    sessionStore.set(creds.session_key, creds.device_share);
+    setSessionId(creds.session_id);
+
+    const platform = await invoke<string>("get_platform");
+    const fingerprint = await getDesktopFingerprint(platform);
+
+    const pageHeaders: Record<string, string> = {
+      "X-App-Platform": "desktop",
+      Authorization: `Bearer ${creds.session_key}`,
+      "X-Device-Fingerprint": fingerprint,
+    };
+    if (creds.device_share) pageHeaders["X-Device-Share"] = creds.device_share;
+
+    const pagesRes = await fetch(
+      `${__API_BASE__}/api/v1/viewer/${file.id}/pages?session=${creds.session_id}`,
+      { headers: pageHeaders }
+    );
+    if (pagesRes.ok) {
+      const pagesData = await pagesRes.json();
+      setTotalPages(pagesData.count ?? 1);
+    }
+
+    if (!fileOpenedFiredRef.current) {
+      fileOpenedFiredRef.current = true;
+      sessionStartTsRef.current = Date.now();
+      await sendEvent({
+        event_type:    'file_opened',
+        file_id:       file.id,
+        session_id:    creds.session_id,
+        access_method: accessMethod,
+        payload:       { device_fingerprint: fingerprint, step_up: true },
+      }, token);
+      if (trackPages) startPageTracking(creds.session_id, file.id, token);
+    }
+  }, [file, token, accessMethod, trackPages]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -254,6 +311,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const platform = await invoke<string>("get_platform");
       const fingerprint = await getDesktopFingerprint(platform);
 
+      // Phase 1 Day 9 — attach Bearer for the resolve-* endpoints called
+      // by the step-up screens. The /mobile/access route itself doesn't
+      // require a Supabase session (envelope alone is enough) but the
+      // header is harmless when present.
+      const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
+
       const res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
         method: "POST",
         headers: {
@@ -261,6 +324,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           "X-App-Platform": "desktop",
           "X-Desktop-OS": platform,
           "User-Agent": navigator.userAgent,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint }),
       });
@@ -273,8 +337,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
       const data = await res.json();
 
+      // Suspicious-tier pre-approval gate (Brief §4) — recipient must
+      // step up via OTP. StepUpScreen overlay calls /request-otp +
+      // /resolve-otp with Bearer; on success it'll deliver session
+      // credentials and we re-mount this step via startedRef reset.
       if (data.status === "pending_approval") {
-        setError("Access pending sender approval. Please try again shortly.");
+        setPendingApprovalId(data.approval_id);
         startedRef.current = false;
         return;
       }
@@ -671,6 +739,42 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         <LockScreen
           fileName={file.name}
           onUnlock={() => setLocked(false)}
+        />
+      )}
+
+      {/* Phase 1 Day 9 — suspicious-tier step-up gate. Mounts as a
+          fullscreen overlay; on resolve the parent state is updated
+          with the session credentials and the page-load effects
+          continue from where /mobile/access left off. */}
+      {pendingApprovalId && !delegationApprovalId && (
+        <StepUpScreen
+          approvalId={pendingApprovalId}
+          fileName={file.name}
+          recipientEmail={recipient?.email ?? ""}
+          onApproved={(creds: StepUpCreds) => {
+            applyStepUpCredentials(creds);
+            setPendingApprovalId(null);
+          }}
+          onDelegationRequired={(id) => {
+            setPendingApprovalId(null);
+            setDelegationApprovalId(id);
+          }}
+        />
+      )}
+
+      {delegationApprovalId && (
+        <DelegationScreen
+          approvalId={delegationApprovalId}
+          fileName={file.name}
+          recipientEmail={recipient?.email ?? ""}
+          onApproved={(creds: StepUpCreds) => {
+            applyStepUpCredentials(creds);
+            setDelegationApprovalId(null);
+          }}
+          onCancel={() => {
+            setDelegationApprovalId(null);
+            setError("Cancelled. Close this window and contact the sender if this was unexpected.");
+          }}
         />
       )}
 

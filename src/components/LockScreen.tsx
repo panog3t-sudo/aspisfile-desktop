@@ -1,19 +1,55 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { fetch } from "@tauri-apps/plugin-http";
+import { supabase } from "../lib/supabase";
+import { useLock } from "../contexts/LockContext";
+
+declare const __API_BASE__: string;
 
 type Props = {
   fileName: string;
   onUnlock: () => void;
 };
 
+// Phase 1 Day 9.6 — LockScreen extended with PIN fallback.
+//
+// Reads the recipient's chosen mechanisms from LockContext:
+//   - biometricEnabled + biometricAvailable → auto-prompts the Tauri
+//     authenticate_biometric command on mount and window focus
+//   - pinSet → renders the 6-digit PIN input; submits to
+//     /api/v1/recipient-devices/me/verify-pin via Bearer
+//
+// Pre-Day-9 behaviour was biometric-only with retry on window focus.
+// That focus retry stays (it's how the recipient re-tries biometric
+// after dismissing the OS prompt); the new addition is a PIN fallback
+// that surfaces alongside the biometric retry button.
+
+async function getFingerprint(): Promise<string> {
+  const platform = await invoke<string>("get_platform");
+  const raw = `${platform}:${screen.width}x${screen.height}:${
+    Intl.DateTimeFormat().resolvedOptions().timeZone
+  }`;
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export function LockScreen({ fileName, onUnlock }: Props) {
+  const { biometricEnabled, biometricAvailable, pinSet } = useLock();
+
+  const [pin,    setPin]    = useState("");
+  const [busy,   setBusy]   = useState(false);
+  const [error,  setError]  = useState("");
   const [status, setStatus] = useState<"idle" | "verifying" | "error">("idle");
   const inProgressRef = useRef(false);
 
-  async function attempt() {
+  const attemptBiometric = async () => {
     if (inProgressRef.current) return;
+    if (!biometricEnabled || !biometricAvailable) return;
     inProgressRef.current = true;
     setStatus("verifying");
+    setError("");
     try {
       await invoke("authenticate_biometric");
       onUnlock();
@@ -22,18 +58,71 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     } finally {
       inProgressRef.current = false;
     }
-  }
+  };
 
-  // Prompt when the user returns to the window (focus), not on mount
+  // Auto-prompt biometric on mount + window-focus regain. Window
+  // focus retry exists because the OS biometric prompt is modal
+  // outside the Tauri webview; once dismissed, focus returns here.
   useEffect(() => {
-    const handleFocus = () => attempt();
+    attemptBiometric();
+    const handleFocus = () => { if (status !== "verifying") attemptBiometric(); };
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [biometricEnabled, biometricAvailable]);
+
+  const verifyPin = async () => {
+    if (busy) return;
+    if (!/^\d{6}$/.test(pin)) {
+      setError("Enter the 6-digit PIN.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
+      const fp = await getFingerprint();
+      const res = await fetch(`${__API_BASE__}/api/v1/recipient-devices/me/verify-pin`, {
+        method: "POST",
+        headers: {
+          "Content-Type":   "application/json",
+          "X-App-Platform": "desktop",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ deviceFingerprint: fp, pin }),
+      });
+      const json = await res.json();
+      if (res.ok && json.status === "ok") {
+        setPin("");
+        onUnlock();
+        return;
+      }
+      if (res.status === 429) {
+        setError("Too many attempts. Please wait a few minutes.");
+      } else if (json.error === "INVALID_PIN") {
+        setError("Incorrect PIN.");
+      } else if (json.error === "NO_PIN_SET") {
+        setError("No PIN is configured on this device.");
+      } else if (json.error === "DEVICE_REVOKED") {
+        setError("This device has been revoked. Sign in again.");
+      } else {
+        setError(json.detail || json.error || "Could not verify PIN.");
+      }
+    } catch {
+      setError("Network error — try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signOutEscape = async () => {
+    await supabase.auth.signOut({ scope: "local" });
+    // App.tsx's auth listener will route to idle; onUnlock is a no-op
+    // here because there's nothing to unlock into.
+  };
 
   return (
     <div
-      onClick={attempt}
       style={{
         position: "fixed",
         inset: 0,
@@ -44,10 +133,10 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         alignItems: "center",
         justifyContent: "center",
         gap: 12,
+        padding: 24,
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         userSelect: "none",
         WebkitUserSelect: "none",
-        cursor: status === "verifying" ? "default" : "pointer",
       } as React.CSSProperties}
     >
       <span style={{ fontSize: 44, lineHeight: 1 }}>🔒</span>
@@ -61,7 +150,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
           color: "#475569",
           fontSize: 12,
           margin: 0,
-          maxWidth: 280,
+          maxWidth: 320,
           textAlign: "center",
           lineHeight: 1.5,
           overflow: "hidden",
@@ -72,13 +161,107 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         {fileName}
       </p>
 
-      <p style={{ color: "#334155", fontSize: 12, margin: "4px 0 0" }}>
-        {status === "idle"      && "Click to unlock"}
-        {status === "verifying" && "Waiting for authentication…"}
-        {status === "error"     && (
-          <span style={{ color: "#EF4444" }}>Authentication failed — click to try again</span>
-        )}
-      </p>
+      {biometricEnabled && biometricAvailable && (
+        <button
+          onClick={attemptBiometric}
+          disabled={status === "verifying"}
+          style={{
+            marginTop: 8,
+            padding: "8px 18px",
+            borderRadius: 8,
+            background: "transparent",
+            color: "#3B82F6",
+            border: "0.5px solid rgba(255,255,255,0.18)",
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: status === "verifying" ? "default" : "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          {status === "verifying" ? "Waiting for authentication…" : "Use Touch ID / Windows Hello"}
+        </button>
+      )}
+
+      {pinSet && (
+        <div style={{ width: "100%", maxWidth: 280, marginTop: 12 }}>
+          <input
+            value={pin}
+            onChange={e => { setPin(e.target.value.replace(/\D/g, "").slice(0, 6)); setError(""); }}
+            onKeyDown={e => { if (e.key === "Enter" && pin.length === 6) verifyPin(); }}
+            placeholder="••••••"
+            type="password"
+            inputMode="numeric"
+            maxLength={6}
+            autoFocus={!biometricEnabled || !biometricAvailable}
+            style={{
+              width: "100%",
+              padding: 14,
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.05)",
+              color: "#fff",
+              border: "0.5px solid rgba(255,255,255,0.12)",
+              fontSize: 20,
+              letterSpacing: "0.5em",
+              textAlign: "center",
+              fontFamily: "'SF Mono','Menlo',monospace",
+              outline: "none",
+              boxSizing: "border-box",
+              marginBottom: 8,
+            }}
+          />
+          <button
+            onClick={verifyPin}
+            disabled={busy || pin.length !== 6}
+            style={{
+              width: "100%",
+              padding: "11px 14px",
+              borderRadius: 8,
+              background: (busy || pin.length !== 6) ? "rgba(255,255,255,0.08)" : "#3B82F6",
+              color: (busy || pin.length !== 6) ? "rgba(255,255,255,0.35)" : "#fff",
+              border: "none",
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: (busy || pin.length !== 6) ? "not-allowed" : "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            {busy ? "Verifying…" : "Unlock"}
+          </button>
+        </div>
+      )}
+
+      {!pinSet && (!biometricEnabled || !biometricAvailable) && (
+        <p style={{ color: "#94A3B8", fontSize: 12, margin: "12px 0 0", maxWidth: 280, textAlign: "center", lineHeight: 1.5 }}>
+          No unlock mechanism is configured. Sign out and sign in again to set one.
+        </p>
+      )}
+
+      {error && (
+        <p style={{ color: "#FCA5A5", fontSize: 11, margin: "8px 0 0", textAlign: "center" }}>
+          {error}
+        </p>
+      )}
+
+      {status === "error" && !error && (
+        <p style={{ color: "#EF4444", fontSize: 11, margin: "8px 0 0" }}>
+          Authentication failed — try again
+        </p>
+      )}
+
+      <button
+        onClick={signOutEscape}
+        style={{
+          marginTop: 16,
+          background: "none",
+          border: "none",
+          color: "rgba(255,255,255,0.35)",
+          fontSize: 11,
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        Sign out
+      </button>
     </div>
   );
 }

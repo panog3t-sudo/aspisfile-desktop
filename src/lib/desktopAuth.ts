@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
-import { sessionStore } from "./sessionStore";
 
 declare const __API_BASE__: string;
 
@@ -73,8 +72,10 @@ export async function authenticateDesktop(
   }
 
   const data = await res.json();
-  if (data.session?.key) {
-    sessionStore.set(data.session.key);
-  }
+  // Note: /api/v1/access/<token> returns file + recipient metadata only.
+  // Session credentials are minted later by /api/v1/mobile/access/<token>
+  // (called from SecureViewer post-legal-acceptance), where the actual
+  // viewer_sessions row is created. The previous `data.session?.key`
+  // block here was dead code from an older single-call design.
   return { file: data.file, recipient: data.recipient };
 }
