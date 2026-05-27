@@ -16,12 +16,6 @@ type ViewerParams = {
   token:   string;
   sig:     string | null;
   env:     string | null;
-  // Phase 1 Day 9 — magic-link token_hash carried on the share URL by
-  // Day 2's email-embed work. Extracted here so the deep-link handler
-  // can call supabase.auth.verifyOtp before the SecureViewer mounts.
-  // Establishes the Supabase session that the resolve-* endpoints
-  // require via Bearer.
-  otp:     string | null;
   present: boolean;
   coview:  string | null;
 };
@@ -45,30 +39,11 @@ function extractFromUrl(url: string): ViewerParams | null {
       token,
       sig:     parsed.searchParams.get("sig"),
       env:     parsed.searchParams.get("env"),
-      otp:     parsed.searchParams.get("otp"),
       present: parsed.searchParams.get("present") === "true",
       coview:  parsed.searchParams.get("coview"),
     };
   } catch {
     return null;
-  }
-}
-
-// Phase 1 Day 9 — establish the Supabase session from the share URL's
-// magic-link token before we hand off to SecureViewer. Best-effort:
-// missing or expired tokens just leave the recipient unsigned-in,
-// which still works for clean-tier access (the existing /mobile/access
-// flow doesn't require a Supabase session for envelope-validated
-// recipients). Step-up paths will fail without a session and the
-// StepUpScreen will surface that.
-async function tryVerifyMagicLink(otp: string): Promise<void> {
-  try {
-    await supabase.auth.verifyOtp({
-      token_hash: otp,
-      type:       "magiclink",
-    });
-  } catch (err) {
-    console.warn("[deep-link] verifyOtp failed:", err);
   }
 }
 
@@ -140,17 +115,14 @@ function AppContent() {
   const [hasSession, setHasSession] = useState(false);
 
   async function openLink(params: ViewerParams) {
-    if (params.otp) {
-      await tryVerifyMagicLink(params.otp);
-    }
     setViewerParams(params);
     setMode("viewer");
   }
 
   // Track Supabase session presence so SetupModal renders only when
-  // the recipient is actually signed in (post-magic-link verifyOtp).
-  // Clean-tier accesses without a magic-link still work — they just
-  // don't trigger setup, which is fine for Phase 1.
+  // the recipient is actually signed in. Phase A+ recipients are
+  // passkey-enrolled via lib/passkey.ts; older sender-side sign-ins
+  // (QR pair / signin) also produce a Supabase session.
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setHasSession(!!session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -194,17 +166,16 @@ function AppContent() {
 
     // Phase A close-out — .afs file double-click handler. The Rust side
     // parses the v1 link container JSON and emits `open-afs-link` with
-    // the structured AfsLink payload (token + sig + env + optional otp).
-    // We convert that to ViewerParams and route through the same
-    // openLink() the deep-link pathway uses, so .afs double-click is
-    // observationally identical to clicking a magic-link.
+    // the structured AfsLink payload (token + sig + env). We convert
+    // that to ViewerParams and route through the same openLink() the
+    // deep-link pathway uses, so .afs double-click is observationally
+    // identical to opening via a share URL.
     type AfsLink = {
       v:           number;
       type:        string;
       token:       string;
       sig?:        string | null;
       env?:        string | null;
-      otp?:        string | null;
       share_url?:  string | null;
       file_name?:  string | null;
       sender_name?: string | null;
@@ -221,7 +192,6 @@ function AppContent() {
         token:   link.token,
         sig:     link.sig ?? null,
         env:     link.env ?? null,
-        otp:     link.otp ?? null,
         present: false,
         coview:  null,
       };
