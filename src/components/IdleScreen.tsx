@@ -1,8 +1,13 @@
 import { useState } from "react";
 
-type Props = { onLink: (url: string) => void };
+type Props = {
+  onLink:   (url: string) => void;
+  // Phase A+ Stage 4 — invoked when the user taps "I have an
+  // enrollment code". App.tsx switches to the EnrolmentScreen.
+  onEnrol?: () => void;
+};
 
-export function IdleScreen({ onLink }: Props) {
+export function IdleScreen({ onLink, onEnrol }: Props) {
   const [input, setInput] = useState("");
 
   function handleOpen() {
@@ -32,6 +37,28 @@ export function IdleScreen({ onLink }: Props) {
       <p style={{ fontSize: 13, margin: 0, color: "#64748B" }}>
         Open a secure file link or double-click a .afs file to begin.
       </p>
+
+      {/* Phase A+ Stage 4 — recipient-side entry point for first-time
+          enrolment via the sender-issued one-time code. Hidden when no
+          handler is supplied so older callers still compile cleanly. */}
+      {onEnrol && (
+        <button
+          onClick={onEnrol}
+          style={{
+            marginTop: 18,
+            background: "transparent",
+            border: "0.5px solid rgba(255,255,255,0.18)",
+            color: "#94A3B8",
+            padding: "8px 16px",
+            borderRadius: 6,
+            fontSize: 12,
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          I have an enrollment code
+        </button>
+      )}
 
       {/* Dev-mode URL input — paste a share link to test without deep link */}
       {import.meta.env.DEV && (

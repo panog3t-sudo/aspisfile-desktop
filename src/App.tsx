@@ -5,11 +5,12 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
 import { SetupModal } from "./components/SetupModal";
+import { EnrolmentScreen } from "./components/EnrolmentScreen";
 import { LockProvider, useLock } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
 import "./App.css";
 
-type Mode = "idle" | "viewer";
+type Mode = "idle" | "viewer" | "enrol";
 
 type ViewerParams = {
   token:   string;
@@ -260,7 +261,21 @@ function AppContent() {
     );
   }
 
-  return <IdleScreen onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }} />;
+  if (mode === "enrol") {
+    return (
+      <EnrolmentScreen
+        onComplete={() => setMode("idle")}
+        onCancel={() => setMode("idle")}
+      />
+    );
+  }
+
+  return (
+    <IdleScreen
+      onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
+      onEnrol={() => setMode("enrol")}
+    />
+  );
 }
 
 export default function App() {
