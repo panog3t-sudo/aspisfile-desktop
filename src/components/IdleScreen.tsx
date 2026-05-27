@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getRecipientSession, RecipientSession } from "../lib/recipient-session";
 
 type Props = {
   onLink:   (url: string) => void;
@@ -9,6 +10,23 @@ type Props = {
 
 export function IdleScreen({ onLink, onEnrol }: Props) {
   const [input, setInput] = useState("");
+  // Phase A+ UX polish — surface enrolment state on the idle screen so
+  // a recipient who already installed the app can either see they're
+  // enrolled (and as which email) or find the entry point to enrol
+  // without needing a fresh deep-link to arrive first. Mirrors the
+  // mobile account.tsx "Recipient identity" card.
+  const [session, setSession] = useState<RecipientSession | null>(null);
+
+  useEffect(() => {
+    setSession(getRecipientSession());
+    const onVisible = () => setSession(getRecipientSession());
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
 
   function handleOpen() {
     const val = input.trim();
@@ -38,26 +56,70 @@ export function IdleScreen({ onLink, onEnrol }: Props) {
         Open a secure file link or double-click a .afs file to begin.
       </p>
 
-      {/* Phase A+ Stage 4 — recipient-side entry point for first-time
-          enrolment via the sender-issued one-time code. Hidden when no
-          handler is supplied so older callers still compile cleanly. */}
-      {onEnrol && (
-        <button
-          onClick={onEnrol}
+      {/* Phase A+ UX polish — recipient identity card.
+          Enrolled  → show the email + a small "Use another code" link
+                      (still routes to EnrolmentScreen, which lets the
+                      user enrol an additional code if a sender issues
+                      one to a different address on the same device).
+          Unenrolled → the original "I have an enrollment code" button. */}
+      {session ? (
+        <div
           style={{
             marginTop: 18,
-            background: "transparent",
+            background: "rgba(255,255,255,0.04)",
             border: "0.5px solid rgba(255,255,255,0.18)",
-            color: "#94A3B8",
-            padding: "8px 16px",
-            borderRadius: 6,
-            fontSize: 12,
-            cursor: "pointer",
-            fontFamily: "inherit",
+            borderRadius: 8,
+            padding: "12px 16px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 6,
+            maxWidth: 360,
           }}
         >
-          I have an enrollment code
-        </button>
+          <span style={{ fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>
+            Enrolled
+          </span>
+          <span style={{ fontSize: 13, color: "#E2E8F0", fontWeight: 500, wordBreak: "break-all" }}>
+            {session.email}
+          </span>
+          {onEnrol && (
+            <button
+              onClick={onEnrol}
+              style={{
+                marginTop: 4,
+                background: "transparent",
+                border: "none",
+                color: "#94A3B8",
+                fontSize: 11,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                textDecoration: "underline",
+              }}
+            >
+              Use a different enrollment code
+            </button>
+          )}
+        </div>
+      ) : (
+        onEnrol && (
+          <button
+            onClick={onEnrol}
+            style={{
+              marginTop: 18,
+              background: "transparent",
+              border: "0.5px solid rgba(255,255,255,0.18)",
+              color: "#94A3B8",
+              padding: "8px 16px",
+              borderRadius: 6,
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            I have an enrollment code
+          </button>
+        )
       )}
 
       {/* Dev-mode URL input — paste a share link to test without deep link */}
