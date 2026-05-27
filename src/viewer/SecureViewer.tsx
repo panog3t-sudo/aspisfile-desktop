@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { sessionStore } from "../lib/sessionStore";
 import { supabase } from "../lib/supabase";
+import { getActiveSessionToken } from "../lib/recipient-session";
 import { authenticateDesktop, FileInfo, RecipientInfo } from "../lib/desktopAuth";
 import {
   sendEvent,
@@ -311,11 +312,22 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const platform = await invoke<string>("get_platform");
       const fingerprint = await getDesktopFingerprint(platform);
 
-      // Phase 1 Day 9 — attach Bearer for the resolve-* endpoints called
-      // by the step-up screens. The /mobile/access route itself doesn't
-      // require a Supabase session (envelope alone is enough) but the
-      // header is harmless when present.
-      const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
+      // Phase A+ Rule 5 — attach the recipient passkey session token
+      // from lib/recipient-session.ts. The server's /mobile/access
+      // route verifies the JWT via verifySessionToken and rejects
+      // (RECIPIENT_MISMATCH 403) if the authenticated email doesn't
+      // match the file's intended recipient.
+      //
+      // Pre-Phase-A+ this slot carried the Supabase access_token
+      // (magic-link / OAuth artifact). That secret is signed with a
+      // different key than JWT_SECRET, so the server now rejects it
+      // as INVALID_SESSION_TOKEN. Using the passkey session token
+      // here is both correct and required for the binding check.
+      //
+      // No bearer (no enrolled identity on this device) still works:
+      // the server skips the binding check in that case until Stage 7
+      // cleanup makes it mandatory across all native clients.
+      const sessionToken = getActiveSessionToken();
 
       const res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
         method: "POST",
@@ -324,7 +336,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           "X-App-Platform": "desktop",
           "X-Desktop-OS": platform,
           "User-Agent": navigator.userAgent,
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
         body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint }),
       });
