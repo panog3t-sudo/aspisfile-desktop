@@ -109,13 +109,41 @@ jobs:
           echo "App:     $APP_PATH"
           echo "Version: $VERSION"
           mkdir -p artifacts
+
+          # Stage the .app into a clean root directory so we can use
+          # `pkgbuild --root` (required for --analyze) instead of
+          # --component (which silently marks the bundle as
+          # relocatable and offers no override).
+          PKG_ROOT=$(mktemp -d)
+          cp -R "$APP_PATH" "$PKG_ROOT/"
+
+          # Disable bundle relocation. By default pkgbuild marks bundles
+          # as relocatable, which makes macOS Installer search the disk
+          # for any existing copy of bundle id com.aspisfile.viewer and
+          # INSTALL ON TOP OF IT instead of at --install-location. That
+          # broke v1.7.1 for any user with a stray copy of the app
+          # outside /Applications — the installer would silently
+          # overwrite the stray copy and /Applications stayed empty.
+          # See the May 2026 incident.
+          #
+          # `--analyze` generates the default component plist; we flip
+          # BundleIsRelocatable to false and feed it back via
+          # --component-plist. Resulting PackageInfo emits empty
+          # <relocate/> instead of <relocate><bundle .../></relocate>,
+          # so Installer always honours --install-location.
+          pkgbuild --analyze --root "$PKG_ROOT" artifacts/component.plist
+          /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" artifacts/component.plist
+          echo "--- patched component.plist ---"
+          cat artifacts/component.plist
+
           # Postinstall script lives in src-tauri/pkg-scripts/. It moves
           # the .pkg the user double-clicked into ~/.Trash after install
           # completes so they don't have to clean up Downloads manually.
           # The script is included in the signed/notarised payload.
           chmod 755 src-tauri/pkg-scripts/postinstall
           pkgbuild \
-            --component "$APP_PATH" \
+            --root "$PKG_ROOT" \
+            --component-plist artifacts/component.plist \
             --install-location /Applications \
             --identifier com.aspisfile.viewer.pkg \
             --version "$VERSION" \
