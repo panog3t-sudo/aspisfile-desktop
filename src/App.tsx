@@ -8,6 +8,7 @@ import { SetupModal } from "./components/SetupModal";
 import { EnrolmentScreen } from "./components/EnrolmentScreen";
 import { LockProvider, useLock } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
+import { getActiveSessionToken } from "./lib/recipient-session";
 import "./App.css";
 
 type Mode = "idle" | "viewer" | "enrol";
@@ -111,10 +112,26 @@ function checkLaunchArgs(): ViewerParams | null {
 function AppContent() {
   const [mode, setMode] = useState<Mode>("idle");
   const [viewerParams, setViewerParams] = useState<ViewerParams | null>(null);
+  // pendingLink: a deep-link arrived while the recipient wasn't enrolled.
+  // Buffer it, route to EnrolmentScreen, replay it once enrolment completes.
+  // Without this gate the server returns BINDING_REQUIRED 403 from
+  // /api/v1/mobile/access and the user sees a generic "Session start
+  // failed (403)" error in the viewer instead of a recoverable flow.
+  const [pendingLink, setPendingLink] = useState<ViewerParams | null>(null);
   const { setupComplete } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
   async function openLink(params: ViewerParams) {
+    // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
+    // open files. The server enforces this via BINDING_REQUIRED 403 if
+    // no Bearer is present; we do the client-side route here so the
+    // un-enrolled user lands on a useful screen (EnrolmentScreen) and
+    // can replay the link after entering their enrolment code.
+    if (!getActiveSessionToken()) {
+      setPendingLink(params);
+      setMode("enrol");
+      return;
+    }
     setViewerParams(params);
     setMode("viewer");
   }
@@ -234,8 +251,22 @@ function AppContent() {
   if (mode === "enrol") {
     return (
       <EnrolmentScreen
-        onComplete={() => setMode("idle")}
-        onCancel={() => setMode("idle")}
+        onComplete={() => {
+          // Replay the buffered deep-link if enrolment was triggered by
+          // a link tap. openLink() re-checks getActiveSessionToken()
+          // and proceeds to the viewer this time.
+          if (pendingLink) {
+            const replay = pendingLink;
+            setPendingLink(null);
+            openLink(replay);
+            return;
+          }
+          setMode("idle");
+        }}
+        onCancel={() => {
+          setPendingLink(null);
+          setMode("idle");
+        }}
       />
     );
   }

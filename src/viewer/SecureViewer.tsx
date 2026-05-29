@@ -312,21 +312,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const platform = await invoke<string>("get_platform");
       const fingerprint = await getDesktopFingerprint(platform);
 
-      // Phase A+ Rule 5 — attach the recipient passkey session token
-      // from lib/recipient-session.ts. The server's /mobile/access
-      // route verifies the JWT via verifySessionToken and rejects
-      // (RECIPIENT_MISMATCH 403) if the authenticated email doesn't
-      // match the file's intended recipient.
-      //
-      // Pre-Phase-A+ this slot carried the Supabase access_token
-      // (magic-link / OAuth artifact). That secret is signed with a
-      // different key than JWT_SECRET, so the server now rejects it
-      // as INVALID_SESSION_TOKEN. Using the passkey session token
-      // here is both correct and required for the binding check.
-      //
-      // No bearer (no enrolled identity on this device) still works:
-      // the server skips the binding check in that case until Stage 7
-      // cleanup makes it mandatory across all native clients.
+      // Phase A+ Stage 7 (2026-05-29): the server REQUIRES a passkey
+      // session token Bearer for non-owner /mobile/access calls and
+      // returns BINDING_REQUIRED 403 without one. App.tsx's openLink()
+      // gate prevents this case from reaching here by routing
+      // un-enrolled link arrivals to EnrolmentScreen first. The
+      // error-handling block below catches BINDING_REQUIRED defensively
+      // so an expired session (8h TTL) surfaces a useful message.
       const sessionToken = getActiveSessionToken();
 
       const res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
@@ -343,6 +335,18 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        if (body.error === 'BINDING_REQUIRED') {
+          // Should be unreachable — App.tsx routes un-enrolled link
+          // arrivals to EnrolmentScreen before mounting the viewer.
+          // Surfaces if the recipient's 8h session token expired
+          // between mount and now, or if storage was cleared.
+          setError('This device is not enrolled. Close this window and tap "Enrol" from the home screen.');
+          return;
+        }
+        if (body.error === 'RECIPIENT_MISMATCH') {
+          setError('This file was shared with a different email. Sign in with the recipient account.');
+          return;
+        }
         setError(body.error || `Session start failed (${res.status})`);
         return;
       }
