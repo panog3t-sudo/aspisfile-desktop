@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getActiveSessionToken } from "../lib/recipient-session";
 
 // Phase 1 Day 9.7 — desktop lock state. Sibling to mobile's
 // contexts/LockContext.tsx. Differences from mobile:
@@ -50,10 +51,14 @@ export function LockProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const init = async () => {
       // Local storage flags
+      let setupRaw = "0", bioRaw = "0", pinRaw = "0";
       try {
-        setSetupComplete(localStorage.getItem(KEY_SETUP_COMPLETE) === "1");
-        setBiometricEnabled(localStorage.getItem(KEY_BIOMETRIC_ENABLED) === "1");
-        setPinSet(localStorage.getItem(KEY_PIN_SET) === "1");
+        setupRaw = localStorage.getItem(KEY_SETUP_COMPLETE)    ?? "0";
+        bioRaw   = localStorage.getItem(KEY_BIOMETRIC_ENABLED) ?? "0";
+        pinRaw   = localStorage.getItem(KEY_PIN_SET)           ?? "0";
+        setSetupComplete(setupRaw === "1");
+        setBiometricEnabled(bioRaw === "1");
+        setPinSet(pinRaw === "1");
       } catch { /* localStorage may be unavailable in some sandboxed
                    Tauri contexts — fall through to defaults */ }
 
@@ -67,10 +72,64 @@ export function LockProvider({ children }: { children: ReactNode }) {
         setBiometricAvailable(false);
       }
 
+      // Cold-start app lock (2026-05-30 per user request): if the
+      // device has any enrolled credential — sender setupComplete OR
+      // Phase A+ recipient session — start LOCKED so the app opens
+      // straight to LockScreen and the user has to prove presence
+      // before reaching IdleScreen / viewer. Matches the mobile
+      // LockContext change. Configurable per-user is deferred (see
+      // memory project_deferred_configurable_app_lock.md).
+      const recipientToken    = getActiveSessionToken();
+      const recipientPresent  = !!recipientToken;
+      const senderCanUnlock   = setupRaw === "1" && (bioRaw === "1" || pinRaw === "1");
+      const shouldColdStartLock = recipientPresent || senderCanUnlock;
+      setLockedState(shouldColdStartLock);
+
       setInitialised(true);
     };
     init();
   }, []);
+
+  // ── App-level blur lock (mirrors mobile's AppState background path) ──
+  // Fires setLocked(true) after the AspisFile window has been unfocused
+  // for 60s OR after 2 min of no user interaction in the window. Only
+  // active when the user has any unlock credential — sender setup OR
+  // Phase A+ recipient session. Distinct from SecureViewer's
+  // useLockGuard which only runs when a file is actively being viewed.
+  useEffect(() => {
+    if (!initialised) return;
+    const recipientToken  = getActiveSessionToken();
+    const senderCanUnlock = setupComplete && (biometricEnabled || pinSet);
+    const enabled = !!recipientToken || senderCanUnlock;
+    if (!enabled) return;
+
+    const BLUR_MS = 60 * 1000;
+    const IDLE_MS = 2 * 60 * 1000;
+    let blurTimer:  number;
+    let idleTimer:  number;
+
+    const lockNow   = () => setLockedState(true);
+    const resetIdle = () => {
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(lockNow, IDLE_MS);
+    };
+    const handleBlur  = () => { blurTimer = window.setTimeout(lockNow, BLUR_MS); };
+    const handleFocus = () => window.clearTimeout(blurTimer);
+
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"] as const;
+    events.forEach((e) => document.addEventListener(e, resetIdle, { passive: true }));
+    window.addEventListener("blur",  handleBlur);
+    window.addEventListener("focus", handleFocus);
+    resetIdle();
+
+    return () => {
+      window.clearTimeout(idleTimer);
+      window.clearTimeout(blurTimer);
+      events.forEach((e) => document.removeEventListener(e, resetIdle));
+      window.removeEventListener("blur",  handleBlur);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [initialised, setupComplete, biometricEnabled, pinSet]);
 
   const markSetupComplete = async (opts: { biometricEnabled: boolean; pinSet: boolean }) => {
     try {

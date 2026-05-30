@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
+import { LockScreen } from "./components/LockScreen";
 import { SetupModal } from "./components/SetupModal";
 import { EnrolmentScreen } from "./components/EnrolmentScreen";
 import { LockProvider, useLock } from "./contexts/LockContext";
@@ -376,10 +377,30 @@ function AppContent() {
   );
 }
 
+// App-level LockScreen overlay. LockContext defaults locked=true on
+// cold-start if the user has any enrolled credential (sender
+// setupComplete or Phase A+ recipient session token). Renders ABOVE
+// AppContent so the user can't reach IdleScreen / viewer until they
+// prove presence via Touch ID / Windows Hello.
+//
+// SecureViewer has its own internal LockScreen for the per-file
+// idle-timeout lock (60s blur via useLockGuard). That's separate and
+// continues to work — but it only fires when a file is actively
+// being viewed.
+function AppWithLockOverlay() {
+  const { locked, unlock } = useLock();
+  return (
+    <>
+      <AppContent />
+      {locked && <LockScreen onUnlock={unlock} />}
+    </>
+  );
+}
+
 export default function App() {
   return (
     <LockProvider>
-      <AppContent />
+      <AppWithLockOverlay />
     </LockProvider>
   );
 }

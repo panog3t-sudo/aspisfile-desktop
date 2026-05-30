@@ -8,7 +8,10 @@ import { getActiveSessionToken } from "../lib/recipient-session";
 declare const __API_BASE__: string;
 
 type Props = {
-  fileName: string;
+  // Optional — when present the LockScreen is gating a specific file
+  // (per-file lock inside SecureViewer); when absent the LockScreen is
+  // gating the app itself (cold-start / idle lock).
+  fileName?: string;
   onUnlock: () => void;
 };
 
@@ -156,24 +159,26 @@ export function LockScreen({ fileName, onUnlock }: Props) {
       <span style={{ fontSize: 44, lineHeight: 1 }}>🔒</span>
 
       <p style={{ color: "#F1F5F9", fontSize: 15, fontWeight: 500, margin: 0 }}>
-        Viewer locked
+        {fileName ? 'Viewer locked' : 'AspisFile locked'}
       </p>
 
-      <p
-        style={{
-          color: "#475569",
-          fontSize: 12,
-          margin: 0,
-          maxWidth: 320,
-          textAlign: "center",
-          lineHeight: 1.5,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {fileName}
-      </p>
+      {fileName && (
+        <p
+          style={{
+            color: "#475569",
+            fontSize: 12,
+            margin: 0,
+            maxWidth: 320,
+            textAlign: "center",
+            lineHeight: 1.5,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {fileName}
+        </p>
+      )}
 
       {canUseBiometric && (
         <button
