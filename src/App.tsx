@@ -23,7 +23,23 @@ type ViewerParams = {
 
 function extractFromUrl(url: string): ViewerParams | null {
   try {
-    const parsed = new URL(url);
+    let parsed = new URL(url);
+
+    // Email share links arrive as the tracking-redirect form:
+    //   https://aspisfile.com/api/v1/track/click/<id>?r=<encoded /access URL>
+    // AASA registers both /access/* AND /api/v1/track/click/* as
+    // Universal Link paths so macOS launches AspisFile Viewer for
+    // either. Unwrap the inner `r` param to get the real access URL
+    // before extracting the token — otherwise extractFromUrl returns
+    // null, openLink never fires, the app appears to sit idle after
+    // the user taps a share link. Same fix pattern as the mobile
+    // parseAccessUrl in lib/recipientAuth.ts.
+    if (parsed.pathname.includes("/track/click/")) {
+      const r = parsed.searchParams.get("r");
+      if (r) {
+        try { parsed = new URL(r); } catch { /* fall through, original parsed used */ }
+      }
+    }
 
     // Token can be in pathname (/access/[token]) for universal links,
     // OR in a query param (?token=...) for aspisfile://open?token=X deep links.
