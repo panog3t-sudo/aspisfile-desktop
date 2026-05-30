@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
 import { useLock } from "../contexts/LockContext";
+import { getActiveSessionToken } from "../lib/recipient-session";
 
 declare const __API_BASE__: string;
 
@@ -38,6 +39,19 @@ async function getFingerprint(): Promise<string> {
 export function LockScreen({ fileName, onUnlock }: Props) {
   const { biometricEnabled, biometricAvailable, pinSet } = useLock();
 
+  // Phase A+ recipients (passkey-only, no Supabase session, never went
+  // through SetupModal) have biometricEnabled=false and pinSet=false
+  // by default. Without this check, the LockScreen would render "No
+  // unlock mechanism is configured" and the recipient is stuck after
+  // the idle-timeout lock fires.
+  //
+  // Treat "active recipient session token exists" as implicit
+  // biometric-enabled — the recipient already proved Touch ID at file
+  // open via the per-file gate (App.tsx::openLink). The lock is an
+  // inactivity gate; same biometric re-confirms presence.
+  const hasRecipientSession = !!getActiveSessionToken();
+  const canUseBiometric = biometricAvailable && (biometricEnabled || hasRecipientSession);
+
   const [pin,    setPin]    = useState("");
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState("");
@@ -46,7 +60,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
 
   const attemptBiometric = async () => {
     if (inProgressRef.current) return;
-    if (!biometricEnabled || !biometricAvailable) return;
+    if (!canUseBiometric) return;
     inProgressRef.current = true;
     setStatus("verifying");
     setError("");
@@ -69,7 +83,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [biometricEnabled, biometricAvailable]);
+  }, [canUseBiometric]);
 
   const verifyPin = async () => {
     if (busy) return;
@@ -161,7 +175,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         {fileName}
       </p>
 
-      {biometricEnabled && biometricAvailable && (
+      {canUseBiometric && (
         <button
           onClick={attemptBiometric}
           disabled={status === "verifying"}
@@ -230,7 +244,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         </div>
       )}
 
-      {!pinSet && (!biometricEnabled || !biometricAvailable) && (
+      {!pinSet && !canUseBiometric && (
         <p style={{ color: "#94A3B8", fontSize: 12, margin: "12px 0 0", maxWidth: 280, textAlign: "center", lineHeight: 1.5 }}>
           No unlock mechanism is configured. Sign out and sign in again to set one.
         </p>
