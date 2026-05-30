@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
@@ -189,6 +190,27 @@ function AppContent() {
     if (!getActiveSessionToken()) {
       pendingLinkRef.current = params;
       setMode("enrol");
+      return;
+    }
+    // Per-file biometric gate (2026-05-30): every file open requires a
+    // fresh Touch ID / Windows Hello prompt. The Tauri command wraps
+    // macOS LocalAuthentication.evaluatePolicy / Windows Hello —
+    // native dialogs, not WebAuthn, so this is unaffected by the
+    // WKWebView WebAuthn limitation that broke in-window enrolment.
+    // Mirrors the mobile `attemptUnlock` flow before mounting the
+    // viewer (app/access/[token].tsx in aspisfile-mobile).
+    //
+    // Failure cases:
+    //   - User cancelled the prompt   → reject; stay on current screen.
+    //   - Hardware unavailable        → reject; same as cancel.
+    //   - Other (Linux, no enrolled biometric) → reject; user falls
+    //                                  back to opening from icon +
+    //                                  retrying. We do NOT silently
+    //                                  bypass — the brief mandates
+    //                                  every file open is gated.
+    try {
+      await invoke<void>("authenticate_biometric");
+    } catch {
       return;
     }
     setViewerParams(params);
