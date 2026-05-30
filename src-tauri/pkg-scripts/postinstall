@@ -1,59 +1,34 @@
 #!/bin/bash
 #
-# Runs after the .pkg payload is installed. Moves the .pkg file the
-# user double-clicked into their Trash so they don't have to clean up
-# their Downloads folder manually.
+# Runs after the .pkg payload is installed. Best-effort move of the
+# .pkg the user double-clicked into their Trash so they don't have to
+# clean up their Downloads folder manually.
 #
-# Best-effort: any failure (file gone, no Trash, TCC denial) is
-# swallowed — exit 0 always so the install itself never fails because
-# of post-install cleanup.
+# Important: this is BEST-EFFORT only. macOS Tahoe (Darwin 25+)
+# tightened TCC restrictions on user-data folders like ~/Downloads,
+# and installd-spawned scripts can no longer move files there even as
+# root unless Full Disk Access is granted. When it fails the .pkg just
+# stays in Downloads — same friction as installing any other macOS
+# app from outside the App Store. Acceptable.
 #
-# Runs as root (the .pkg installs to /Applications which requires
-# admin), but macOS Installer sets $HOME to the *invoking* user's home
-# directory, so $HOME/.Trash is the right destination.
+# An earlier attempt (v1.7.3) added a Finder/AppleScript fallback for
+# the TCC case; that triggered a "Installer wants to control Finder"
+# permission prompt on first install that was scarier than the
+# original problem. Reverted. Auto-trash is a nice-to-have, not a
+# core feature.
 #
 # Apple-set env vars available here:
 #   PACKAGE_PATH       — absolute path of the .pkg that ran this install
-#   INSTALL_PKG_SESSION_ID — install session identifier
 #   HOME / USER        — invoking user's home / username
-#
-# macOS Tahoe (Darwin 25+) tightened TCC restrictions on the
-# ~/Downloads folder. The previous direct `/bin/mv` started failing
-# silently — installd-spawned scripts no longer carry the privilege to
-# touch user-data folders even as root, and macOS Installer.app's own
-# fallback "Move to Bin" then surfaces an annoying error dialog. The
-# fix: try the direct mv first (still works on older macOS and when
-# Full Disk Access is granted), then fall back to asking Finder to do
-# the move via AppleScript. Finder is a system app with the right TCC
-# privilege already granted, so the AppleScript path works under
-# tightened TCC.
 
 set -u
 
 PKG="${PACKAGE_PATH:-}"
-[ -z "$PKG" ] && exit 0
-[ ! -e "$PKG" ] && exit 0
-
-USER_HOME="$HOME"
-TRASH="$USER_HOME/.Trash"
-[ ! -d "$TRASH" ] && exit 0
-
-# Attempt 1: direct mv. Fast path on macOS ≤ Sequoia and when the
-# installer has been granted Full Disk Access.
-if /bin/mv -f "$PKG" "$TRASH/" 2>/dev/null; then
-  exit 0
-fi
-
-# Attempt 2: delegate to Finder via AppleScript, running as the user
-# who launched Installer (not root) so Finder talks to their UI
-# session and applies their TCC grants. `sudo -u` switches euid;
-# osascript with the "delete" verb is the documented way to move
-# to Trash in modern macOS.
-RUNNING_USER=$(stat -f "%Su" "$USER_HOME" 2>/dev/null)
-if [ -n "$RUNNING_USER" ]; then
-  /usr/bin/sudo -u "$RUNNING_USER" /usr/bin/osascript -e \
-    "tell application \"Finder\" to delete POSIX file \"$PKG\"" \
-    >/dev/null 2>&1 || true
+if [ -n "$PKG" ] && [ -e "$PKG" ]; then
+  TRASH="$HOME/.Trash"
+  if [ -d "$TRASH" ]; then
+    /bin/mv -f "$PKG" "$TRASH/" 2>/dev/null || true
+  fi
 fi
 
 exit 0
