@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getActiveSessionToken } from "../lib/recipient-session";
 
@@ -36,6 +36,14 @@ type LockContextType = {
   // for one logical user action.
   lastBiometricAt:   number;
   recordBiometric(): void;
+
+  // Hard global mutex. Mirrors the mobile fix — prevents concurrent
+  // invoke('authenticate_biometric') calls. The mobile crash was
+  // SIGABRT from overlapping LAContext evaluations; macOS native
+  // LAContext has the same single-evaluation contract so the desktop
+  // is vulnerable too even if we haven't crashed yet.
+  tryBeginBiometric(): boolean;
+  endBiometric(): void;
 };
 
 // 30s — short enough that an attacker who grabs the unlocked Mac
@@ -54,6 +62,8 @@ const LockContext = createContext<LockContextType>({
   lock:               () => {},
   lastBiometricAt:    0,
   recordBiometric:    () => {},
+  tryBeginBiometric:  () => true,
+  endBiometric:       () => {},
 });
 
 export function LockProvider({ children }: { children: ReactNode }) {
@@ -64,6 +74,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [initialised,        setInitialised]        = useState(false);
   const [lastBiometricAt,    setLastBiometricAt]    = useState(0);
+  const biometricInFlightRef = useRef(false);
 
   useEffect(() => {
     const init = async () => {
@@ -174,6 +185,14 @@ export function LockProvider({ children }: { children: ReactNode }) {
         lock:   () => setLockedState(true),
         lastBiometricAt,
         recordBiometric: () => setLastBiometricAt(Date.now()),
+        tryBeginBiometric: () => {
+          if (biometricInFlightRef.current) return false;
+          biometricInFlightRef.current = true;
+          return true;
+        },
+        endBiometric: () => {
+          biometricInFlightRef.current = false;
+        },
       }}
     >
       {children}

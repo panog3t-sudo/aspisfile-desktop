@@ -40,7 +40,7 @@ async function getFingerprint(): Promise<string> {
 }
 
 export function LockScreen({ fileName, onUnlock }: Props) {
-  const { biometricEnabled, biometricAvailable, pinSet, recordBiometric, lastBiometricAt } = useLock();
+  const { biometricEnabled, biometricAvailable, pinSet, recordBiometric, lastBiometricAt, tryBeginBiometric, endBiometric } = useLock();
 
   // Phase A+ recipients (passkey-only, no Supabase session, never went
   // through SetupModal) have biometricEnabled=false and pinSet=false
@@ -73,6 +73,13 @@ export function LockScreen({ fileName, onUnlock }: Props) {
       onUnlock();
       return;
     }
+    // Hard global mutex — another biometric is in flight; bail out
+    // and let the in-progress one win. When it completes, this
+    // useEffect re-fires (deps include lastBiometricAt) and the
+    // freshness check above passes through.
+    if (!tryBeginBiometric()) {
+      return;
+    }
     inProgressRef.current = true;
     setStatus("verifying");
     setError("");
@@ -84,6 +91,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
       setStatus("error");
     } finally {
       inProgressRef.current = false;
+      endBiometric();
     }
   };
 

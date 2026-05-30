@@ -179,7 +179,7 @@ function AppContent() {
   // and completeEnrolment() read it. State here would trip TS6133
   // because nothing references the reactive value.
   const pendingLinkRef = useRef<ViewerParams | null>(null);
-  const { setupComplete, lastBiometricAt, recordBiometric } = useLock();
+  const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, tryBeginBiometric, endBiometric } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
   async function openLink(params: ViewerParams) {
@@ -199,6 +199,18 @@ function AppContent() {
     // native dialogs, not WebAuthn, so this is unaffected by the
     // WKWebView WebAuthn limitation that broke in-window enrolment.
     //
+    // App-level lock takes precedence: if LockScreen is currently
+    // showing, defer the deep-link until it dismisses. The unlock
+    // sets lastBiometricAt; the deferred replay below sees the fresh
+    // timestamp and skips its own prompt. Mirrors the mobile
+    // access/[token] gate. Without this, two concurrent
+    // authenticate_biometric calls overlap → SIGABRT (confirmed via
+    // mobile crash log AspisFile-2026-05-30-213211.ips).
+    if (appLocked) {
+      pendingLinkRef.current = params;
+      return;
+    }
+
     // Dedup: skip the prompt if the user just biometrically unlocked
     // the app within the last 30s (BIOMETRIC_FRESH_MS). That single
     // verification proves presence for both "unlock the app" and
@@ -209,17 +221,49 @@ function AppContent() {
       return;
     }
 
+    // Hard mutex — defends against the rare race where appLocked is
+    // false but LockScreen's still-fading attemptBiometric is in
+    // flight. Without this, openLink could fire authenticate_biometric
+    // concurrent with LockScreen's, same crash scenario as mobile.
+    if (!tryBeginBiometric()) {
+      return;
+    }
     try {
       await invoke<void>("authenticate_biometric");
       recordBiometric();
     } catch {
       return;
+    } finally {
+      endBiometric();
     }
     setViewerParams(params);
     setMode("viewer");
   }
 
-  // Shared completion path for either (a) the EnrolmentScreen calling
+  // Replay any deep-link buffered while app-level lock was active.
+  // openLink() above stashes params into pendingLinkRef when
+  // appLocked is true; we re-fire openLink once the LockScreen
+  // dismisses (locked → false). pendingLinkRef is ALSO used by the
+  // enrolment flow (different cause, same buffering pattern) —
+  // completeEnrolment handles that branch.
+  useEffect(() => {
+    if (appLocked) return;
+    const replay = pendingLinkRef.current;
+    if (!replay) return;
+    // Only replay if the buffered link is for opening a viewer
+    // (not for completeEnrolment). The enrolment flow needs
+    // explicit completeEnrolment via the deep-link return; it
+    // sets pendingLinkRef but expects the explicit completion
+    // call to consume it. We only replay when we have a viewer
+    // session ready (post-enrol).
+    if (!getActiveSessionToken()) return;
+    pendingLinkRef.current = null;
+    openLink(replay);
+    // openLink is intentionally not a useCallback — capturing here
+    // for replay is fine, no stale-closure risk because openLink
+    // reads lastBiometricAt at call time from the LockContext.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appLocked]);
   // back into us with onComplete (used if the future native AS bridge
   // is ever implemented inline) or (b) the aspisfile://enrol-complete
   // deep-link arriving from the browser-redirect enrolment (Path B,
