@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
@@ -8,7 +8,7 @@ import { SetupModal } from "./components/SetupModal";
 import { EnrolmentScreen } from "./components/EnrolmentScreen";
 import { LockProvider, useLock } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
-import { getActiveSessionToken } from "./lib/recipient-session";
+import { getActiveSessionToken, saveRecipientSession } from "./lib/recipient-session";
 import "./App.css";
 
 type Mode = "idle" | "viewer" | "enrol";
@@ -71,6 +71,44 @@ async function bringWindowToFront(): Promise<void> {
   }
 }
 
+// Path B enrolment return — the browser-side /enroll/desktop page
+// fires aspisfile://enrol-complete?session_token=…&email=…&passkey
+// _id=…&expires_in=… after a successful WebAuthn ceremony. We
+// persist the session token via saveRecipientSession() and return
+// true so the caller can dismiss EnrolmentScreen and replay any
+// pending share-link. Returns false for any other URL shape so
+// the caller falls through to OAuth / access-token handling.
+function tryHandleEnrolComplete(url: string): { email: string } | null {
+  try {
+    const u = new URL(url);
+    // Tauri's url parsing of `aspisfile://enrol-complete?...` puts
+    // "enrol-complete" in the host slot, not the pathname. Be
+    // permissive across both interpretations.
+    const isComplete =
+      u.host === 'enrol-complete' ||
+      u.pathname === '/enrol-complete' ||
+      u.pathname.endsWith('/enrol-complete');
+    if (u.protocol !== 'aspisfile:' || !isComplete) return null;
+
+    const token     = u.searchParams.get('session_token');
+    const email     = u.searchParams.get('email');
+    const passkeyId = u.searchParams.get('passkey_id');
+    const expiresIn = parseInt(u.searchParams.get('expires_in') ?? '28800', 10);
+
+    if (!token || !email || !passkeyId) return null;
+
+    saveRecipientSession({
+      email,
+      token,
+      passkeyId,
+      expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 28800,
+    });
+    return { email };
+  } catch {
+    return null;
+  }
+}
+
 // Phase 1 Day 12.5 — recognise OAuth callbacks (aspisfile://auth/
 // callback?code=…) coming back from the external browser after
 // StepUpScreen launches a Google/Microsoft/Apple sign-in. Returns
@@ -117,7 +155,12 @@ function AppContent() {
   // Without this gate the server returns BINDING_REQUIRED 403 from
   // /api/v1/mobile/access and the user sees a generic "Session start
   // failed (403)" error in the viewer instead of a recoverable flow.
-  const [pendingLink, setPendingLink] = useState<ViewerParams | null>(null);
+  //
+  // Ref-only (no companion state) because no part of the UI needs to
+  // re-render when it changes — only the deep-link useEffect closure
+  // and completeEnrolment() read it. State here would trip TS6133
+  // because nothing references the reactive value.
+  const pendingLinkRef = useRef<ViewerParams | null>(null);
   const { setupComplete } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
@@ -128,12 +171,29 @@ function AppContent() {
     // un-enrolled user lands on a useful screen (EnrolmentScreen) and
     // can replay the link after entering their enrolment code.
     if (!getActiveSessionToken()) {
-      setPendingLink(params);
+      pendingLinkRef.current = params;
       setMode("enrol");
       return;
     }
     setViewerParams(params);
     setMode("viewer");
+  }
+
+  // Shared completion path for either (a) the EnrolmentScreen calling
+  // back into us with onComplete (used if the future native AS bridge
+  // is ever implemented inline) or (b) the aspisfile://enrol-complete
+  // deep-link arriving from the browser-redirect enrolment (Path B,
+  // active path today). Reads the buffered link from the ref so
+  // closure staleness in the once-only deep-link useEffect doesn't
+  // matter.
+  function completeEnrolment() {
+    const replay = pendingLinkRef.current;
+    pendingLinkRef.current = null;
+    if (replay) {
+      openLink(replay);
+      return;
+    }
+    setMode("idle");
   }
 
   // Track Supabase session presence so SetupModal renders only when
@@ -160,6 +220,10 @@ function AppContent() {
         // Surface the window before any URL processing — gives the
         // browser-side detection a deterministic focus-shift to read.
         await bringWindowToFront();
+        // Path B browser-redirect enrolment returning back to us with
+        // a fresh session token. Save + complete enrolment + replay
+        // any buffered share-link.
+        if (tryHandleEnrolComplete(urls[0])) { completeEnrolment(); return; }
         if (await tryHandleOAuthCallback(urls[0])) return;
         const params = extractFromUrl(urls[0]);
         if (params) openLink(params);
@@ -176,6 +240,7 @@ function AppContent() {
     const unlistenDeepLinkPromise = onOpenUrl(async (urls) => {
       if (cancelled || urls.length === 0) return;
       await bringWindowToFront();
+      if (tryHandleEnrolComplete(urls[0])) { completeEnrolment(); return; }
       if (await tryHandleOAuthCallback(urls[0])) return;
       const params = extractFromUrl(urls[0]);
       if (params) openLink(params);
@@ -251,20 +316,14 @@ function AppContent() {
   if (mode === "enrol") {
     return (
       <EnrolmentScreen
-        onComplete={() => {
-          // Replay the buffered deep-link if enrolment was triggered by
-          // a link tap. openLink() re-checks getActiveSessionToken()
-          // and proceeds to the viewer this time.
-          if (pendingLink) {
-            const replay = pendingLink;
-            setPendingLink(null);
-            openLink(replay);
-            return;
-          }
-          setMode("idle");
-        }}
+        // Path B: onComplete is only fired if a future inline-enrolment
+        // implementation triggers it. With the browser-redirect path
+        // currently active, the aspisfile://enrol-complete deep-link
+        // handler is what reaches completeEnrolment(). Wire both to
+        // the same function so future swap-back is a no-op.
+        onComplete={completeEnrolment}
         onCancel={() => {
-          setPendingLink(null);
+          pendingLinkRef.current = null;
           setMode("idle");
         }}
       />

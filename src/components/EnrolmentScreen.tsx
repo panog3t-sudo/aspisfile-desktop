@@ -1,25 +1,42 @@
 import { useState } from "react";
-import { registerPasskey, authenticatePasskey, PasskeyError, isPasskeySupported } from "../lib/passkey";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 declare const __API_BASE__: string;
-
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
 
-// Phase A+ Stage 4 — desktop counterpart of the mobile enrolment
-// screen. Recipient enters their email + the one-time code (Tier 1
-// email-delivered or Tier 2 sender out-of-band), the app redeems via
-// /api/v1/enrollment-codes/redeem, then registers + authenticates a
-// passkey via the WebView's native WebAuthn (Touch ID on macOS,
-// Windows Hello on Windows).
+// Path B browser-redirect enrolment. WKWebView's in-window WebAuthn
+// doesn't work reliably in Tauri custom-window apps on macOS Tahoe
+// (Code=1004 + nil credential — see the deferred native AS bridge
+// memory). We delegate to the user's default browser, where Safari
+// or Chrome run the WebAuthn ceremony natively against
+// aspisfile.com as the RP and post the result back to AspisFile via
+// the aspisfile:// custom scheme.
+//
+// Flow on this screen:
+//   1. User enters email + enrolment code, clicks Continue.
+//   2. We validate locally, then openUrl(<enrol-landing>) → default
+//      browser opens to /enroll/desktop?email=…&code=….
+//   3. Browser tab does the redeem + register-options + Touch ID +
+//      register-verify dance.
+//   4. Browser tab redirects to aspisfile://enrol-complete?session_
+//      token=…&email=…&passkey_id=…&expires_in=…
+//   5. App.tsx's deep-link handler picks it up, saves the session
+//      via saveRecipientSession(), dismisses this screen, replays
+//      any pending share-link.
+//
+// This screen sits in "waiting" mode after step 2 until step 5
+// fires (or the user clicks "Cancel"). There's no way for the
+// browser to push an error state back into this screen — the user
+// would see the failure in the browser tab and come back to retry.
 
-type Phase = "input" | "redeeming" | "registering" | "success" | "error";
+type Phase = "input" | "waiting";
 
 type Props = {
   onComplete?: () => void;
   onCancel?:   () => void;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel }: Props) {
+export function EnrolmentScreen({ onCancel }: Props) {
   const [phase, setPhase] = useState<Phase>("input");
   const [email, setEmail] = useState("");
   const [code,  setCode]  = useState("");
@@ -30,69 +47,32 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
     const cleanCode  = code.trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      setError("Enter your email.");
+      setError("Enter a valid email.");
       return;
     }
     if (cleanCode.length < 4) {
-      setError("Enter the enrollment code.");
-      return;
-    }
-    if (!isPasskeySupported()) {
-      setError("This system cannot create passkeys. macOS 13+ with Touch ID, or Windows 10+ with Windows Hello, is required.");
-      setPhase("error");
+      setError("Enter the enrolment code.");
       return;
     }
 
-    setPhase("redeeming");
     setError("");
+    setPhase("waiting");
 
-    let registrationToken: string;
-    try {
-      const res = await fetch(`${BASE}/api/v1/enrollment-codes/redeem`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ email: cleanEmail, code: cleanCode }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setError("The code was not recognised. Check your email or contact the sender for a fresh code.");
-        setPhase("error");
-        return;
-      }
-      registrationToken = json.registration_token;
-    } catch (err: any) {
-      setError(err?.message ?? "Could not contact AspisFile. Check your network.");
-      setPhase("error");
-      return;
-    }
-
-    setPhase("registering");
-    const isMac        = /Mac/i.test(navigator.userAgent);
-    const deviceLabel  = `${isMac ? "Mac" : "Windows PC"} · AspisFile Viewer`;
+    const url = new URL(`${BASE}/enroll/desktop`);
+    url.searchParams.set("email", cleanEmail);
+    url.searchParams.set("code",  cleanCode);
 
     try {
-      await registerPasskey({ email: cleanEmail, registrationToken, deviceLabel });
+      await openUrl(url.toString());
     } catch (err: any) {
-      if (err instanceof PasskeyError) {
-        if (err.kind === "cancelled")        setError("Passkey setup was cancelled. Re-enter the code to retry.");
-        else if (err.kind === "unsupported") setError("This system cannot create passkeys. Use macOS 13+ with Touch ID, or Windows 10+ with Windows Hello.");
-        else if (err.kind === "network")     setError("Could not reach AspisFile during passkey setup. Try again.");
-        else                                 setError("Could not register a passkey. Please contact the sender for a new code.");
-      } else {
-        setError("Could not register a passkey. Please contact the sender for a new code.");
-      }
-      setPhase("error");
-      return;
+      setError("Could not open your browser. Copy and open this link manually: " + url.toString());
+      setPhase("input");
     }
+  }
 
-    // Best-effort immediate auth — same as mobile flow
-    try {
-      await authenticatePasskey({ email: cleanEmail });
-    } catch (err: any) {
-      console.warn("[enrolment] post-registration auth failed:", err?.message);
-    }
-
-    setPhase("success");
+  function handleRestart() {
+    setPhase("input");
+    setError("");
   }
 
   return (
@@ -120,13 +100,13 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
       >
         <div style={{ fontSize: 22, marginBottom: 8 }}>🔒</div>
 
-        {(phase === "input" || phase === "error") && (
+        {phase === "input" && (
           <>
             <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
-              I have an enrollment code
+              I have an enrolment code
             </h1>
             <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 24px" }}>
-              Enter your email and the code the sender shared with you.
+              Enter your email and the code the sender shared with you. Your browser will open briefly to confirm with Touch ID.
             </p>
 
             <Label>Email</Label>
@@ -139,7 +119,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               autoFocus
             />
 
-            <Label>Enrollment code</Label>
+            <Label>Enrolment code</Label>
             <input
               type="text"
               value={code}
@@ -155,7 +135,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               {onCancel && (
                 <button onClick={onCancel} style={btnSecondary}>Cancel</button>
               )}
-              <button onClick={handleSubmit} style={btnPrimary}>Continue</button>
+              <button onClick={handleSubmit} style={btnPrimary}>Continue in browser</button>
             </div>
 
             <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
@@ -164,40 +144,33 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
           </>
         )}
 
-        {phase === "redeeming" && (
-          <Centered text="Verifying code…" />
-        )}
-
-        {phase === "registering" && (
-          <Centered
-            text={/Mac/i.test(navigator.userAgent)
-              ? "Setting up Touch ID for AspisFile…"
-              : "Setting up Windows Hello for AspisFile…"}
-            sub="Approve the prompt to finish."
-          />
-        )}
-
-        {phase === "success" && (
-          <div style={{ textAlign: "center" }}>
+        {phase === "waiting" && (
+          <div style={{ textAlign: "center", padding: "8px 0 0" }}>
             <div
               style={{
-                width: 56, height: 56, borderRadius: 28,
-                background: "rgba(59, 109, 17, 0.2)",
-                color: "#86EFAC",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                margin: "0 auto 14px",
-                fontSize: 24, fontWeight: 600,
+                width: 32, height: 32, borderRadius: 16,
+                border: "3px solid rgba(255,255,255,0.12)",
+                borderTopColor: "#86EFAC",
+                margin: "0 auto 18px",
+                animation: "spin 0.8s linear infinite",
               }}
-            >
-              ✓
-            </div>
-            <h2 style={{ fontSize: 17, fontWeight: 600, color: "#F1F5F9", margin: "0 0 8px" }}>You&apos;re all set</h2>
+            />
+            <h2 style={{ fontSize: 17, fontWeight: 600, color: "#F1F5F9", margin: "0 0 8px" }}>
+              Complete in your browser
+            </h2>
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
-              AspisFile is ready on this Mac. When a sender shares a file with you, open the link &mdash; {/Mac/i.test(navigator.userAgent) ? "Touch ID" : "Windows Hello"} will unlock it.
+              We&apos;ve opened a secure enrolment page in your default browser. Confirm with {/Mac/i.test(navigator.userAgent) ? "Touch ID" : "Windows Hello"} there — AspisFile will take over automatically when you&apos;re done.
             </p>
-            <button onClick={() => onComplete?.()} style={btnPrimary}>Done</button>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <button onClick={handleRestart} style={btnSecondary}>Use a different code</button>
+              {onCancel && (
+                <button onClick={onCancel} style={btnSecondary}>Cancel</button>
+              )}
+            </div>
           </div>
         )}
+
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     </div>
   );
@@ -211,23 +184,14 @@ function Label({ children }: { children: string }) {
   );
 }
 
-function Centered({ text, sub }: { text: string; sub?: string }) {
-  return (
-    <div style={{ textAlign: "center", padding: "16px 0 0" }}>
-      <p style={{ fontSize: 13, color: "#94A3B8", margin: 0 }}>{text}</p>
-      {sub && <p style={{ fontSize: 11, color: "#64748B", marginTop: 8, lineHeight: 1.5 }}>{sub}</p>}
-    </div>
-  );
-}
-
 const inputStyle: React.CSSProperties = {
   width: "100%",
   boxSizing: "border-box",
-  padding: "11px 12px",
-  background: "rgba(255,255,255,0.05)",
-  border: "0.5px solid rgba(255,255,255,0.12)",
+  padding: "10px 12px",
   borderRadius: 8,
-  color: "#F1F5F9",
+  border: "0.5px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#E2E8F0",
   fontSize: 14,
   outline: "none",
   fontFamily: "inherit",
@@ -235,11 +199,11 @@ const inputStyle: React.CSSProperties = {
 
 const btnPrimary: React.CSSProperties = {
   flex: 1,
-  padding: "11px 16px",
-  background: "#3B82F6",
-  color: "#fff",
-  border: "none",
+  padding: "10px 16px",
   borderRadius: 8,
+  border: "none",
+  background: "#185FA5",
+  color: "#fff",
   fontSize: 14,
   fontWeight: 500,
   cursor: "pointer",
@@ -248,13 +212,12 @@ const btnPrimary: React.CSSProperties = {
 
 const btnSecondary: React.CSSProperties = {
   flex: 1,
-  padding: "11px 16px",
-  background: "transparent",
-  color: "#94A3B8",
-  border: "0.5px solid rgba(255,255,255,0.12)",
+  padding: "10px 16px",
   borderRadius: 8,
+  border: "0.5px solid rgba(255,255,255,0.18)",
+  background: "transparent",
+  color: "#E2E8F0",
   fontSize: 14,
-  fontWeight: 500,
   cursor: "pointer",
   fontFamily: "inherit",
 };
