@@ -72,6 +72,32 @@ jobs:
           APPLE_SIGNING_IDENTITY:     ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: npm run tauri build -- --target universal-apple-darwin --bundles app
 
+      # Re-import the Developer ID Application cert into a fresh
+      # keychain. Tauri's build step creates its own temp keychain,
+      # uses it for the initial signing, then tears it down — so when
+      # our re-sign step below tries to use the Application cert again,
+      # `security find-identity` / codesign can't find it ("The
+      # specified item could not be found in the keychain"). Same
+      # pattern as the existing Installer-cert keychain dance further
+      # down for pkgbuild.
+      - name: Re-import Application cert for re-sign
+        env:
+          APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/app-cert.p12
+          KEYCHAIN="$RUNNER_TEMP/app-resign.keychain-db"
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security import /tmp/app-cert.p12 -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+                  -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain
+          rm /tmp/app-cert.p12
+          # Sanity-check the identity is reachable.
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       # Embed the Developer ID Provisioning Profile + re-sign with our
       # entitlements file. Required because com.apple.developer.
       # associated-domains needs a matching embedded.provisionprofile
