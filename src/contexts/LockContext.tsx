@@ -27,7 +27,21 @@ type LockContextType = {
   markSetupComplete(opts: { biometricEnabled: boolean; pinSet: boolean }): Promise<void>;
   unlock(): void;
   lock(): void;
+
+  // Single-prompt biometric dedup. Any caller that successfully runs
+  // a Touch ID / Windows Hello prompt calls recordBiometric();
+  // sibling gates check lastBiometricAt and skip their own prompt if
+  // it's within BIOMETRIC_FRESH_MS. Prevents the double-Touch-ID UX
+  // when the app-level lock and per-file gate both want verification
+  // for one logical user action.
+  lastBiometricAt:   number;
+  recordBiometric(): void;
 };
+
+// 30s — short enough that an attacker who grabs the unlocked Mac
+// can't browse files, long enough that a single user "open the app
+// + open a file" action only sees ONE Touch ID prompt.
+export const BIOMETRIC_FRESH_MS = 30 * 1000;
 
 const LockContext = createContext<LockContextType>({
   locked:             false,
@@ -38,6 +52,8 @@ const LockContext = createContext<LockContextType>({
   markSetupComplete:  async () => {},
   unlock:             () => {},
   lock:               () => {},
+  lastBiometricAt:    0,
+  recordBiometric:    () => {},
 });
 
 export function LockProvider({ children }: { children: ReactNode }) {
@@ -47,6 +63,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
   const [pinSet,             setPinSet]             = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [initialised,        setInitialised]        = useState(false);
+  const [lastBiometricAt,    setLastBiometricAt]    = useState(0);
 
   useEffect(() => {
     const init = async () => {
@@ -155,6 +172,8 @@ export function LockProvider({ children }: { children: ReactNode }) {
         markSetupComplete,
         unlock: () => setLockedState(false),
         lock:   () => setLockedState(true),
+        lastBiometricAt,
+        recordBiometric: () => setLastBiometricAt(Date.now()),
       }}
     >
       {children}

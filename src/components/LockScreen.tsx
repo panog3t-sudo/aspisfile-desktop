@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
-import { useLock } from "../contexts/LockContext";
+import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
 import { getActiveSessionToken } from "../lib/recipient-session";
 
 declare const __API_BASE__: string;
@@ -40,7 +40,7 @@ async function getFingerprint(): Promise<string> {
 }
 
 export function LockScreen({ fileName, onUnlock }: Props) {
-  const { biometricEnabled, biometricAvailable, pinSet } = useLock();
+  const { biometricEnabled, biometricAvailable, pinSet, recordBiometric, lastBiometricAt } = useLock();
 
   // Phase A+ recipients (passkey-only, no Supabase session, never went
   // through SetupModal) have biometricEnabled=false and pinSet=false
@@ -64,11 +64,21 @@ export function LockScreen({ fileName, onUnlock }: Props) {
   const attemptBiometric = async () => {
     if (inProgressRef.current) return;
     if (!canUseBiometric) return;
+    // Dedup: a sibling biometric (the app-level LockScreen, or
+    // openLink's per-file gate, or this same screen's prior attempt
+    // in another mount) was just confirmed. Pass through without
+    // prompting again. Avoids the v1.7.11 "two Touch IDs on return
+    // from background" UX issue.
+    if (Date.now() - lastBiometricAt < BIOMETRIC_FRESH_MS) {
+      onUnlock();
+      return;
+    }
     inProgressRef.current = true;
     setStatus("verifying");
     setError("");
     try {
       await invoke("authenticate_biometric");
+      recordBiometric();
       onUnlock();
     } catch {
       setStatus("error");
@@ -111,6 +121,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
       const json = await res.json();
       if (res.ok && json.status === "ok") {
         setPin("");
+        recordBiometric();
         onUnlock();
         return;
       }

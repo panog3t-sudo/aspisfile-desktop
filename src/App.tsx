@@ -8,7 +8,7 @@ import { IdleScreen } from "./components/IdleScreen";
 import { LockScreen } from "./components/LockScreen";
 import { SetupModal } from "./components/SetupModal";
 import { EnrolmentScreen } from "./components/EnrolmentScreen";
-import { LockProvider, useLock } from "./contexts/LockContext";
+import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, saveRecipientSession } from "./lib/recipient-session";
 import "./App.css";
@@ -179,7 +179,7 @@ function AppContent() {
   // and completeEnrolment() read it. State here would trip TS6133
   // because nothing references the reactive value.
   const pendingLinkRef = useRef<ViewerParams | null>(null);
-  const { setupComplete } = useLock();
+  const { setupComplete, lastBiometricAt, recordBiometric } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
   async function openLink(params: ViewerParams) {
@@ -198,19 +198,20 @@ function AppContent() {
     // macOS LocalAuthentication.evaluatePolicy / Windows Hello —
     // native dialogs, not WebAuthn, so this is unaffected by the
     // WKWebView WebAuthn limitation that broke in-window enrolment.
-    // Mirrors the mobile `attemptUnlock` flow before mounting the
-    // viewer (app/access/[token].tsx in aspisfile-mobile).
     //
-    // Failure cases:
-    //   - User cancelled the prompt   → reject; stay on current screen.
-    //   - Hardware unavailable        → reject; same as cancel.
-    //   - Other (Linux, no enrolled biometric) → reject; user falls
-    //                                  back to opening from icon +
-    //                                  retrying. We do NOT silently
-    //                                  bypass — the brief mandates
-    //                                  every file open is gated.
+    // Dedup: skip the prompt if the user just biometrically unlocked
+    // the app within the last 30s (BIOMETRIC_FRESH_MS). That single
+    // verification proves presence for both "unlock the app" and
+    // "open this file" as one logical action — no double Touch ID.
+    if (Date.now() - lastBiometricAt < BIOMETRIC_FRESH_MS) {
+      setViewerParams(params);
+      setMode("viewer");
+      return;
+    }
+
     try {
       await invoke<void>("authenticate_biometric");
+      recordBiometric();
     } catch {
       return;
     }
