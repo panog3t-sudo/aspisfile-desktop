@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Associated Domains — declares this app as a trusted client of
+        aspisfile.com for the two web-platform features we use:
+
+          applinks:       Universal Links handoff. iOS + macOS check
+                          /.well-known/apple-app-site-association on
+                          the host before routing to the app.
+
+          webcredentials: WebAuthn RP authority. Without this, the
+                          Tauri WebView (origin tauri://localhost)
+                          can't use aspisfile.com as a WebAuthn rp.id
+                          — the system rejects with NotAllowedError
+                          before the Touch ID prompt even appears.
+
+        For Developer ID distribution (outside the App Store), this
+        entitlement REQUIRES a matching embedded.provisionprofile in
+        the .app bundle's Contents directory; macOS launchd refuses
+        the spawn with EAUTH (POSIX 163) otherwise. The release CI
+        decodes APPLE_PROVISIONING_PROFILE from a GitHub secret, drops
+        it into the .app, and re-signs with this entitlements file
+        bound to the signature. See the May 2026 v1.7.3/v1.7.4
+        incident notes.
+
+        Profile facts (verified at provisioning time):
+          Name:    "AspisFile Viewer Developer ID — Associated Domains"
+          App ID:  37M8KCP95L.com.aspisfile.viewer
+          Cap:     com.apple.developer.associated-domains = "*"
+                   (wildcard — defers actual host list to this file)
+          Expires: 2044-05-25
+    -->
+    <key>com.apple.developer.associated-domains</key>
+    <array>
+        <string>applinks:aspisfile.com</string>
+        <string>applinks:staging.aspisfile.com</string>
+        <string>webcredentials:aspisfile.com</string>
+        <string>webcredentials:staging.aspisfile.com</string>
+    </array>
+
+    <!--
+        Hardened runtime needs these for the WebView to JIT JavaScript.
+        Tauri's default build flags include the hardened runtime
+        (codesign flag 0x10000) but with NO entitlements file, so the
+        runtime falls back to safe defaults. Once we supply our own
+        entitlements file (for associated-domains), we have to re-add
+        the WebView's runtime needs explicitly — otherwise JS execution
+        in the WebView starts crashing under hardened runtime.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

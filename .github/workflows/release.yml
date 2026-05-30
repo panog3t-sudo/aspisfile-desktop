@@ -52,20 +52,106 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Tauri handles keychain creation, cert import, signing, and notarisation
-      # of the .app when APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY are present.
-      # We use --bundles app to skip Tauri's own .dmg bundler — the macOS
+      # Tauri builds, signs (Developer ID Application cert), and would
+      # also notarise if APPLE_ID/PASSWORD/TEAM_ID env vars were set.
+      #
+      # We deliberately OMIT those vars here so Tauri signs but doesn't
+      # notarise — the next step re-signs the .app with the embedded
+      # provisioning profile + entitlements, which invalidates any
+      # notarisation ticket Tauri would have stapled. Notarisation
+      # happens after the re-sign in the "Notarise + staple .app" step
+      # below.
+      #
+      # --bundles app skips Tauri's own .dmg bundler — the macOS
       # installer is built as a .pkg below (signed with the separate
       # Developer ID Installer cert).
-      - name: Build, sign, notarise universal macOS app
+      - name: Build + sign universal macOS app (no notarise yet)
         env:
           APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY:     ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID:                   ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD:             ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID:              ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target universal-apple-darwin --bundles app
+
+      # Embed the Developer ID Provisioning Profile + re-sign with our
+      # entitlements file. Required because com.apple.developer.
+      # associated-domains needs a matching embedded.provisionprofile
+      # for Developer ID distribution — without it, macOS launchd
+      # refuses the spawn with POSIX 163 (EAUTH). See the v1.7.3
+      # incident notes.
+      #
+      # Order matters: codesign deepest-first (Tauri's build already
+      # signed nested helpers, but our --force re-sign on the .app
+      # invalidates inner signatures unless we re-sign them too).
+      - name: Embed provisioning profile + re-sign with entitlements
+        env:
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_SIGNING_IDENTITY:     ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          APP_PATH=$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)
+          echo "App: $APP_PATH"
+
+          # 1. Drop the profile into Contents/embedded.provisionprofile.
+          # macOS launchd reads this at spawn time to verify the
+          # entitlements claimed by the binary are authorised.
+          echo "$APPLE_PROVISIONING_PROFILE" | base64 --decode > "$APP_PATH/Contents/embedded.provisionprofile"
+          ls -la "$APP_PATH/Contents/embedded.provisionprofile"
+
+          # 2. Re-sign nested code first (frameworks, dylibs, helpers).
+          # Order matters because codesign of the outer bundle hashes
+          # the inner items — they need to be re-signed first if any
+          # exist.
+          find "$APP_PATH" \( -name "*.dylib" -o -name "*.framework" -o -name "*Helper*.app" \) -print0 2>/dev/null | \
+            while IFS= read -r -d '' x; do
+              echo "Re-sign nested: $x"
+              codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$x" || true
+            done
+
+          # 3. Re-sign the outer .app with our entitlements + hardened
+          # runtime + secure timestamp. --force replaces the Tauri
+          # signature; --options runtime keeps the hardened runtime
+          # flag (required for notarisation).
+          codesign --force \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            --entitlements src-tauri/AspisFile.entitlements \
+            "$APP_PATH"
+
+          # 4. Verify signature + entitlements stuck.
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          echo "--- entitlements as embedded ---"
+          codesign -d --entitlements - "$APP_PATH" 2>&1 | head -30
+
+      # Notarise + staple the freshly re-signed .app. Submitting the
+      # zipped .app to Apple's notary service; on success, staple the
+      # ticket so Gatekeeper validates the .app offline once it's
+      # extracted from the .pkg into /Applications.
+      - name: Notarise + staple the .app
+        if: ${{ env.APPLE_ID_PRESENT == 'true' }}
+        env:
+          APPLE_ID_PRESENT: ${{ secrets.APPLE_ID != '' }}
+          APPLE_ID:       ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID:  ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_PATH=$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)
+          ZIP_PATH="$RUNNER_TEMP/app-for-notarisation.zip"
+
+          # notarytool requires a flat archive — ditto preserves
+          # symlinks + xattrs (critical for the embedded.provisionprofile
+          # and the hardened runtime flags).
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+
+          xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the ticket onto the .app directly so an offline
+          # Gatekeeper check passes after install.
+          xcrun stapler staple "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
 
       # pkgbuild needs the Developer ID Installer cert in a keychain it can
       # read. Tauri's build step tore down its own temp keychain, so we
