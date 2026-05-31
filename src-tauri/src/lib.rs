@@ -99,9 +99,11 @@ pub fn run() {
             // argv path on Windows/Linux — handed to fileassoc::try_open_afs.
             // The Opened variant is macOS/mobile-only — cfg-guard so this
             // still compiles for Windows/Linux targets.
-            // Log every RunEvent variant so we can see if macOS delivers
-            // the .afs via Opened (expected), Reopen, WebviewEvent, or
-            // something else entirely.
+            // Log every RunEvent variant on macOS so we can see if the
+            // .afs cold-start arrives via Opened (expected), Reopen,
+            // WebviewEvent, or something else entirely. Reopen is
+            // macOS-only so this whole match needs the cfg-guard.
+            #[cfg(target_os = "macos")]
             match &_event {
                 tauri::RunEvent::Ready                  => fileassoc::diag("RunEvent::Ready"),
                 tauri::RunEvent::Exit                   => fileassoc::diag("RunEvent::Exit"),
