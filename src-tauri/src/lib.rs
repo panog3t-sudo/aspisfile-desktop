@@ -96,12 +96,18 @@ pub fn run() {
             // still compiles for Windows/Linux targets.
             #[cfg(any(target_os = "macos", mobile))]
             if let tauri::RunEvent::Opened { urls } = _event {
+                eprintln!("[afs] RunEvent::Opened fired with {} url(s)", urls.len());
                 for url in urls {
+                    eprintln!("[afs] url={}", url);
                     if let Ok(path) = url.to_file_path() {
                         let path_str = path.to_string_lossy().to_string();
                         if path_str.ends_with(".afs") {
                             fileassoc::try_open_afs(_app, &path_str);
+                        } else {
+                            eprintln!("[afs] non-.afs url ignored");
                         }
+                    } else {
+                        eprintln!("[afs] url has no file path: {}", url);
                     }
                 }
             }

@@ -61,19 +61,27 @@ fn parse_afs_path(path: &str) -> Option<AfsLink> {
 /// Events. Non-fatal — silently no-ops on parse failure to avoid
 /// spamming popups for malformed files.
 pub fn try_open_afs(app: &AppHandle, path: &str) {
+    eprintln!("[afs] try_open_afs called: path={}", path);
     match parse_afs_path(path) {
         Some(link) => {
+            eprintln!("[afs] parsed ok: token={} sig={:?} env_present={}", link.token, link.sig.is_some(), link.env.is_some());
             // Buffer first, emit second. Cold-start: React is not yet
             // listening, the emit is lost, drain on mount picks it up.
-            // Warm-start: React is listening, the emit fires immediately,
-            // the buffer holds a redundant copy until React's next mount
-            // (typically never — single-instance app, single mount).
             if let Some(state) = app.try_state::<PendingAfs>() {
-                if let Ok(mut guard) = state.0.lock() {
-                    *guard = Some(link.clone());
+                match state.0.lock() {
+                    Ok(mut guard) => {
+                        *guard = Some(link.clone());
+                        eprintln!("[afs] buffered link in PendingAfs state");
+                    }
+                    Err(e) => eprintln!("[afs] FAILED to lock PendingAfs: {:?}", e),
                 }
+            } else {
+                eprintln!("[afs] WARNING: PendingAfs state NOT managed — buffer skipped");
             }
-            let _ = app.emit("open-afs-link", &link);
+            match app.emit("open-afs-link", &link) {
+                Ok(_)  => eprintln!("[afs] emitted open-afs-link"),
+                Err(e) => eprintln!("[afs] emit FAILED: {:?}", e),
+            }
         }
         None => {
             eprintln!("[afs] failed to parse .afs at {}", path);
@@ -91,7 +99,9 @@ pub fn read_afs(path: String) -> Result<AfsLink, String> {
 /// runtime event. Always returns None after the first call.
 #[tauri::command]
 pub fn take_pending_afs(state: tauri::State<PendingAfs>) -> Option<AfsLink> {
-    state.0.lock().ok().and_then(|mut g| g.take())
+    let result = state.0.lock().ok().and_then(|mut g| g.take());
+    eprintln!("[afs] take_pending_afs called → returning: {}", if result.is_some() { "Some(link)" } else { "None" });
+    result
 }
 
 pub fn register_handler(app: AppHandle) {
