@@ -505,27 +505,43 @@ function AppWithLockOverlay() {
   );
 }
 
-// ── DIAGNOSTIC HUD (v1.7.16 — REMOVE after .afs cold-start bug is fixed) ──
+// ── DIAGNOSTIC HUD (v1.7.17 — REMOVE after .afs cold-start bug is fixed) ──
 function DebugHud({ lockInitialised, appLocked }: { lockInitialised: boolean; appLocked: boolean }) {
-  const [logs, setLogs] = useState<string[]>([]);
+  const [reactLogs, setReactLogs] = useState<string[]>([]);
+  const [rustLog,   setRustLog]   = useState<string>('');
   useEffect(() => {
     (window as any).__pushDebugLog = (line: string) => {
-      setLogs((prev) => [...prev.slice(-49), line]);
+      setReactLogs((prev) => [...prev.slice(-49), line]);
     };
-    setLogs((prev) => [...prev, `${new Date().toISOString().slice(11,23)} HUD mounted (v1.7.16 diag)`]);
-    return () => { delete (window as any).__pushDebugLog; };
+    setReactLogs((prev) => [...prev, `${new Date().toISOString().slice(11,23)} HUD mounted (v1.7.17 diag)`]);
+    // Pull the Rust-side log from /tmp/aspisfile-diag.log every 800ms.
+    const refresh = () => {
+      invoke<string>('read_diag_log').then(setRustLog).catch(() => {});
+    };
+    refresh();
+    const id = setInterval(refresh, 800);
+    return () => {
+      clearInterval(id);
+      delete (window as any).__pushDebugLog;
+    };
   }, []);
+  // Interleave rust + react lines and sort by timestamp (HH:MM:SS.mmm prefix).
+  const rustLines = rustLog.split('\n').filter(Boolean);
+  const combined = [...rustLines, ...reactLogs.map((l) => `${l.split(' ')[0]} [react] ${l.split(' ').slice(1).join(' ')}`)];
+  combined.sort();
   return (
     <div style={{
-      position: 'fixed', top: 8, right: 8, width: 380, maxHeight: 280,
-      overflow: 'auto', background: 'rgba(0,0,0,0.88)', color: '#0F0',
+      position: 'fixed', top: 8, right: 8, width: 460, maxHeight: 360,
+      overflow: 'auto', background: 'rgba(0,0,0,0.9)', color: '#0F0',
       fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 10, padding: 8,
       zIndex: 99999, borderRadius: 4, lineHeight: 1.4, pointerEvents: 'auto',
     }}>
       <div style={{ color: '#FF0', marginBottom: 4 }}>
-        v1.7.16 diag · lockInit={String(lockInitialised)} · appLocked={String(appLocked)}
+        v1.7.17 diag · lockInit={String(lockInitialised)} · appLocked={String(appLocked)}
       </div>
-      {logs.slice().reverse().map((l, i) => <div key={i}>{l}</div>)}
+      {combined.slice().reverse().map((l, i) => (
+        <div key={i} style={{ color: l.includes('[rust]') ? '#0FF' : '#0F0' }}>{l}</div>
+      ))}
     </div>
   );
 }
