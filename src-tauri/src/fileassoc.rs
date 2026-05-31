@@ -19,7 +19,7 @@ use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Listener, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 // Diagnostic file logger. eprintln! is swallowed by signed/notarised
 // macOS bundles (stderr → /dev/null). Writes to /tmp/aspisfile-diag.log
@@ -132,18 +132,15 @@ pub fn register_handler(app: AppHandle) {
     let args: Vec<String> = std::env::args().collect();
     diag(&format!("register_handler: argv={:?}", args));
 
-    let app_drop = app.clone();
-    app.listen("tauri://file-drop", move |event| {
-        diag(&format!("tauri://file-drop fired: payload={}", event.payload()));
-        if let Ok(paths) = serde_json::from_str::<Vec<String>>(event.payload()) {
-            for path in paths {
-                if path.ends_with(".afs") {
-                    try_open_afs(&app_drop, &path);
-                }
-            }
-        }
-    });
+    // Drag-and-drop onto a running window is handled in lib.rs via
+    // RunEvent::WindowEvent { event: WindowEvent::DragDrop(...) }.
+    // Tauri 2 renamed the Tauri 1 `tauri://file-drop` event to
+    // `tauri://drag-drop` and exposes it via the typed WindowEvent
+    // enum — listening to the old name silently no-oped.
 
+    // Cold-start argv path — Windows / Linux deliver .afs paths via
+    // argv; macOS uses Apple Events (RunEvent::Opened) handled in
+    // lib.rs's run callback.
     if let Some(arg) = std::env::args().nth(1) {
         if arg.ends_with(".afs") {
             diag(&format!("argv .afs detected: {}", arg));

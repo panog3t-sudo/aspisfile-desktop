@@ -122,6 +122,35 @@ jobs:
           echo "$APPLE_PROVISIONING_PROFILE" | base64 --decode > "$APP_PATH/Contents/embedded.provisionprofile"
           ls -la "$APP_PATH/Contents/embedded.provisionprofile"
 
+          # 1b. Patch Info.plist to add UTExportedTypeDeclarations for
+          # the .afs UTI. Tauri 2's fileAssociations config only emits
+          # CFBundleTypeExtensions which registers us as a HANDLER but
+          # not the OWNER of the type. Without a UTI declaration, macOS
+          # launches the app via Apple Events but does NOT fire
+          # applicationOpenURLs: — so RunEvent::Opened never delivers
+          # the path. Diagnosed via v1.7.17 HUD overlay: file double-click
+          # ran setup() + Ready but never RunEvent::Opened.
+          PLIST="$APP_PATH/Contents/Info.plist"
+          echo "--- patching $PLIST to add UTExportedTypeDeclarations ---"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0 dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeIdentifier string com.aspisfile.viewer.document" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeDescription string AspisFile Document" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeConformsTo array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeConformsTo:0 string public.data" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0 string afs" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type:0 string application/x-aspisfile" "$PLIST"
+          # Point the existing CFBundleDocumentTypes entry at the new UTI
+          # so Launch Services treats us as the type Owner, not just a
+          # filename-extension handler.
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string com.aspisfile.viewer.document" "$PLIST"
+          echo "--- post-patch UTExportedTypeDeclarations ---"
+          /usr/libexec/PlistBuddy -c "Print :UTExportedTypeDeclarations" "$PLIST"
+
           # 2. Re-sign nested code first (frameworks, dylibs, helpers).
           # Order matters because codesign of the outer bundle hashes
           # the inner items — they need to be re-signed first if any
