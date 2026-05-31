@@ -20,6 +20,12 @@ const KEY_PIN_SET           = "lock_pin_set_v1";
 
 type LockContextType = {
   locked:             boolean;
+  // True once init() has finished — localStorage read, biometric
+  // availability resolved, cold-start lock decision made. Consumers
+  // that race the init (e.g. cold-start .afs drain) should wait on
+  // this before reading `locked` so they don't see the initial
+  // optimistic-false and skip the buffering branch.
+  initialised:        boolean;
   setupComplete:      boolean;
   biometricEnabled:   boolean;
   pinSet:             boolean;
@@ -53,6 +59,7 @@ export const BIOMETRIC_FRESH_MS = 30 * 1000;
 
 const LockContext = createContext<LockContextType>({
   locked:             false,
+  initialised:        false,
   setupComplete:      true,  // default true so the UI doesn't flash SetupModal before init
   biometricEnabled:   false,
   pinSet:             false,
@@ -176,6 +183,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
         // Suppress overlays until initialised — otherwise the SetupModal
         // flashes on cold-start before localStorage is read.
         locked:             initialised ? locked : false,
+        initialised,
         setupComplete:      initialised ? setupComplete : true,
         biometricEnabled,
         pinSet,

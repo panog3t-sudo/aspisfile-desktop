@@ -23,6 +23,17 @@ type ViewerParams = {
   coview:  string | null;
 };
 
+type AfsLink = {
+  v:           number;
+  type:        string;
+  token:       string;
+  sig?:        string | null;
+  env?:        string | null;
+  share_url?:  string | null;
+  file_name?:  string | null;
+  sender_name?: string | null;
+};
+
 function extractFromUrl(url: string): ViewerParams | null {
   try {
     let parsed = new URL(url);
@@ -179,8 +190,20 @@ function AppContent() {
   // and completeEnrolment() read it. State here would trip TS6133
   // because nothing references the reactive value.
   const pendingLinkRef = useRef<ViewerParams | null>(null);
-  const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, tryBeginBiometric, endBiometric } = useLock();
+  const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, initialised: lockInitialised, tryBeginBiometric, endBiometric } = useLock();
   const [hasSession, setHasSession] = useState(false);
+
+  // openLink as a ref so deferred callbacks (Tauri event listeners,
+  // cold-start drains) read the LATEST closure each call. openLink is
+  // redeclared every render; useEffect-captured copies otherwise see
+  // appLocked / lastBiometricAt from first render only — which made
+  // .afs cold-start route to IdleScreen instead of the file because
+  // the stale closure said "appLocked=false" while reality said true.
+  const openLinkRef = useRef<((p: ViewerParams) => void) | null>(null);
+  // Once-only guard for the cold-start .afs drain — without it, every
+  // subsequent app-lock cycle would re-fire take_pending_afs and the
+  // user would see their file re-opened on every unlock.
+  const drainedAfsRef = useRef(false);
 
   async function openLink(params: ViewerParams) {
     // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
@@ -239,6 +262,9 @@ function AppContent() {
     setViewerParams(params);
     setMode("viewer");
   }
+  // Update the ref every render so deferred callbacks call the
+  // latest openLink (with current appLocked / lastBiometricAt).
+  openLinkRef.current = openLink;
 
   // Replay any deep-link buffered while app-level lock was active.
   // openLink() above stashes params into pendingLinkRef when
@@ -330,47 +356,22 @@ function AppContent() {
       if (params) openLink(params);
     });
 
-    // Phase A close-out — .afs file double-click handler. The Rust side
-    // parses the v1 link container JSON. Two delivery paths:
-    //   1. Buffered (cold-start) — Rust stores the parsed link in app
-    //      state because RunEvent::Opened fires before this useEffect
-    //      runs. We drain via take_pending_afs() on mount.
-    //   2. Live event (warm-start / drag-drop) — listen("open-afs-link").
-    // Both paths converge on handleAfs() → openLink() so behaviour is
-    // identical to opening via a share URL.
-    type AfsLink = {
-      v:           number;
-      type:        string;
-      token:       string;
-      sig?:        string | null;
-      env?:        string | null;
-      share_url?:  string | null;
-      file_name?:  string | null;
-      sender_name?: string | null;
-    };
-    const handleAfs = async (link: AfsLink | null) => {
-      if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) {
-        if (link) console.warn("[afs] discarded malformed payload:", link);
-        return;
-      }
+    // Phase A close-out — .afs file double-click runtime handler. Only
+    // the warm-start path is here; cold-start drain lives in its own
+    // useEffect below so it can wait for LockProvider initialisation.
+    // Routes through openLinkRef so a lock state change between mount
+    // and event delivery doesn't trip a stale-closure read.
+    const unlistenFile = listen<AfsLink>("open-afs-link", async (event) => {
+      const link = event.payload;
+      if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) return;
       await bringWindowToFront();
-      openLink({
+      openLinkRef.current?.({
         token:   link.token,
         sig:     link.sig ?? null,
         env:     link.env ?? null,
         present: false,
         coview:  null,
       });
-    };
-
-    // Cold-start drain — pulls any .afs the user double-clicked before
-    // React's listen() registered. Mirror of getCurrent() for deep-links.
-    invoke<AfsLink | null>("take_pending_afs")
-      .then((link) => { if (!cancelled) handleAfs(link); })
-      .catch(() => {});
-
-    const unlistenFile = listen<AfsLink>("open-afs-link", (event) => {
-      handleAfs(event.payload);
     });
 
     return () => {
@@ -379,6 +380,37 @@ function AppContent() {
       unlistenFile.then((f) => f()).catch(() => {});
     };
   }, []);
+
+  // Cold-start .afs drain — gated on LockProvider init so we don't
+  // race against the cold-start lock decision. Sequence on cold-start
+  // for an enrolled recipient:
+  //   1. App mounts → locked=false (initialised=false hides real value)
+  //   2. LockProvider's init() resolves → setLocked(true) + setInitialised(true)
+  //   3. User Touch IDs the LockScreen → locked=false
+  //   4. THIS effect now sees lockInitialised && !appLocked → drains
+  //   5. openLinkRef.current() sees fresh state (biometric just recorded,
+  //      so the per-file gate skips its own prompt) → setMode("viewer")
+  // If no cold-start lock applies, lockInitialised flips true with
+  // appLocked already false → drains immediately. drainedAfsRef
+  // guards against re-draining on subsequent lock cycles.
+  useEffect(() => {
+    if (drainedAfsRef.current) return;
+    if (!lockInitialised || appLocked) return;
+    drainedAfsRef.current = true;
+    invoke<AfsLink | null>("take_pending_afs")
+      .then(async (link) => {
+        if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) return;
+        await bringWindowToFront();
+        openLinkRef.current?.({
+          token:   link.token,
+          sig:     link.sig ?? null,
+          env:     link.env ?? null,
+          present: false,
+          coview:  null,
+        });
+      })
+      .catch(() => {});
+  }, [lockInitialised, appLocked]);
 
   if (mode === "viewer" && viewerParams) {
     return (
