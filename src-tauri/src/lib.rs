@@ -46,6 +46,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .manage(fileassoc::PendingAfs(std::sync::Mutex::new(None)))
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
@@ -82,6 +83,7 @@ pub fn run() {
             commands::log_security_event,
             commands::authenticate_biometric,
             fileassoc::read_afs,
+            fileassoc::take_pending_afs,
         ])
         .build(tauri::generate_context!())
         .expect("AspisFile Viewer failed to start")

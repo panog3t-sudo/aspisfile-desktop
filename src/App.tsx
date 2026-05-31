@@ -331,10 +331,12 @@ function AppContent() {
     });
 
     // Phase A close-out — .afs file double-click handler. The Rust side
-    // parses the v1 link container JSON and emits `open-afs-link` with
-    // the structured AfsLink payload (token + sig + env). We convert
-    // that to ViewerParams and route through the same openLink() the
-    // deep-link pathway uses, so .afs double-click is observationally
+    // parses the v1 link container JSON. Two delivery paths:
+    //   1. Buffered (cold-start) — Rust stores the parsed link in app
+    //      state because RunEvent::Opened fires before this useEffect
+    //      runs. We drain via take_pending_afs() on mount.
+    //   2. Live event (warm-start / drag-drop) — listen("open-afs-link").
+    // Both paths converge on handleAfs() → openLink() so behaviour is
     // identical to opening via a share URL.
     type AfsLink = {
       v:           number;
@@ -346,22 +348,29 @@ function AppContent() {
       file_name?:  string | null;
       sender_name?: string | null;
     };
-    const unlistenFile = listen<AfsLink>("open-afs-link", async (event) => {
-      const link = event.payload;
+    const handleAfs = async (link: AfsLink | null) => {
       if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) {
-        console.warn("[afs] discarded malformed payload:", link);
+        if (link) console.warn("[afs] discarded malformed payload:", link);
         return;
       }
-      // Bring the window forward — same dance as deep-link arrival.
       await bringWindowToFront();
-      const params: ViewerParams = {
+      openLink({
         token:   link.token,
         sig:     link.sig ?? null,
         env:     link.env ?? null,
         present: false,
         coview:  null,
-      };
-      openLink(params);
+      });
+    };
+
+    // Cold-start drain — pulls any .afs the user double-clicked before
+    // React's listen() registered. Mirror of getCurrent() for deep-links.
+    invoke<AfsLink | null>("take_pending_afs")
+      .then((link) => { if (!cancelled) handleAfs(link); })
+      .catch(() => {});
+
+    const unlistenFile = listen<AfsLink>("open-afs-link", (event) => {
+      handleAfs(event.payload);
     });
 
     return () => {

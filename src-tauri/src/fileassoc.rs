@@ -16,7 +16,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use tauri::{AppHandle, Emitter, Listener};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Listener, Manager};
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct AfsLink {
@@ -35,6 +36,13 @@ pub struct AfsLink {
     #[serde(default)]
     pub sender_name: Option<String>,
 }
+
+// Managed state buffer for the cold-start race. macOS Apple Events
+// (RunEvent::Opened) fire within the first few hundred ms of launch —
+// often before React mounts and registers listen("open-afs-link", ...).
+// Tauri events have no replay, so the emit is lost. We stash the parsed
+// link here; React drains via take_pending_afs() on mount.
+pub struct PendingAfs(pub Mutex<Option<AfsLink>>);
 
 fn parse_afs_path(path: &str) -> Option<AfsLink> {
     let contents = fs::read_to_string(path).ok()?;
@@ -55,6 +63,16 @@ fn parse_afs_path(path: &str) -> Option<AfsLink> {
 pub fn try_open_afs(app: &AppHandle, path: &str) {
     match parse_afs_path(path) {
         Some(link) => {
+            // Buffer first, emit second. Cold-start: React is not yet
+            // listening, the emit is lost, drain on mount picks it up.
+            // Warm-start: React is listening, the emit fires immediately,
+            // the buffer holds a redundant copy until React's next mount
+            // (typically never — single-instance app, single mount).
+            if let Some(state) = app.try_state::<PendingAfs>() {
+                if let Ok(mut guard) = state.0.lock() {
+                    *guard = Some(link.clone());
+                }
+            }
             let _ = app.emit("open-afs-link", &link);
         }
         None => {
@@ -66,6 +84,14 @@ pub fn try_open_afs(app: &AppHandle, path: &str) {
 #[tauri::command]
 pub fn read_afs(path: String) -> Result<AfsLink, String> {
     parse_afs_path(&path).ok_or_else(|| "Invalid .afs file".to_string())
+}
+
+/// Drain the cold-start buffer. React invokes this once on mount; the
+/// returned link (if any) is routed through openLink() the same as a
+/// runtime event. Always returns None after the first call.
+#[tauri::command]
+pub fn take_pending_afs(state: tauri::State<PendingAfs>) -> Option<AfsLink> {
+    state.0.lock().ok().and_then(|mut g| g.take())
 }
 
 pub fn register_handler(app: AppHandle) {
