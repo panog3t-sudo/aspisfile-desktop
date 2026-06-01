@@ -16,34 +16,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-
-// Diagnostic file logger. eprintln! is swallowed by signed/notarised
-// macOS bundles (stderr → /dev/null). Writes to /tmp/aspisfile-diag.log
-// so React can fetch via read_diag_log() for the HUD overlay.
-pub fn diag(msg: &str) {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = now.as_secs();
-    let ms   = now.subsec_millis();
-    let line = format!("{:02}:{:02}:{:02}.{:03} [rust] {}\n",
-        (secs / 3600) % 24, (secs / 60) % 60, secs % 60, ms, msg);
-    let _ = fs::OpenOptions::new()
-        .create(true).append(true)
-        .open("/tmp/aspisfile-diag.log")
-        .and_then(|mut f| f.write_all(line.as_bytes()));
-}
-
-pub fn diag_reset() {
-    let _ = fs::write("/tmp/aspisfile-diag.log", "");
-}
-
-#[tauri::command]
-pub fn read_diag_log() -> String {
-    fs::read_to_string("/tmp/aspisfile-diag.log").unwrap_or_default()
-}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct AfsLink {
@@ -87,30 +61,16 @@ fn parse_afs_path(path: &str) -> Option<AfsLink> {
 /// Events. Non-fatal — silently no-ops on parse failure to avoid
 /// spamming popups for malformed files.
 pub fn try_open_afs(app: &AppHandle, path: &str) {
-    diag(&format!("try_open_afs called: path={}", path));
-    match parse_afs_path(path) {
-        Some(link) => {
-            diag(&format!("parsed ok: token={} sig={} env={}", link.token, link.sig.is_some(), link.env.is_some()));
-            if let Some(state) = app.try_state::<PendingAfs>() {
-                match state.0.lock() {
-                    Ok(mut guard) => {
-                        *guard = Some(link.clone());
-                        diag("buffered link in PendingAfs state");
-                    }
-                    Err(e) => diag(&format!("FAILED to lock PendingAfs: {:?}", e)),
-                }
-            } else {
-                diag("WARNING: PendingAfs state NOT managed — buffer skipped");
-            }
-            match app.emit("open-afs-link", &link) {
-                Ok(_)  => diag("emitted open-afs-link"),
-                Err(e) => diag(&format!("emit FAILED: {:?}", e)),
-            }
-        }
-        None => {
-            diag(&format!("failed to parse .afs at {}", path));
+    let Some(link) = parse_afs_path(path) else { return };
+    // Buffer first, emit second. Cold-start: React is not yet listening,
+    // the emit is lost, drain on mount picks it up via take_pending_afs.
+    // Warm-start: React is listening, the emit fires immediately.
+    if let Some(state) = app.try_state::<PendingAfs>() {
+        if let Ok(mut guard) = state.0.lock() {
+            *guard = Some(link.clone());
         }
     }
+    let _ = app.emit("open-afs-link", &link);
 }
 
 #[tauri::command]
@@ -123,27 +83,16 @@ pub fn read_afs(path: String) -> Result<AfsLink, String> {
 /// runtime event. Always returns None after the first call.
 #[tauri::command]
 pub fn take_pending_afs(state: tauri::State<PendingAfs>) -> Option<AfsLink> {
-    let result = state.0.lock().ok().and_then(|mut g| g.take());
-    diag(&format!("take_pending_afs called → returning: {}", if result.is_some() { "Some(link)" } else { "None" }));
-    result
+    state.0.lock().ok().and_then(|mut g| g.take())
 }
 
 pub fn register_handler(app: AppHandle) {
-    let args: Vec<String> = std::env::args().collect();
-    diag(&format!("register_handler: argv={:?}", args));
-
-    // Drag-and-drop onto a running window is handled in lib.rs via
-    // RunEvent::WindowEvent { event: WindowEvent::DragDrop(...) }.
-    // Tauri 2 renamed the Tauri 1 `tauri://file-drop` event to
-    // `tauri://drag-drop` and exposes it via the typed WindowEvent
-    // enum — listening to the old name silently no-oped.
-
-    // Cold-start argv path — Windows / Linux deliver .afs paths via
-    // argv; macOS uses Apple Events (RunEvent::Opened) handled in
-    // lib.rs's run callback.
+    // macOS: drag-drop on running window handled in lib.rs's RunEvent
+    // arm via WindowEvent::DragDrop. Cold-start file-open arrives via
+    // RunEvent::Opened, also in lib.rs.
+    // Windows/Linux: cold-start file path arrives as argv[1].
     if let Some(arg) = std::env::args().nth(1) {
         if arg.ends_with(".afs") {
-            diag(&format!("argv .afs detected: {}", arg));
             let app_cold = app.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(800));

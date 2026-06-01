@@ -48,10 +48,6 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(fileassoc::PendingAfs(std::sync::Mutex::new(None)))
         .setup(|app| {
-            // Reset the diag log at the start of every launch so users
-            // see only the current session's events. v1.7.17 only.
-            fileassoc::diag_reset();
-            fileassoc::diag(&format!("setup() running, app version {}", env!("CARGO_PKG_VERSION")));
             let window = app.get_webview_window("main").unwrap();
 
             security::apply_window_security(&window);
@@ -88,7 +84,6 @@ pub fn run() {
             commands::authenticate_biometric,
             fileassoc::read_afs,
             fileassoc::take_pending_afs,
-            fileassoc::read_diag_log,
         ])
         .build(tauri::generate_context!())
         .expect("AspisFile Viewer failed to start")
@@ -99,55 +94,33 @@ pub fn run() {
             // argv path on Windows/Linux — handed to fileassoc::try_open_afs.
             // The Opened variant is macOS/mobile-only — cfg-guard so this
             // still compiles for Windows/Linux targets.
-            // Log every RunEvent variant on macOS so we can see if the
-            // .afs cold-start arrives via Opened (expected), Reopen,
-            // WebviewEvent, or something else entirely. Reopen is
-            // macOS-only so this whole match needs the cfg-guard.
+            // Drag-and-drop of .afs files onto a running window. Tauri 2
+            // exposes drag-drop through the typed WindowEvent enum (the
+            // Tauri 1 `tauri://file-drop` event no longer exists).
             #[cfg(target_os = "macos")]
-            match &_event {
-                tauri::RunEvent::Ready                  => fileassoc::diag("RunEvent::Ready"),
-                tauri::RunEvent::Exit                   => fileassoc::diag("RunEvent::Exit"),
-                tauri::RunEvent::ExitRequested { .. }   => fileassoc::diag("RunEvent::ExitRequested"),
-                tauri::RunEvent::Resumed                => fileassoc::diag("RunEvent::Resumed"),
-                tauri::RunEvent::MainEventsCleared      => { /* fires constantly, skip */ }
-                tauri::RunEvent::Reopen { has_visible_windows, .. } =>
-                    fileassoc::diag(&format!("RunEvent::Reopen has_visible={}", has_visible_windows)),
-                tauri::RunEvent::WindowEvent { label, event, .. } => {
-                    // Tauri 2 drag-drop arrives through the typed
-                    // WindowEvent enum. Old Tauri 1 listener on
-                    // `tauri://file-drop` silently no-oped — diagnosed
-                    // via v1.7.17 HUD: drag-drop produced WindowEvent
-                    // lines but no file-drop event.
-                    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
-                        fileassoc::diag(&format!("WindowEvent::DragDrop::Drop on {} with {} path(s)", label, paths.len()));
-                        for path in paths {
-                            let path_str = path.to_string_lossy().to_string();
-                            if path_str.ends_with(".afs") {
-                                fileassoc::try_open_afs(_app, &path_str);
-                            }
+            if let tauri::RunEvent::WindowEvent { event, .. } = &_event {
+                if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                    for path in paths {
+                        let path_str = path.to_string_lossy().to_string();
+                        if path_str.ends_with(".afs") {
+                            fileassoc::try_open_afs(_app, &path_str);
                         }
-                    } else {
-                        fileassoc::diag(&format!("RunEvent::WindowEvent label={}", label));
                     }
                 }
-                tauri::RunEvent::WebviewEvent { label, .. } =>
-                    fileassoc::diag(&format!("RunEvent::WebviewEvent label={}", label)),
-                _ => fileassoc::diag("RunEvent::<other>"),
             }
+            // Cold-start .afs double-click. macOS routes file opens via
+            // NSApplicationDelegate openURLs: which Tauri surfaces as
+            // RunEvent::Opened. Requires UTExportedTypeDeclarations in
+            // Info.plist for macOS to fire openURLs at all — that patch
+            // lives in .github/workflows/release.yml.
             #[cfg(any(target_os = "macos", mobile))]
             if let tauri::RunEvent::Opened { urls } = _event {
-                fileassoc::diag(&format!("RunEvent::Opened fired with {} url(s)", urls.len()));
                 for url in urls {
-                    fileassoc::diag(&format!("Opened url={}", url));
                     if let Ok(path) = url.to_file_path() {
                         let path_str = path.to_string_lossy().to_string();
                         if path_str.ends_with(".afs") {
                             fileassoc::try_open_afs(_app, &path_str);
-                        } else {
-                            fileassoc::diag("non-.afs url ignored");
                         }
-                    } else {
-                        fileassoc::diag(&format!("url has no file path: {}", url));
                     }
                 }
             }

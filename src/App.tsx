@@ -193,14 +193,6 @@ function AppContent() {
   const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, initialised: lockInitialised, tryBeginBiometric, endBiometric } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
-  // ── DIAGNOSTIC HUD (v1.7.16 — REMOVE after .afs cold-start bug is fixed) ──
-  const pushLog = (msg: string) => {
-    const ts = new Date().toISOString().slice(11, 23);
-    console.log(`[afs-debug] ${msg}`);
-    const sink = (window as any).__pushDebugLog;
-    if (typeof sink === 'function') sink(`${ts} ${msg}`);
-  };
-
   // openLink as a ref so deferred callbacks (Tauri event listeners,
   // cold-start drains) read the LATEST closure each call. openLink is
   // redeclared every render; useEffect-captured copies otherwise see
@@ -214,14 +206,12 @@ function AppContent() {
   const drainedAfsRef = useRef(false);
 
   async function openLink(params: ViewerParams) {
-    pushLog(`openLink: token=${params.token.slice(0,8)} appLocked=${appLocked} fresh=${Date.now()-lastBiometricAt}ms session=${!!getActiveSessionToken()}`);
     // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
     // open files. The server enforces this via BINDING_REQUIRED 403 if
     // no Bearer is present; we do the client-side route here so the
     // un-enrolled user lands on a useful screen (EnrolmentScreen) and
     // can replay the link after entering their enrolment code.
     if (!getActiveSessionToken()) {
-      pushLog('openLink → no session, routing to enrol');
       pendingLinkRef.current = params;
       setMode("enrol");
       return;
@@ -240,7 +230,6 @@ function AppContent() {
     // authenticate_biometric calls overlap → SIGABRT (confirmed via
     // mobile crash log AspisFile-2026-05-30-213211.ips).
     if (appLocked) {
-      pushLog('openLink → appLocked true, buffering');
       pendingLinkRef.current = params;
       return;
     }
@@ -250,7 +239,6 @@ function AppContent() {
     // verification proves presence for both "unlock the app" and
     // "open this file" as one logical action — no double Touch ID.
     if (Date.now() - lastBiometricAt < BIOMETRIC_FRESH_MS) {
-      pushLog('openLink → biometric fresh, setMode(viewer)');
       setViewerParams(params);
       setMode("viewer");
       return;
@@ -261,21 +249,16 @@ function AppContent() {
     // flight. Without this, openLink could fire authenticate_biometric
     // concurrent with LockScreen's, same crash scenario as mobile.
     if (!tryBeginBiometric()) {
-      pushLog('openLink → mutex held, returning');
       return;
     }
     try {
-      pushLog('openLink → invoking authenticate_biometric');
       await invoke<void>("authenticate_biometric");
-      pushLog('openLink → biometric OK');
       recordBiometric();
-    } catch (e) {
-      pushLog(`openLink → biometric FAILED: ${String(e).slice(0,60)}`);
+    } catch {
       return;
     } finally {
       endBiometric();
     }
-    pushLog('openLink → setMode(viewer)');
     setViewerParams(params);
     setMode("viewer");
   }
@@ -411,17 +394,13 @@ function AppContent() {
   // appLocked already false → drains immediately. drainedAfsRef
   // guards against re-draining on subsequent lock cycles.
   useEffect(() => {
-    pushLog(`drain-effect fired: lockInit=${lockInitialised} appLocked=${appLocked} drained=${drainedAfsRef.current}`);
     if (drainedAfsRef.current) return;
-    if (!lockInitialised || appLocked) { pushLog('drain: waiting'); return; }
+    if (!lockInitialised || appLocked) return;
     drainedAfsRef.current = true;
-    pushLog('drain: invoking take_pending_afs');
     invoke<AfsLink | null>("take_pending_afs")
       .then(async (link) => {
-        pushLog(`drain: take_pending_afs returned ${link ? `link(token=${link.token.slice(0,8)})` : 'null'}`);
         if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) return;
         await bringWindowToFront();
-        pushLog(`drain: calling openLinkRef (set=${!!openLinkRef.current})`);
         openLinkRef.current?.({
           token:   link.token,
           sig:     link.sig ?? null,
@@ -430,7 +409,7 @@ function AppContent() {
           coview:  null,
         });
       })
-      .catch((e) => pushLog(`drain: take_pending_afs FAILED: ${String(e).slice(0,80)}`));
+      .catch(() => {});
   }, [lockInitialised, appLocked]);
 
   if (mode === "viewer" && viewerParams) {
@@ -495,54 +474,12 @@ function AppContent() {
 // continues to work — but it only fires when a file is actively
 // being viewed.
 function AppWithLockOverlay() {
-  const { locked, unlock, initialised } = useLock();
+  const { locked, unlock } = useLock();
   return (
     <>
       <AppContent />
       {locked && <LockScreen onUnlock={unlock} />}
-      <DebugHud lockInitialised={initialised} appLocked={locked} />
     </>
-  );
-}
-
-// ── DIAGNOSTIC HUD (v1.7.17 — REMOVE after .afs cold-start bug is fixed) ──
-function DebugHud({ lockInitialised, appLocked }: { lockInitialised: boolean; appLocked: boolean }) {
-  const [reactLogs, setReactLogs] = useState<string[]>([]);
-  const [rustLog,   setRustLog]   = useState<string>('');
-  useEffect(() => {
-    (window as any).__pushDebugLog = (line: string) => {
-      setReactLogs((prev) => [...prev.slice(-49), line]);
-    };
-    setReactLogs((prev) => [...prev, `${new Date().toISOString().slice(11,23)} HUD mounted (v1.7.17 diag)`]);
-    // Pull the Rust-side log from /tmp/aspisfile-diag.log every 800ms.
-    const refresh = () => {
-      invoke<string>('read_diag_log').then(setRustLog).catch(() => {});
-    };
-    refresh();
-    const id = setInterval(refresh, 800);
-    return () => {
-      clearInterval(id);
-      delete (window as any).__pushDebugLog;
-    };
-  }, []);
-  // Interleave rust + react lines and sort by timestamp (HH:MM:SS.mmm prefix).
-  const rustLines = rustLog.split('\n').filter(Boolean);
-  const combined = [...rustLines, ...reactLogs.map((l) => `${l.split(' ')[0]} [react] ${l.split(' ').slice(1).join(' ')}`)];
-  combined.sort();
-  return (
-    <div style={{
-      position: 'fixed', top: 8, right: 8, width: 460, maxHeight: 360,
-      overflow: 'auto', background: 'rgba(0,0,0,0.9)', color: '#0F0',
-      fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 10, padding: 8,
-      zIndex: 99999, borderRadius: 4, lineHeight: 1.4, pointerEvents: 'auto',
-    }}>
-      <div style={{ color: '#FF0', marginBottom: 4 }}>
-        v1.7.17 diag · lockInit={String(lockInitialised)} · appLocked={String(appLocked)}
-      </div>
-      {combined.slice().reverse().map((l, i) => (
-        <div key={i} style={{ color: l.includes('[rust]') ? '#0FF' : '#0F0' }}>{l}</div>
-      ))}
-    </div>
   );
 }
 
