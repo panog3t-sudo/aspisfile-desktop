@@ -249,13 +249,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // recipient comes from authenticateDesktop. Stale in-progress lock
   // (older than 1h) means an aborted prior session — treat as available.
   useEffect(() => {
+    // Download is a benign client-side link-container write since
+    // v1.7.20 (no S3 ciphertext, no server confirm, no grace-period
+    // side effects). The historical download_confirmed_at /
+    // download_in_progress flags were set by the old runDownload flow
+    // and would lock the button forever for any recipient who'd
+    // downloaded a file in an earlier version. Always start available.
     if (!recipient) return;
-    const initiated = recipient.download_initiated_at;
-    const stale     = initiated && (Date.now() - new Date(initiated).getTime()) > 60 * 60 * 1000;
-
-    if (recipient.download_confirmed_at)              setDownloadState('confirmed');
-    else if (recipient.download_in_progress && !stale) setDownloadState('in_progress');
-    else                                              setDownloadState('available');
+    setDownloadState('available');
   }, [recipient]);
 
   // Effective gate for showing the download button. The button is also

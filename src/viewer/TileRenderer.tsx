@@ -395,7 +395,16 @@ export function TileRenderer({
           (subscribedScroll → scrollTop/scrollLeft) works, but user
           input is blocked via onWheel preventDefault + touch-action:
           none. The presenter's onScroll publishes scroll position via
-          the ref + throttle so recipients in follow mode mirror it. */}
+          the ref + throttle so recipients in follow mode mirror it.
+          Centering note: previously used display:flex + justify-content:
+          center on the inner wrapper. That breaks horizontal scroll
+          above 100% zoom — the centered overflowing item gets a
+          negative starting x-coordinate and scrollLeft can't go
+          negative, so the left half becomes unreachable. Using
+          margin: 0 auto on the image box instead: collapses to 0 when
+          the box is wider than the parent (so image left-aligns and
+          horizontal scroll naturally exposes the right side), centers
+          when narrower. */}
       <div
         ref={scrollContainerRef}
         onScroll={onScrollEvent}
@@ -414,9 +423,6 @@ export function TileRenderer({
         <div
           style={{
             minHeight: "100%",
-            display: "flex",
-            alignItems: "flex-start", // top-anchor; scroll container handles vertical overflow
-            justifyContent: "center",
             padding: 24,
             boxSizing: "border-box",
           }}
@@ -436,7 +442,8 @@ export function TileRenderer({
                 // does this because it doesn't affect the layout box).
                 width: `${ZOOM_STEPS[zoomIndex]}%`,
                 maxWidth: "none",
-                flexShrink: 0,
+                marginLeft: "auto",
+                marginRight: "auto",
                 transition: "width 0.15s ease",
               }}
             >
