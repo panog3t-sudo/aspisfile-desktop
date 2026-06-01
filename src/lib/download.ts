@@ -4,6 +4,68 @@ import { writeFile } from '@tauri-apps/plugin-fs';
 
 declare const __API_BASE__: string;
 
+// Phase A close-out (2026-06-01) — "Download" in the recipient viewer
+// now produces the same v1 link container the web dashboard does, not
+// the encrypted S3 bundle the original Sprint 2 download produced.
+//
+// Why the change: the original runDownload below wrote the file's
+// raw ciphertext to disk as a `.afs`. That format was leftover from
+// the Phase B offline-decryptable plan, which is permanently OUT per
+// the no-offline-viewing architectural rule (every open requires
+// server contact so revoke always works). Double-clicking that
+// ciphertext .afs hit our parse_afs_path JSON parser and silently
+// no-oped — the file simply wouldn't open.
+//
+// downloadAfsLink writes a JSON link container instead: identical shape
+// to /api/v1/files/[id]/recipients/[recipientId]/afs, openable via the
+// existing UTI-registered double-click pathway. No server call needed
+// — the viewer already holds token/sig/env from the share URL.
+export type DownloadAfsLinkInput = {
+  token:       string;
+  sig:         string | null;
+  env:         string | null;
+  fileName:    string;
+  senderName?: string | null;
+};
+
+export async function downloadAfsLink(input: DownloadAfsLinkInput): Promise<void> {
+  const { token, sig, env, fileName, senderName } = input;
+
+  // Match the web dashboard's share URL construction — query params only
+  // included when both sig and env are present.
+  const APP_URL  = (typeof __API_BASE__ !== 'undefined' && __API_BASE__) || 'https://aspisfile.com';
+  const shareUrl = sig && env
+    ? `${APP_URL}/access/${token}?sig=${sig}&env=${env}`
+    : `${APP_URL}/access/${token}`;
+
+  const afs = {
+    v:           1,
+    type:        'aspisfile-link',
+    token,
+    sig:         sig ?? null,
+    env:         env ?? null,
+    share_url:   shareUrl,
+    file_name:   fileName,
+    sender_name: senderName ?? 'AspisFile',
+  };
+  const json = JSON.stringify(afs, null, 2);
+
+  const safeBase = (fileName ?? 'document').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '_');
+  const defaultPath = `${safeBase || 'document'}.afs`;
+
+  const path = await save({
+    defaultPath,
+    filters: [{ name: 'AspisFile', extensions: ['afs'] }],
+  });
+  if (!path) throw new DownloadError('USER_CANCELLED', 'Save cancelled');
+
+  try {
+    await writeFile(path, new TextEncoder().encode(json));
+  } catch (e) {
+    throw new DownloadError('WRITE_FAILED', `Write failed: ${(e as Error).message}`);
+  }
+}
+
 // Sprint 2 — Download Management Brief §1.2 viewer-side state machine.
 // Orchestrates the three-call sequence:
 //   1) POST /api/v1/files/[id]/download           → signed S3 URL

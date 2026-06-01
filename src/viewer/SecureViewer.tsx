@@ -20,8 +20,7 @@ import { LockScreen } from "../components/LockScreen";
 import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
-import { DownloadDeletedScreen } from "../components/DownloadDeletedScreen";
-import { runDownload, DownloadError } from "../lib/download";
+import { downloadAfsLink, DownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
 import { PresenterToolbar }           from "../coviewing/PresenterToolbar";
@@ -130,7 +129,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // resolves. Owner tokens skip the button entirely via canDownload.
   const [downloadState,      setDownloadState]      = useState<'available' | 'in_progress' | 'confirmed'>('available');
   const [downloadModalOpen,  setDownloadModalOpen]  = useState(false);
-  const [blobDeleted,        setBlobDeleted]        = useState(false);
   const [downloadError,      setDownloadError]      = useState<string | null>(null);
   const [savedFileName,      setSavedFileName]      = useState<string>('');
 
@@ -270,7 +268,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     && file.allow_download
     && !!recipient
     && recipient.recipient_allow_download
-    && !blobDeleted
     && !activeCoViewSessionId;
 
   async function handleDownload() {
@@ -278,17 +275,21 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     setDownloadState('in_progress');
     setDownloadError(null);
     try {
-      await runDownload(file.id, token);
+      await downloadAfsLink({
+        token,
+        sig,
+        env,
+        fileName:   file.name,
+        senderName: file.sender?.full_name ?? file.sender?.email ?? null,
+      });
       setSavedFileName(file.name + '.afs');
       setDownloadState('confirmed');
       setDownloadModalOpen(true);
     } catch (e) {
       const err = e instanceof DownloadError ? e : new DownloadError('UNKNOWN', String(e));
-      // Already-downloaded race → silently jump to confirmed state
-      setDownloadState(err.code === 'ALREADY_DOWNLOADED' ? 'confirmed' : 'available');
-      if (err.code === 'BLOB_DELETED')                                       setBlobDeleted(true);
-      else if (err.code === 'USER_CANCELLED' || err.code === 'WRITE_FAILED') { /* silent — user retries */ }
-      else                                                                    setDownloadError(err.message);
+      setDownloadState('available');
+      if (err.code === 'USER_CANCELLED') { /* silent — user closed dialog */ }
+      else                                 setDownloadError(err.message);
     }
   }
 
@@ -622,7 +623,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     broadcastScroll(ch, s);
   }, []);
 
-  if (blobDeleted)                    return <DownloadDeletedScreen onClose={() => { sessionStore.clear(); onClose(); }} />;
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
