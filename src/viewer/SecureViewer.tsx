@@ -100,6 +100,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [revoked, setRevoked]         = useState(false);
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
+  const [offline, setOffline]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [locked, setLocked]           = useState(false);
   // Phase 1 Day 9 — pre-approval gate state.
@@ -424,6 +425,62 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     if (trackPages) recordPageView(currentPage);
   }, [currentPage, sessionId, trackPages]);
 
+  // ── Heartbeat — liveness + authorization revalidation ──
+  // Fires every 15s while sessionId is set. Reacts to server response:
+  //   - 'active'         → bump online state, clear any miss counter
+  //   - anything else    → permanent dark RevokedScreen + clear
+  //                        sessionStore (in-memory session key)
+  //   - network failure  → after 2 consecutive misses (~30s offline)
+  //                        flip to OfflineScreen overlay. Key is NOT
+  //                        cleared so reconnect restores rendering
+  //                        without re-auth.
+  // Enforces the no-offline-viewing rule: recipient who pulls the
+  // network cable sees a dark screen within ~30s, and the sender's
+  // revoke takes effect within ~15s.
+  const missCountRef = useRef(0);
+  const OFFLINE_AFTER_MISSES = 2;
+  useEffect(() => {
+    if (!sessionId || !file || revoked) return;
+    let cancelled = false;
+    const beat = async () => {
+      try {
+        const res = await fetch(
+          `${__API_BASE__}/api/v1/viewer/${file.id}/heartbeat`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
+            body: JSON.stringify({ session_id: sessionId }),
+          }
+        );
+        if (cancelled) return;
+        if (!res.ok) {
+          missCountRef.current += 1;
+          if (missCountRef.current >= OFFLINE_AFTER_MISSES) setOffline(true);
+          return;
+        }
+        const body = await res.json().catch(() => ({ status: 'active' as const }));
+        if (cancelled) return;
+        if (body.status === 'active') {
+          missCountRef.current = 0;
+          if (offline) setOffline(false);
+          return;
+        }
+        // Revocation/expiry — DARK PERMANENTLY + clear in-memory key.
+        sessionStore.clear();
+        endReasonRef.current = 'revoked';
+        setRevokeReason(body.reason ?? body.status);
+        setRevoked(true);
+      } catch {
+        if (cancelled) return;
+        missCountRef.current += 1;
+        if (missCountRef.current >= OFFLINE_AFTER_MISSES) setOffline(true);
+      }
+    };
+    beat();
+    const timer = window.setInterval(beat, 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [sessionId, file, revoked, offline]);
+
   // Sprint 3 — session_ended audit event. Fires once on unmount. The
   // endReasonRef is mutated by the paths that lead to teardown —
   // revocation listener sets 'revoked'; default is 'user_close' (close
@@ -637,6 +694,29 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
   if (!legalAccepted)                 return <LegalOverlay file={file} onAccept={() => setLegalAccepted(true)} />;
+  // Offline overlay — solid black with reconnect copy. session_key is
+  // NOT cleared (only on actual revocation) so when heartbeat comes
+  // back active, the existing rendered tiles are still painted under
+  // the overlay and we can dismiss without re-auth.
+  if (offline) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, background: '#000',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        padding: 32, zIndex: 10000,
+        fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
+      }}>
+        <p style={{ color: '#fff', fontSize: 18, fontWeight: 600, margin: '0 0 8px', textAlign: 'center' }}>
+          Reconnecting…
+        </p>
+        <p style={{ color: '#94A3B8', fontSize: 14, lineHeight: 1.5, textAlign: 'center', maxWidth: 480 }}>
+          AspisFile keeps your document protected by re-checking access every few seconds.
+          Restore your network connection to keep reading.
+        </p>
+      </div>
+    );
+  }
   // Sender-approval pending — show the waiting screen INSTEAD of the
   // generic AuthLoadingScreen spinner. The bottom-of-tree overlay was
   // unreachable because the AuthLoadingScreen early-return below
