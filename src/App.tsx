@@ -176,6 +176,10 @@ async function startAutoEnrolment(token: string, rt: string): Promise<void> {
   }
 }
 
+// Universal-Link bypass recovery is inlined in openLink (above) so it
+// can call setMode("enrol") when the server returns 404 (recipient is
+// already enrolled — viewer falls back to the manual sign-in screen).
+
 // Phase 1 Day 12.5 — recognise OAuth callbacks (aspisfile://auth/
 // callback?code=…) coming back from the external browser after
 // StepUpScreen launches a Google/Microsoft/Apple sign-in. Returns
@@ -251,18 +255,32 @@ function AppContent() {
     // can replay the link after entering their enrolment code.
     if (!getActiveSessionToken()) {
       pendingLinkRef.current = params;
-      // First-time bootstrap path: deep link carries a registration
+      // First-time bootstrap path A — deep link carries a registration
       // token (rt) from /access/<token>'s server-rendered bootstrap
-      // page. Skip EnrolmentScreen entirely — fetch the recipient's
-      // email from /access/<token>/meta and silently open the default
-      // browser for Path B WebAuthn. Recipient sees one Touch ID
-      // prompt in the browser and a "returning to AspisFile" bounce —
-      // no code entry, no email entry.
+      // page. Skip EnrolmentScreen entirely.
       if (params.rt) {
         startAutoEnrolment(params.token, params.rt);
         return;
       }
-      setMode("enrol");
+      // First-time bootstrap path B — Universal Link bypassed the
+      // browser bootstrap page entirely (AASA claims /access/* for
+      // AspisFile so macOS hands the URL straight to us without rt).
+      // Try to fetch a fresh registration_token from the server. If
+      // recipient is first-time, server returns rt and we silent-enrol.
+      // If recipient is already enrolled (or token invalid), server
+      // returns 404 and we fall back to the manual EnrolmentScreen
+      // where the existing-passkey sign-in button works.
+      fetch(`${BASE}/api/v1/access/${params.token}/registration-token`)
+        .then(r => r.ok ? r.json() : null)
+        .then((j: { registration_token?: string } | null) => {
+          const rt = j?.registration_token;
+          if (rt) {
+            startAutoEnrolment(params.token, rt);
+          } else {
+            setMode("enrol");
+          }
+        })
+        .catch(() => setMode("enrol"));
       return;
     }
     // Per-file biometric gate (2026-05-30): every file open requires a
