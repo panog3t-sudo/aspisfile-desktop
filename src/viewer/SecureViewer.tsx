@@ -637,6 +637,34 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   if (error)                          return <RevokedScreen reason={error} isError />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
   if (!legalAccepted)                 return <LegalOverlay file={file} onAccept={() => setLegalAccepted(true)} />;
+  // Sender-approval pending — show the waiting screen INSTEAD of the
+  // generic AuthLoadingScreen spinner. The bottom-of-tree overlay was
+  // unreachable because the AuthLoadingScreen early-return below
+  // would fire first (sessionId is null while waiting for approval).
+  // Subscribes to the realtime broadcast; on approve, applyStepUp-
+  // Credentials hydrates the session and we drop back to normal render.
+  if (pendingApprovalId && pendingApprovalMechanism === 'sender' && !delegationApprovalId) {
+    return (
+      <SenderApprovalWaitingScreen
+        approvalId={pendingApprovalId}
+        fileName={file.name}
+        senderName={file.sender?.full_name ?? file.sender?.email ?? 'The sender'}
+        expiresAt={pendingApprovalExpiresAt}
+        onApproved={(creds: StepUpCreds) => {
+          applyStepUpCredentials(creds);
+          setPendingApprovalId(null);
+          setPendingApprovalMechanism(null);
+          setPendingApprovalExpiresAt(null);
+        }}
+        onCancel={() => {
+          setPendingApprovalId(null);
+          setPendingApprovalMechanism(null);
+          setPendingApprovalExpiresAt(null);
+          onClose();
+        }}
+      />
+    );
+  }
   if (!sessionId || totalPages === 0) return <AuthLoadingScreen />;
 
   return (
@@ -768,33 +796,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         />
       )}
 
-      {/* Pre-approval gate. Two variants depending on mechanism:
-          - 'sender' (per_open_approval=true on file) → recipient waits
-            for owner to approve via dashboard/mobile. SenderApproval-
-            WaitingScreen subscribes to realtime broadcast.
-          - null (suspicious coherence tier) → recipient steps up via
-            OTP/OAuth (StepUpScreen owns that flow).
-          Both feed applyStepUpCredentials on success. */}
-      {pendingApprovalId && pendingApprovalMechanism === 'sender' && !delegationApprovalId && (
-        <SenderApprovalWaitingScreen
-          approvalId={pendingApprovalId}
-          fileName={file.name}
-          senderName={file.sender?.full_name ?? file.sender?.email ?? 'The sender'}
-          expiresAt={pendingApprovalExpiresAt}
-          onApproved={(creds: StepUpCreds) => {
-            applyStepUpCredentials(creds);
-            setPendingApprovalId(null);
-            setPendingApprovalMechanism(null);
-            setPendingApprovalExpiresAt(null);
-          }}
-          onCancel={() => {
-            setPendingApprovalId(null);
-            setPendingApprovalMechanism(null);
-            setPendingApprovalExpiresAt(null);
-            onClose();
-          }}
-        />
-      )}
+      {/* Suspicious-tier step-up gate. The 'sender' mechanism is
+          handled at the top of the render tree (above the AuthLoading-
+          Screen early-return) because sessionId is null while waiting.
+          OTP/OAuth still ride alongside the file UI as an overlay
+          since the recipient is the actor here, not waiting. */}
       {pendingApprovalId && pendingApprovalMechanism === null && !delegationApprovalId && (
         <StepUpScreen
           approvalId={pendingApprovalId}
