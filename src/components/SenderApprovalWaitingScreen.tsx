@@ -102,8 +102,6 @@ export function SenderApprovalWaitingScreen({
   return (
     <div style={containerStyle}>
       <div style={cardStyle}>
-        <img src="/logo-full-v1.1.png" alt="AspisFile" style={{ height: 32, marginBottom: 24 }} />
-
         {phase === "waiting" && (
           <>
             <Spinner />
