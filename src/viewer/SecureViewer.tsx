@@ -18,6 +18,7 @@ import { RevokedScreen } from "../components/RevokedScreen";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
 import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
+import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaitingScreen";
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
 import { downloadAfsLink, DownloadError } from "../lib/download";
@@ -101,13 +102,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
   const [error, setError]             = useState<string | null>(null);
   const [locked, setLocked]           = useState(false);
-  // Phase 1 Day 9 — pre-approval gate state (suspicious tier).
+  // Phase 1 Day 9 — pre-approval gate state.
   // pendingApprovalId is set when /mobile/access returns status:
-  // 'pending_approval' with mechanism: null. The StepUpScreen overlay
-  // takes over until the recipient resolves via OTP (OAuth deferred).
+  // 'pending_approval'. mechanism distinguishes which screen handles it:
+  //   - 'sender'  → SenderApprovalWaitingScreen (sender must approve via
+  //                 dashboard/mobile — recipient just waits, subscribes
+  //                 to realtime broadcast)
+  //   - null      → StepUpScreen (recipient steps up via OTP/OAuth —
+  //                 suspicious-tier coherence path)
   // delegationApprovalId fires when /resolve-otp returns delegation_
   // required — recipient must explicitly confirm cross-device approval.
   const [pendingApprovalId, setPendingApprovalId]       = useState<string | null>(null);
+  const [pendingApprovalMechanism, setPendingApprovalMechanism] = useState<'sender' | null>(null);
+  const [pendingApprovalExpiresAt, setPendingApprovalExpiresAt] = useState<string | null>(null);
   const [delegationApprovalId, setDelegationApprovalId] = useState<string | null>(null);
   const startedRef                    = useRef(false);
 
@@ -361,6 +368,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       // credentials and we re-mount this step via startedRef reset.
       if (data.status === "pending_approval") {
         setPendingApprovalId(data.approval_id);
+        setPendingApprovalMechanism(data.mechanism === 'sender' ? 'sender' : null);
+        setPendingApprovalExpiresAt(data.expires_at ?? null);
         startedRef.current = false;
         return;
       }
@@ -759,11 +768,34 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         />
       )}
 
-      {/* Phase 1 Day 9 — suspicious-tier step-up gate. Mounts as a
-          fullscreen overlay; on resolve the parent state is updated
-          with the session credentials and the page-load effects
-          continue from where /mobile/access left off. */}
-      {pendingApprovalId && !delegationApprovalId && (
+      {/* Pre-approval gate. Two variants depending on mechanism:
+          - 'sender' (per_open_approval=true on file) → recipient waits
+            for owner to approve via dashboard/mobile. SenderApproval-
+            WaitingScreen subscribes to realtime broadcast.
+          - null (suspicious coherence tier) → recipient steps up via
+            OTP/OAuth (StepUpScreen owns that flow).
+          Both feed applyStepUpCredentials on success. */}
+      {pendingApprovalId && pendingApprovalMechanism === 'sender' && !delegationApprovalId && (
+        <SenderApprovalWaitingScreen
+          approvalId={pendingApprovalId}
+          fileName={file.name}
+          senderName={file.sender?.full_name ?? file.sender?.email ?? 'The sender'}
+          expiresAt={pendingApprovalExpiresAt}
+          onApproved={(creds: StepUpCreds) => {
+            applyStepUpCredentials(creds);
+            setPendingApprovalId(null);
+            setPendingApprovalMechanism(null);
+            setPendingApprovalExpiresAt(null);
+          }}
+          onCancel={() => {
+            setPendingApprovalId(null);
+            setPendingApprovalMechanism(null);
+            setPendingApprovalExpiresAt(null);
+            onClose();
+          }}
+        />
+      )}
+      {pendingApprovalId && pendingApprovalMechanism === null && !delegationApprovalId && (
         <StepUpScreen
           approvalId={pendingApprovalId}
           fileName={file.name}

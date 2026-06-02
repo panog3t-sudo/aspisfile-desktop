@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
 import { LockScreen } from "./components/LockScreen";
@@ -13,6 +14,9 @@ import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, saveRecipientSession } from "./lib/recipient-session";
 import "./App.css";
 
+declare const __API_BASE__: string;
+const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
+
 type Mode = "idle" | "viewer" | "enrol";
 
 type ViewerParams = {
@@ -21,6 +25,11 @@ type ViewerParams = {
   env:     string | null;
   present: boolean;
   coview:  string | null;
+  // Registration token from the bootstrap page when this is a first-time
+  // recipient flow. When present and no session exists, the viewer runs
+  // Path B enrolment silently (no EnrolmentScreen — recipient sees one
+  // Touch ID prompt in the browser, that's it).
+  rt:      string | null;
 };
 
 type AfsLink = {
@@ -71,6 +80,7 @@ function extractFromUrl(url: string): ViewerParams | null {
       env:     parsed.searchParams.get("env"),
       present: parsed.searchParams.get("present") === "true",
       coview:  parsed.searchParams.get("coview"),
+      rt:      parsed.searchParams.get("rt"),
     };
   } catch {
     return null;
@@ -135,6 +145,34 @@ function tryHandleEnrolComplete(url: string): { email: string } | null {
     return { email };
   } catch {
     return null;
+  }
+}
+
+// First-time bootstrap: deep link carries a registration token (rt)
+// from /access/<token>'s server-rendered bootstrap page. We fetch the
+// recipient's email from /access/<token>/meta (the token+rt pair was
+// already verified by the bootstrap page that issued rt) and open the
+// default browser to /enroll/desktop?email=…&rt=… which runs the
+// WebAuthn ceremony and returns a session token via
+// aspisfile://enrol-complete. Recipient sees one Touch ID prompt and
+// a brief browser-tab bounce — no code entry, no email entry, no
+// EnrolmentScreen.
+async function startAutoEnrolment(token: string, rt: string): Promise<void> {
+  try {
+    const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
+    if (!metaRes.ok) {
+      console.warn('[auto-enrolment] /meta failed:', metaRes.status);
+      return;
+    }
+    const meta = await metaRes.json() as { recipient_email?: string };
+    if (!meta.recipient_email) return;
+
+    const url = new URL(`${BASE}/enroll/desktop`);
+    url.searchParams.set('email', meta.recipient_email);
+    url.searchParams.set('rt',    rt);
+    await openUrl(url.toString());
+  } catch (err) {
+    console.warn('[auto-enrolment] failed:', err);
   }
 }
 
@@ -213,6 +251,17 @@ function AppContent() {
     // can replay the link after entering their enrolment code.
     if (!getActiveSessionToken()) {
       pendingLinkRef.current = params;
+      // First-time bootstrap path: deep link carries a registration
+      // token (rt) from /access/<token>'s server-rendered bootstrap
+      // page. Skip EnrolmentScreen entirely — fetch the recipient's
+      // email from /access/<token>/meta and silently open the default
+      // browser for Path B WebAuthn. Recipient sees one Touch ID
+      // prompt in the browser and a "returning to AspisFile" bounce —
+      // no code entry, no email entry.
+      if (params.rt) {
+        startAutoEnrolment(params.token, params.rt);
+        return;
+      }
       setMode("enrol");
       return;
     }
@@ -290,6 +339,44 @@ function AppContent() {
     // reads lastBiometricAt at call time from the LockContext.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appLocked]);
+
+  // Auto-resume after a sender approval granted while away. Cold-
+  // start path: recipient has a valid session, no deep-link being
+  // processed, no buffered link from the lock replay. Check the
+  // server for any approved-but-unviewed pending_approvals and
+  // open the most recent one automatically. Mirrors the recipient
+  // email "your access was approved" — they relaunch the app and
+  // the file is just there.
+  const autoResumedRef = useRef(false);
+  useEffect(() => {
+    if (autoResumedRef.current) return;
+    if (!lockInitialised || appLocked) return;
+    if (pendingLinkRef.current) return; // a deep-link is already being handled
+    if (mode !== "idle") return;        // already in viewer or enrol
+    const session = getActiveSessionToken();
+    if (!session) return;
+    autoResumedRef.current = true;
+
+    fetch(`${BASE}/api/v1/recipient/pending-opens`, {
+      headers: { Authorization: `Bearer ${session}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const first = data?.pending?.[0] as
+          | { access_token: string; file_name: string }
+          | undefined;
+        if (!first) return;
+        openLinkRef.current?.({
+          token:   first.access_token,
+          sig:     null,
+          env:     null,
+          present: false,
+          coview:  null,
+          rt:      null,
+        });
+      })
+      .catch(() => {});
+  }, [lockInitialised, appLocked, mode]);
   // back into us with onComplete (used if the future native AS bridge
   // is ever implemented inline) or (b) the aspisfile://enrol-complete
   // deep-link arriving from the browser-redirect enrolment (Path B,
@@ -371,6 +458,7 @@ function AppContent() {
         env:     link.env ?? null,
         present: false,
         coview:  null,
+        rt:      null,
       });
     });
 
@@ -407,6 +495,7 @@ function AppContent() {
           env:     link.env ?? null,
           present: false,
           coview:  null,
+          rt:      null,
         });
       })
       .catch(() => {});
