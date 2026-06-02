@@ -265,11 +265,14 @@ function AppContent() {
       // First-time bootstrap path B — Universal Link bypassed the
       // browser bootstrap page entirely (AASA claims /access/* for
       // AspisFile so macOS hands the URL straight to us without rt).
-      // Try to fetch a fresh registration_token from the server. If
-      // recipient is first-time, server returns rt and we silent-enrol.
-      // If recipient is already enrolled (or token invalid), server
-      // returns 404 and we fall back to the manual EnrolmentScreen
-      // where the existing-passkey sign-in button works.
+      // Try to fetch a fresh registration_token from the server.
+      //   - Server returns rt → first-time recipient → silent enrol
+      //   - Server returns 404 → already-enrolled but passkey isn't
+      //     on this device (different iCloud account / Windows /
+      //     different ecosystem). Auto-call request-fresh-code so
+      //     the recipient gets a fresh enrolment code email, and
+      //     drop them into EnrolmentScreen with the email pre-filled
+      //     so they can enter the code without typing the email.
       fetch(`${BASE}/api/v1/access/${params.token}/registration-token`)
         .then(r => r.ok ? r.json() : null)
         .then((j: { registration_token?: string } | null) => {
@@ -277,6 +280,12 @@ function AppContent() {
           if (rt) {
             startAutoEnrolment(params.token, rt);
           } else {
+            // Already enrolled — auto-request a fresh code and drop
+            // into EnrolmentScreen. Best-effort: even if the fresh-
+            // code call fails, the EnrolmentScreen still works (user
+            // can ask sender for a code or use an old one if valid).
+            fetch(`${BASE}/api/v1/access/${params.token}/request-fresh-code`, { method: 'POST' })
+              .catch(() => {});
             setMode("enrol");
           }
         })
