@@ -27,7 +27,40 @@ import {
   type PublicKeyCredentialCreationOptionsJSON,
   type PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/browser';
+import { invoke } from '@tauri-apps/api/core';
 import { saveRecipientSession } from './recipient-session';
+
+// Native AS bridge — macOS only. On Windows the WKWebView2 path still
+// works via simplewebauthn (we don't have an equivalent native bridge).
+// On macOS the in-WebView ceremony is broken (Code=1004 + nil
+// credential) so we route through the AuthenticationServices framework
+// directly via passkey_register / passkey_authenticate commands.
+async function isMacBridge(): Promise<boolean> {
+  try {
+    const platform = await invoke<string>('get_platform');
+    return platform === 'macos';
+  } catch {
+    return false;
+  }
+}
+
+async function bridgeRegister(
+  options: PublicKeyCredentialCreationOptionsJSON,
+): Promise<any> {
+  const responseJson = await invoke<string>('passkey_register', {
+    optionsJson: JSON.stringify(options),
+  });
+  return JSON.parse(responseJson);
+}
+
+async function bridgeAuthenticate(
+  options: PublicKeyCredentialRequestOptionsJSON,
+): Promise<any> {
+  const responseJson = await invoke<string>('passkey_authenticate', {
+    optionsJson: JSON.stringify(options),
+  });
+  return JSON.parse(responseJson);
+}
 
 declare const __API_BASE__: string;
 
@@ -88,10 +121,13 @@ export async function registerPasskey(params: {
   }
   const options: PublicKeyCredentialCreationOptionsJSON = await optionsRes.json();
 
-  // 2. WebView WebAuthn — Touch ID / Windows Hello prompt
+  // 2. WebAuthn ceremony — native AS bridge on macOS (in-window
+  //    Touch ID), simplewebauthn elsewhere (Windows Hello via WKWebView2).
   let credential;
   try {
-    credential = await startRegistration({ optionsJSON: options });
+    credential = (await isMacBridge())
+      ? await bridgeRegister(options)
+      : await startRegistration({ optionsJSON: options });
   } catch (err: any) {
     throw normaliseWebAuthnError(err);
   }
@@ -151,7 +187,9 @@ export async function authenticatePasskey(params: {
 
   let credential;
   try {
-    credential = await startAuthentication({ optionsJSON: options });
+    credential = (await isMacBridge())
+      ? await bridgeAuthenticate(options)
+      : await startAuthentication({ optionsJSON: options });
   } catch (err: any) {
     throw normaliseWebAuthnError(err);
   }
