@@ -34,17 +34,17 @@
     -->
     <!--
         application-identifier + team-identifier are normally
-        auto-injected by Xcode at sign-time. With `codesign
-        --entitlements` from CI they must be declared explicitly,
-        otherwise AuthenticationServices rejects ASAuthorization-
-        Controller calls with:
+        auto-injected by Xcode at sign-time. When signing from CI
+        with the codesign command, they must be declared explicitly,
+        otherwise AuthenticationServices rejects ASAuthorization
+        Controller calls with code 1004 "The calling process does
+        not have an application identifier. Make sure it is properly
+        configured." Both values must match the embedded provisioning
+        profile App ID, which is TEAMID.BUNDLEID. v1.8.0 hit this on
+        the first ceremony; v1.8.2 added them.
 
-          Code=1004 "The calling process does not have an application
-          identifier. Make sure it is properly configured."
-
-        Both values must match the embedded provisioning profile's
-        App ID (TEAMID.BUNDLEID). v1.8.0 hit this on first ceremony;
-        v1.8.2 added them.
+        Note: AMFI plist parser rejects XML comments containing two
+        consecutive hyphens, so this block deliberately avoids them.
     -->
     <key>application-identifier</key>
     <string>37M8KCP95L.com.aspisfile.viewer</string>
