@@ -190,9 +190,12 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
             <input
               type="email"
               value={email}
-              onChange={(e) => { setEmail(e.target.value); setError(""); }}
+              onChange={(e) => { setEmail(e.target.value.toLowerCase()); setError(""); }}
               placeholder="you@example.com"
               style={inputStyle}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               autoFocus
             />
 
@@ -200,9 +203,12 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
             <input
               type="text"
               value={code}
-              onChange={(e) => { setCode(e.target.value); setError(""); }}
+              onChange={(e) => { setCode(e.target.value.toLowerCase()); setError(""); }}
               placeholder="anchor-sunset-7421"
               style={{ ...inputStyle, fontFamily: "Menlo, Monaco, 'Courier New', monospace", letterSpacing: 1 }}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
             />
 
