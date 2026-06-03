@@ -32,6 +32,44 @@ open = "5.3.5"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
 block = "0.1"
+# Native AuthenticationServices bridge for in-window WebAuthn (Phase
+# A+ Stage 8). objc2 family replaces the bare objc 0.2 wrappers with
+# typed bindings + the declare_class! macro we need for the custom
+# ASAuthorizationControllerDelegate. authentication-services crate
+# exposes ASAuthorizationController + the platform-passkey provider.
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = [
+  "NSString",
+  "NSData",
+  "NSDictionary",
+  "NSError",
+  "NSArray",
+  "NSObject",
+  "NSValue",
+] }
+objc2-authentication-services = { version = "0.2", features = [
+  "ASAuthorizationController",
+  "ASAuthorizationPlatformPublicKeyCredentialProvider",
+  "ASAuthorizationPlatformPublicKeyCredentialRegistration",
+  "ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest",
+  "ASAuthorizationPlatformPublicKeyCredentialAssertion",
+  "ASAuthorizationPlatformPublicKeyCredentialAssertionRequest",
+  "ASAuthorizationPlatformPublicKeyCredentialDescriptor",
+  "ASAuthorizationPublicKeyCredentialDescriptor",
+  "ASAuthorizationPublicKeyCredentialAssertion",
+  "ASAuthorizationPublicKeyCredentialRegistration",
+  "ASAuthorizationRequest",
+  "ASAuthorizationCredential",
+  "ASAuthorizationProvider",
+  "ASAuthorization",
+  "ASAuthorizationError",
+] }
+objc2-app-kit = { version = "0.2", features = [
+  "NSWindow",
+  "NSApplication",
+  "NSView",
+] }
+base64 = "0.22"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = ["Security_Credentials_UI", "Foundation"] }

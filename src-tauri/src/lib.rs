@@ -2,6 +2,7 @@ mod security;
 mod commands;
 mod fileassoc;
 mod updater;
+mod passkey;
 
 use tauri::{
     Manager,
@@ -84,6 +85,8 @@ pub fn run() {
             commands::authenticate_biometric,
             fileassoc::read_afs,
             fileassoc::take_pending_afs,
+            passkey::passkey_register,
+            passkey::passkey_authenticate,
         ])
         .build(tauri::generate_context!())
         .expect("AspisFile Viewer failed to start")
