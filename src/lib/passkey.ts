@@ -160,6 +160,18 @@ export async function registerPasskey(params: {
     throw new PasskeyError('server_rejected', verifyJson.error ?? `register-verify ${verifyRes.status}`);
   }
 
+  // Server returns a session token alongside the new passkey id, so
+  // the caller doesn't have to run a second authentication ceremony
+  // (and trigger a second Touch ID prompt) just to mint a session.
+  if (verifyJson.session_token) {
+    saveRecipientSession({
+      email:     verifyJson.email,
+      token:     verifyJson.session_token,
+      passkeyId: verifyJson.passkey_id,
+      expiresIn: verifyJson.expires_in,
+    });
+  }
+
   return { passkeyId: verifyJson.passkey_id };
 }
 

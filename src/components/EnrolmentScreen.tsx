@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { registerPasskey, authenticatePasskey, PasskeyError } from "../lib/passkey";
+import { registerPasskey, PasskeyError } from "../lib/passkey";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -135,15 +135,9 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
       return;
     }
 
-    // 3. Immediately authenticate to mint the session token.
-    try {
-      await authenticatePasskey({ email: cleanEmail });
-    } catch (err: any) {
-      setError("Enrolment succeeded but sign-in failed. Reopen the app.");
-      setPhase("input");
-      return;
-    }
-
+    // registerPasskey already saved the recipient session (server
+    // returns session_token at register-verify), so no second AS
+    // ceremony is needed.
     onComplete?.();
   }
 
