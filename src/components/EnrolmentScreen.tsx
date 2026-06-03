@@ -25,7 +25,7 @@ const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://a
 //   - App.tsx's deep-link handler picks it up, calls saveRecipientSession,
 //     dismisses this screen.
 
-type Phase = "input" | "running" | "waiting_browser";
+type Phase = "input" | "running" | "waiting_browser" | "bridge_failed";
 
 type Props = {
   onComplete?: () => void;
@@ -37,11 +37,16 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
   const [email, setEmail] = useState("");
   const [code,  setCode]  = useState("");
   const [error, setError] = useState("");
+  // Stash the registration token after a successful redeem so that
+  // a bridge failure can fall back to the browser using the SAME rt
+  // — the original code is single-use and already consumed by the
+  // time we know the bridge failed.
+  const [pendingRt, setPendingRt] = useState<string | null>(null);
+  const [bridgeErrorDetail, setBridgeErrorDetail] = useState("");
 
-  async function fallbackToBrowser(cleanEmail: string, cleanCode: string) {
+  async function openBrowserWith(params: Record<string, string>) {
     const url = new URL(`${BASE}/enroll/desktop`);
-    url.searchParams.set("email", cleanEmail);
-    url.searchParams.set("code",  cleanCode);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     try {
       await openUrl(url.toString());
       setPhase("waiting_browser");
@@ -49,6 +54,10 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
       setError("Could not open your browser. Copy and open this link manually: " + url.toString());
       setPhase("input");
     }
+  }
+
+  async function fallbackToBrowser(cleanEmail: string, cleanCode: string) {
+    await openBrowserWith({ email: cleanEmail, code: cleanCode });
   }
 
   async function handleSubmit() {
@@ -92,6 +101,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
         return;
       }
       registrationToken = redeemJson.registration_token;
+      setPendingRt(registrationToken);
     } catch (err: any) {
       setError("Network error. Try again.");
       setPhase("input");
@@ -106,19 +116,22 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
         deviceLabel:       "AspisFile Mac",
       });
     } catch (err: any) {
-      // Cancelled by user — back to the form.
+      // Cancelled by user — back to the form, keep pendingRt so they
+      // can retry in-app or switch to browser without re-redeeming.
       if (err instanceof PasskeyError && err.kind === "cancelled") {
         setError("");
         setPhase("input");
         return;
       }
-      // Bridge failed for any other reason — fall back to browser.
-      // The code is single-use and was already redeemed above, so the
-      // browser flow can't re-use it. Show the user a clean message
-      // and end this attempt; they'll need a fresh code to retry.
+      // Bridge failed for any other reason. Show the underlying error
+      // and offer the browser fallback using the same registration
+      // token (the code is consumed but the rt is still valid for 5min).
+      const detail = err instanceof PasskeyError
+        ? `${err.kind}: ${err.message}`
+        : String(err?.message ?? err ?? "unknown error");
       console.error("[enrolment] native bridge failed:", err);
-      setError("In-app enrolment failed. Please ask the sender for a fresh code and try again.");
-      setPhase("input");
+      setBridgeErrorDetail(detail);
+      setPhase("bridge_failed");
       return;
     }
 
@@ -170,7 +183,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               I have an enrolment code
             </h1>
             <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 24px" }}>
-              Enter your email and the code the sender shared with you. Your browser will open briefly to confirm with Touch ID.
+              Enter your email and the code the sender shared with you. We&apos;ll ask for Touch ID to finish setup.
             </p>
 
             <Label>Email</Label>
@@ -199,7 +212,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               {onCancel && (
                 <button onClick={onCancel} style={btnSecondary}>Cancel</button>
               )}
-              <button onClick={handleSubmit} style={btnPrimary}>Continue in browser</button>
+              <button onClick={handleSubmit} style={btnPrimary}>Continue</button>
             </div>
 
             <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
@@ -225,6 +238,40 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
               Approve the system prompt to finish enrolment.
             </p>
+          </div>
+        )}
+
+        {phase === "bridge_failed" && (
+          <div style={{ padding: "8px 0 0" }}>
+            <h2 style={{ fontSize: 17, fontWeight: 600, color: "#F1F5F9", margin: "0 0 8px" }}>
+              In-window Touch ID didn&apos;t work
+            </h2>
+            <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 14px" }}>
+              We&apos;ll finish in your browser instead — your code is still valid.
+            </p>
+            <pre style={{
+              fontSize: 11, color: "#FCA5A5",
+              background: "rgba(255,255,255,0.04)",
+              padding: 10, borderRadius: 6,
+              border: "0.5px solid rgba(255,255,255,0.10)",
+              overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
+              margin: "0 0 18px",
+            }}>{bridgeErrorDetail || "(no detail)"}</pre>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handleRestart} style={btnSecondary}>Try a different code</button>
+              <button
+                onClick={async () => {
+                  if (pendingRt) {
+                    await openBrowserWith({ email: email.trim().toLowerCase(), rt: pendingRt });
+                  } else {
+                    await fallbackToBrowser(email.trim().toLowerCase(), code.trim());
+                  }
+                }}
+                style={btnPrimary}
+              >
+                Continue in browser
+              </button>
+            </div>
           </div>
         )}
 
