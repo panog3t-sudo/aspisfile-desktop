@@ -33,24 +33,19 @@
           Expires: 2044-05-25
     -->
     <!--
-        application-identifier + team-identifier are normally
-        auto-injected by Xcode at sign-time. When signing from CI
-        with the codesign command, they must be declared explicitly,
-        otherwise AuthenticationServices rejects ASAuthorization
-        Controller calls with code 1004 "The calling process does
-        not have an application identifier. Make sure it is properly
-        configured." Both values must match the embedded provisioning
-        profile App ID, which is TEAMID.BUNDLEID. v1.8.0 hit this on
-        the first ceremony; v1.8.2 added them.
-
-        Note: AMFI plist parser rejects XML comments containing two
-        consecutive hyphens, so this block deliberately avoids them.
+        application-identifier + team-identifier were tried in v1.8.2
+        and v1.8.3 to fix the bridge code 1004 failure. The signature
+        validated at sign-time, but launchd refused to spawn the app
+        on first launch ("AspisFile Viewer can't be opened"). The
+        Developer ID Provisioning Profile we have authorises the
+        associated-domains capability but does not appear to authorise
+        application-identifier as a claimable entitlement when set
+        from a codesign command outside of Xcode. Reverted in v1.8.4.
+        Native bridge stays in v1.8.0+ but the AS framework will keep
+        rejecting it with code 1004 until we sort the signing story.
+        EnrolmentScreen has a one-click browser fallback from v1.8.1
+        so the user is never blocked.
     -->
-    <key>application-identifier</key>
-    <string>37M8KCP95L.com.aspisfile.viewer</string>
-    <key>com.apple.developer.team-identifier</key>
-    <string>37M8KCP95L</string>
-
     <key>com.apple.developer.associated-domains</key>
     <array>
         <string>applinks:aspisfile.com</string>
