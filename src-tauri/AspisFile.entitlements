@@ -33,19 +33,31 @@
           Expires: 2044-05-25
     -->
     <!--
-        application-identifier + team-identifier were tried in v1.8.2
-        and v1.8.3 to fix the bridge code 1004 failure. The signature
-        validated at sign-time, but launchd refused to spawn the app
-        on first launch ("AspisFile Viewer can't be opened"). The
-        Developer ID Provisioning Profile we have authorises the
-        associated-domains capability but does not appear to authorise
-        application-identifier as a claimable entitlement when set
-        from a codesign command outside of Xcode. Reverted in v1.8.4.
-        Native bridge stays in v1.8.0+ but the AS framework will keep
-        rejecting it with code 1004 until we sort the signing story.
-        EnrolmentScreen has a one-click browser fallback from v1.8.1
-        so the user is never blocked.
+        Identity entitlements required by AuthenticationServices.
+
+        v1.8.2 attempted to add these and the app refused to launch
+        because the provisioning profile in use did not authorise
+        them. v1.8.6 ships a regenerated profile that explicitly
+        authorises com.apple.application-identifier,
+        com.apple.developer.team-identifier, the AutoFill Credential
+        Provider capability, and keychain-access-groups.
+
+        Key naming: on macOS the entitlement is
+        com.apple.application-identifier (prefixed). The iOS form
+        application-identifier is wrong here and was what tripped
+        v1.8.2 even before the profile issue. Both keys must match
+        exactly what the embedded provisioning profile authorises,
+        otherwise AMFI rejects the spawn (POSIX 163 / EAUTH).
     -->
+    <key>com.apple.application-identifier</key>
+    <string>37M8KCP95L.com.aspisfile.viewer</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>37M8KCP95L</string>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>37M8KCP95L.com.aspisfile.viewer</string>
+    </array>
+
     <key>com.apple.developer.associated-domains</key>
     <array>
         <string>applinks:aspisfile.com</string>
