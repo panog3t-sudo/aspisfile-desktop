@@ -414,6 +414,12 @@ function AppContent() {
     const replay = pendingLinkRef.current;
     pendingLinkRef.current = null;
     if (replay) {
+      // The user just finished a WebAuthn ceremony in the browser
+      // (Path B). Bump lastBiometricAt so the per-file biometric gate
+      // in openLink() dedups instead of firing a second native Touch
+      // ID prompt. Same proof of presence — no reason to re-prompt
+      // within seconds.
+      recordBiometric();
       openLink(replay);
       return;
     }
