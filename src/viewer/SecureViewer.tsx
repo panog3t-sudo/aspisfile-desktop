@@ -15,6 +15,7 @@ import {
 import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
+import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
 import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
@@ -101,7 +102,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [revoked, setRevoked]         = useState(false);
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
   const [offline, setOffline]         = useState(false);
-  const [error, setError]             = useState<string | null>(null);
+  const [error, setError]             = useState<FriendlyAccessError | null>(null);
   const [locked, setLocked]           = useState(false);
   // Phase 1 Day 9 — pre-approval gate state.
   // pendingApprovalId is set when /mobile/access returns status:
@@ -310,7 +311,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setRecipient(r);
         if (r.legal_accepted) setLegalAccepted(true);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => setError(translateAccessError(e.message)));
   }, [token, sig, env]);
 
   // Step 2: start session after legal acceptance — uses mobile/desktop token-auth route
@@ -345,19 +346,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        if (body.error === 'BINDING_REQUIRED') {
-          // Should be unreachable — App.tsx routes un-enrolled link
-          // arrivals to EnrolmentScreen before mounting the viewer.
-          // Surfaces if the recipient's 8h session token expired
-          // between mount and now, or if storage was cleared.
-          setError('This device is not enrolled. Close this window and tap "Enrol" from the home screen.');
-          return;
-        }
-        if (body.error === 'RECIPIENT_MISMATCH') {
-          setError('This file was shared with a different email. Sign in with the recipient account.');
-          return;
-        }
-        setError(body.error || `Session start failed (${res.status})`);
+        // Translate the raw server code into a friendly title + body
+        // here so RevokedScreen just renders the pre-built shape.
+        setError(translateAccessError(body.error || `Session start failed (${res.status})`));
         return;
       }
 
@@ -412,7 +403,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         }, token);
         if (trackPages) startPageTracking(data.session_id, file.id, token);
       }
-    })().catch((e: Error) => setError(e.message));
+    })().catch((e: Error) => setError(translateAccessError(e.message)));
   }, [legalAccepted, file, token, sig, env]);
 
   // Sprint 3 — track unique pages seen for session_ended.pages_viewed_count.
@@ -691,7 +682,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, []);
 
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
-  if (error)                          return <RevokedScreen reason={error} isError />;
+  if (error)                          return <RevokedScreen friendly={error} />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
   if (!legalAccepted)                 return <LegalOverlay file={file} onAccept={() => setLegalAccepted(true)} />;
   // Offline overlay — solid black with reconnect copy. session_key is
@@ -908,7 +899,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           }}
           onCancel={() => {
             setDelegationApprovalId(null);
-            setError("Cancelled. Close this window and contact the sender if this was unexpected.");
+            setError({
+              title: "Open request cancelled",
+              body:  "You cancelled this open request. Open the file again from your email to try once more.",
+              code:  "CLIENT_APPROVAL_CANCEL",
+            });
           }}
         />
       )}
