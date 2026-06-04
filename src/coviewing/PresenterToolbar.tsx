@@ -24,10 +24,15 @@ interface PresenterToolbarProps {
   // it can also size the document area (panel pushes TileRenderer width)
   panelOpen:   boolean;
   onTogglePanel: () => void;
+  // The sender email behind this presenter-token open. Surfaced as a
+  // "Presenting as …" chip so the user can tell at a glance that the
+  // viewer is running off an owner-token, not whichever recipient
+  // happens to be enrolled on this Mac.
+  presenterEmail?: string;
 }
 
 export function PresenterToolbar({
-  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel,
+  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail,
 }: PresenterToolbarProps) {
   const [stopping,     setStopping]     = useState(false);
   const [linkCopied,   setLinkCopied]   = useState(false);
@@ -102,6 +107,31 @@ export function PresenterToolbar({
       <span style={{ fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 10, background: '#1D4ED8', color: '#FFFFFF', flexShrink: 0 }}>
         {CONTEXT_LABEL[context]} · {mode === 'synchronized' ? 'Sync' : 'Free'}
       </span>
+
+      {/* Presenter identity chip — shows the sender email behind the
+          owner-token so it's obvious the open isn't using whatever
+          recipient is enrolled on this Mac. */}
+      {presenterEmail && (
+        <span
+          title={`Presenting as ${presenterEmail}`}
+          style={{
+            fontSize: 10,
+            fontWeight: 500,
+            padding: '2px 8px',
+            borderRadius: 10,
+            background: 'rgba(255,255,255,0.08)',
+            color: 'rgba(255,255,255,0.85)',
+            border: '0.5px solid rgba(255,255,255,0.15)',
+            flexShrink: 0,
+            maxWidth: 220,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          Presenting as {presenterEmail}
+        </span>
+      )}
 
       {/* Page controls */}
       <button onClick={() => changePage(currentPage - 1)} disabled={currentPage <= 1} style={navBtnStyle(currentPage <= 1)}>‹</button>

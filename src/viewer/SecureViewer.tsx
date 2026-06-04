@@ -821,6 +821,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onStop={() => setPresenterSession(null)}
           panelOpen={participantPanelOpen}
           onTogglePanel={() => setParticipantPanelOpen(o => !o)}
+          presenterEmail={recipient?.email}
         />
       )}
 
