@@ -563,9 +563,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
   // Auto-join when arriving from a co-viewing session deep link
   useEffect(() => {
+    console.log('[coview-debug] SecureViewer auto-join effect:', {
+      coviewSessionId: coviewSessionId?.slice(0,8) ?? null,
+      hasRecipient: !!recipient,
+      hasFile: !!file,
+      sessionId: sessionId?.slice(0,8) ?? null,
+      activeCoViewSessionId: activeCoViewSessionId?.slice(0,8) ?? null,
+    });
     if (!coviewSessionId) return;
     if (!recipient || !file || !sessionId) return;
     if (activeCoViewSessionId) return;
+    console.log('[coview-debug] SecureViewer: calling joinCoViewingSession');
     joinCoViewingSession(coviewSessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coviewSessionId, recipient, file, sessionId, activeCoViewSessionId]);
@@ -589,6 +597,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [activeCoViewSessionId, presenterSession, currentPage, token]);
 
   async function joinCoViewingSession(sessId: string) {
+    console.log('[coview-debug] joinCoViewingSession start:', sessId.slice(0,8));
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessId}/join`, {
         method: 'POST',
@@ -599,7 +608,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         },
       });
 
+      console.log('[coview-debug] join response status:', res.status);
       if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.log('[coview-debug] join failed body:', body.slice(0, 200));
         setCoViewingBanner(null);
         return;
       }

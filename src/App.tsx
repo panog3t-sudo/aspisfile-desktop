@@ -248,6 +248,15 @@ function AppContent() {
   const drainedAfsRef = useRef(false);
 
   async function openLink(params: ViewerParams) {
+    console.log('[coview-debug] openLink:', {
+      token: params.token?.slice(0,8),
+      coview: params.coview?.slice(0,8) ?? null,
+      rt: params.rt ? 'present' : null,
+      present: params.present,
+      hasSession: !!getActiveSessionToken(),
+      appLocked,
+      lastBiometricAt,
+    });
     // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
     // open files. The server enforces this via BINDING_REQUIRED 403 if
     // no Bearer is present; we do the client-side route here so the
@@ -255,6 +264,7 @@ function AppContent() {
     // can replay the link after entering their enrolment code.
     if (!getActiveSessionToken()) {
       pendingLinkRef.current = params;
+      console.log('[coview-debug] openLink: no session, stashed pendingLinkRef with coview =', params.coview?.slice(0,8) ?? null);
       // First-time bootstrap path A — deep link carries a registration
       // token (rt) from /access/<token>'s server-rendered bootstrap
       // page. Skip EnrolmentScreen entirely.
@@ -413,6 +423,11 @@ function AppContent() {
   function completeEnrolment() {
     const replay = pendingLinkRef.current;
     pendingLinkRef.current = null;
+    console.log('[coview-debug] completeEnrolment:', {
+      hasReplay: !!replay,
+      replayCoview: replay?.coview?.slice(0,8) ?? null,
+      replayToken: replay?.token?.slice(0,8) ?? null,
+    });
     if (replay) {
       // The user just finished a WebAuthn ceremony in the browser
       // (Path B). Bump lastBiometricAt so the per-file biometric gate
@@ -423,6 +438,7 @@ function AppContent() {
       openLink(replay);
       return;
     }
+    console.log('[coview-debug] completeEnrolment: no replay, setMode(idle)');
     setMode("idle");
   }
 
@@ -446,6 +462,7 @@ function AppContent() {
     // app setup arrive before this listener is registered and are lost.
     getCurrent()
       .then(async (urls) => {
+        console.log('[coview-debug] getCurrent resolved:', urls);
         if (cancelled || !urls || urls.length === 0) return;
         // Surface the window before any URL processing — gives the
         // browser-side detection a deterministic focus-shift to read.
@@ -453,10 +470,10 @@ function AppContent() {
         // Path B browser-redirect enrolment returning back to us with
         // a fresh session token. Save + complete enrolment + replay
         // any buffered share-link.
-        if (tryHandleEnrolComplete(urls[0])) { completeEnrolment(); return; }
+        if (tryHandleEnrolComplete(urls[0])) { console.log('[coview-debug] getCurrent: matched enrol-complete'); completeEnrolment(); return; }
         if (await tryHandleOAuthCallback(urls[0])) return;
         const params = extractFromUrl(urls[0]);
-        if (params) openLink(params);
+        if (params) { console.log('[coview-debug] getCurrent: routing to openLink'); openLink(params); }
       })
       .catch(() => {});
 
@@ -468,12 +485,13 @@ function AppContent() {
     // aspisfile:// URL arrives, the plugin invokes this callback. Same
     // window-focus dance as cold-start: surface before processing.
     const unlistenDeepLinkPromise = onOpenUrl(async (urls) => {
+      console.log('[coview-debug] onOpenUrl:', urls);
       if (cancelled || urls.length === 0) return;
       await bringWindowToFront();
-      if (tryHandleEnrolComplete(urls[0])) { completeEnrolment(); return; }
+      if (tryHandleEnrolComplete(urls[0])) { console.log('[coview-debug] onOpenUrl: matched enrol-complete'); completeEnrolment(); return; }
       if (await tryHandleOAuthCallback(urls[0])) return;
       const params = extractFromUrl(urls[0]);
-      if (params) openLink(params);
+      if (params) { console.log('[coview-debug] onOpenUrl: routing to openLink'); openLink(params); }
     });
 
     // Phase A close-out — .afs file double-click runtime handler. Only
