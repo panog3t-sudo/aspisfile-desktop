@@ -333,17 +333,37 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       // so an expired session (8h TTL) surfaces a useful message.
       const sessionToken = getActiveSessionToken();
 
-      const res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-App-Platform": "desktop",
-          "X-Desktop-OS": platform,
-          "User-Agent": navigator.userAgent,
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-        },
-        body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint }),
-      });
+      // 15s timeout so a stalled /mobile/access surfaces as an error
+      // instead of an infinite "Authenticating…" spinner. Real calls
+      // complete in well under a second; anything past 15s is the
+      // server being unreachable or genuinely stuck.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+      let res: Response;
+      try {
+        res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-App-Platform": "desktop",
+            "X-Desktop-OS": platform,
+            "User-Agent": navigator.userAgent,
+            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+          },
+          body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint }),
+          signal: controller.signal,
+        });
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        if (err?.name === 'AbortError') {
+          setError(translateAccessError('TIMEOUT'));
+        } else {
+          setError(translateAccessError(err?.message ?? 'Network error'));
+        }
+        return;
+      }
+      clearTimeout(timeoutId);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -505,6 +525,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             end_reason:         reason,
           },
         }, token);
+        // Tell the server the viewer is closed so the viewer_session
+        // row gets marked terminated immediately. Without this, the
+        // row stays status='active' until cron sweep (~5 min) and the
+        // presenter's PresenterParticipantPanel keeps showing this
+        // viewer as live because Supabase Realtime presence
+        // occasionally lingers past unsubscribe.
+        await fetch(`${__API_BASE__}/api/v1/viewer/${finalFileId}/close`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ session_id: finalSessionId }),
+        }).catch(() => {});
       })().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

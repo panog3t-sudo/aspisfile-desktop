@@ -43,6 +43,9 @@ const MAP: Record<string, { title: string; body: string }> = {
   'FILE_INTEGRITY_CHECK_FAILED':    { title: 'File withdrawn',      body: 'This file failed an integrity check and was withdrawn. Ask the sender to upload it again.' },
   'INTEGRITY_VERIFICATION_FAILED':  { title: 'Verification problem', body: "We couldn't verify this file. Please try again in a moment." },
   'INVALID_FINGERPRINT':            { title: 'Device changed',      body: 'This device looks different from when you enrolled. Sign in again to refresh.' },
+
+  // Client-side conditions surfaced by the desktop viewer fetch wrapper.
+  'TIMEOUT':                        { title: 'Taking too long',     body: 'The server didn\'t respond in time. Check your connection and try opening the file again.' },
 };
 
 export function translateAccessError(raw: unknown): FriendlyAccessError {

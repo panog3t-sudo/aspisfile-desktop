@@ -187,6 +187,23 @@ export function PresenterParticipantPanel({
         });
       },
     });
+    // Server-side guest_left broadcast (fired by /viewer/<fileId>/close
+    // when the closing viewer_session had a co_viewing_participant_id).
+    // Authoritative belt-and-braces over Supabase Realtime presence,
+    // which sometimes leaves the local presenceState cache stale on
+    // a remote disconnect — the presenter would otherwise see the
+    // guest as "live" until the next panel re-mount.
+    ch.on('broadcast', { event: 'guest_left' }, ({ payload }: { payload?: { email?: string } }) => {
+      const email = payload?.email?.toLowerCase();
+      if (!email) return;
+      const ts = Date.now();
+      setGone(prev => ({ ...prev, [email]: { at: ts } }));
+      setPresence(prev => {
+        const next = { ...prev };
+        delete next[email];
+        return next;
+      });
+    });
     ch.subscribe();
     return () => {
       channelRef.current = null;
