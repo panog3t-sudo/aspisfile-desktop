@@ -81,7 +81,15 @@ export function CoViewingRecipient({
         } as RecipientPresence);
       }
     });
-    return () => { supabase.removeChannel(ch); };
+    return () => {
+      // Explicit untrack flushes presence_leave to the channel
+      // synchronously. Without this, the presenter's strikethrough
+      // sometimes takes the full Supabase heartbeat timeout (30-60s)
+      // to drop the entry. removeChannel alone is meant to deliver
+      // the leave but the broadcast can race the disconnect.
+      ch.untrack().catch(() => {});
+      supabase.removeChannel(ch);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel]);
 
