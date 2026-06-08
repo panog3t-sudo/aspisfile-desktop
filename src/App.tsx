@@ -509,7 +509,12 @@ function AppContent() {
       // ID prompt. Same proof of presence — no reason to re-prompt
       // within seconds.
       recordBiometric();
-      openLink(replay);
+      // Route via openLinkRef so we get the LATEST openLink closure
+      // (with current lockInitialised, lastBiometricAt). Direct
+      // openLink(replay) here captures the mount-time closure of the
+      // deep-link useEffect that invokes us — at mount, lockInitialised
+      // was false, so the call would just re-stash.
+      openLinkRef.current?.(replay);
       return;
     }
     debugLog('coview', 'completeEnrolment no replay → setMode(idle)');
@@ -547,7 +552,7 @@ function AppContent() {
         if (tryHandleEnrolComplete(urls[0])) { debugLog('coview', 'getCurrent: matched enrol-complete'); completeEnrolment(); return; }
         if (await tryHandleOAuthCallback(urls[0])) return;
         const params = extractFromUrl(urls[0]);
-        if (params) { debugLog('coview', 'getCurrent → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLink(params); }
+        if (params) { debugLog('coview', 'getCurrent → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLinkRef.current?.(params); }
       })
       .catch(() => {});
 
@@ -565,7 +570,7 @@ function AppContent() {
       if (tryHandleEnrolComplete(urls[0])) { debugLog('coview', 'onOpenUrl: matched enrol-complete'); completeEnrolment(); return; }
       if (await tryHandleOAuthCallback(urls[0])) return;
       const params = extractFromUrl(urls[0]);
-      if (params) { debugLog('coview', 'onOpenUrl → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLink(params); }
+      if (params) { debugLog('coview', 'onOpenUrl → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLinkRef.current?.(params); }
     });
 
     // Phase A close-out — .afs file double-click runtime handler. Only
