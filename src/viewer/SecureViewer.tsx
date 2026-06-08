@@ -16,6 +16,7 @@ import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
+import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
 import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
@@ -563,7 +564,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
   // Auto-join when arriving from a co-viewing session deep link
   useEffect(() => {
-    console.log('[coview-debug] SecureViewer auto-join effect:', {
+    debugLog('coview', 'SV auto-join effect', {
       coviewSessionId: coviewSessionId?.slice(0,8) ?? null,
       hasRecipient: !!recipient,
       hasFile: !!file,
@@ -573,7 +574,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     if (!coviewSessionId) return;
     if (!recipient || !file || !sessionId) return;
     if (activeCoViewSessionId) return;
-    console.log('[coview-debug] SecureViewer: calling joinCoViewingSession');
+    debugLog('coview', 'SV → joinCoViewingSession');
     joinCoViewingSession(coviewSessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coviewSessionId, recipient, file, sessionId, activeCoViewSessionId]);
@@ -597,7 +598,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [activeCoViewSessionId, presenterSession, currentPage, token]);
 
   async function joinCoViewingSession(sessId: string) {
-    console.log('[coview-debug] joinCoViewingSession start:', sessId.slice(0,8));
+    debugLog('coview', 'join start', { sessId: sessId.slice(0,8) });
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessId}/join`, {
         method: 'POST',
@@ -608,10 +609,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         },
       });
 
-      console.log('[coview-debug] join response status:', res.status);
+      debugLog('coview', 'join response', { status: res.status });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
-        console.log('[coview-debug] join failed body:', body.slice(0, 200));
+        debugLog('coview', 'join failed', { body: body.slice(0, 200) });
         setCoViewingBanner(null);
         return;
       }
