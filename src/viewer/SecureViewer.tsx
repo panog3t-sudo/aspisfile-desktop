@@ -249,6 +249,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [currentPage, setCurrentPage] = useState(1);
   // Step 10d — channel returned by /co-viewing/join, used by CoViewingRecipient.
   const [coViewingChannel, setCoViewingChannel] = useState<string | null>(null);
+  // Sprint 8 — per-participant free scroll permission. Initial value
+  // comes from /co-viewing/<id>/join; live updates from broadcasts
+  // arrive inside CoViewingRecipient itself.
+  const [freeScrollGranted, setFreeScrollGranted] = useState(false);
 
   const canPresent = file?.is_owner === true;
 
@@ -658,6 +662,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       setFollowingPresenter(true);
       setCoViewingBanner(null);
       setCoViewingJoinedAt(new Date().toISOString());
+      setFreeScrollGranted(!!data.free_scroll_granted);
       if (typeof data.current_page === 'number') setCurrentPage(data.current_page);
     } catch {
       setCoViewingBanner(null);
@@ -885,6 +890,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onSetFollowing={setFollowingPresenter}
           onScrollChange={(s) => setSubscribedScroll(s)}
           onZoomChange={(z) => setCurrentZoom(z.zoomIndex)}
+          sessionId={activeCoViewSessionId}
+          accessToken={token}
+          freeScrollGranted={freeScrollGranted}
         />
       )}
 

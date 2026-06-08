@@ -26,6 +26,8 @@ interface ParticipantRow {
   joined_at:       string;
   access_type:     'permanent' | 'session_only';
   last_seen_page:  number;
+  free_scroll_granted:      boolean;
+  free_scroll_requested_at: string | null;
 }
 
 interface PresenceRow {
@@ -204,6 +206,19 @@ export function PresenterParticipantPanel({
         return next;
       });
     });
+    // Sprint 8 — recipient asked for a permission. Optimistically
+    // update the roster row so the presenter sees the pending badge
+    // before the next /participants poll. The poll itself converges
+    // the canonical state.
+    ch.on('broadcast', { event: 'permission_request' }, ({ payload }: { payload?: { email?: string; type?: string; requested_at?: string } }) => {
+      const email = payload?.email?.toLowerCase();
+      if (!email || payload?.type !== 'free_scroll') return;
+      setRoster(prev => prev.map(r =>
+        r.recipient_email.toLowerCase() === email
+          ? { ...r, free_scroll_requested_at: payload.requested_at ?? new Date().toISOString() }
+          : r,
+      ));
+    });
     ch.subscribe();
     return () => {
       channelRef.current = null;
@@ -235,6 +250,29 @@ export function PresenterParticipantPanel({
     return () => clearInterval(iv);
   }, []);
 
+  // Sprint 8 — Grant/revoke free scroll. Optimistic update on the
+  // local roster row; the /participants poll converges canonical state.
+  async function setFreeScroll(email: string, granted: boolean) {
+    setRoster(prev => prev.map(r =>
+      r.recipient_email.toLowerCase() === email.toLowerCase()
+        ? { ...r, free_scroll_granted: granted, free_scroll_requested_at: null }
+        : r,
+    ));
+    try {
+      await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/grant-permission`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':   'application/json',
+          'X-App-Platform': 'desktop',
+          'X-Access-Token': token,
+        },
+        body: JSON.stringify({ recipient_email: email, type: 'free_scroll', granted }),
+      });
+    } catch {
+      // Best-effort — the next poll will correct any drift.
+    }
+  }
+
   const rows = roster.map(r => {
     const emailKey = r.recipient_email.toLowerCase();
     const pres     = presence[emailKey];
@@ -242,14 +280,16 @@ export function PresenterParticipantPanel({
     const isLive   = !!pres && !goneAt;
     const flashAt  = recentJoin[emailKey];
     return {
-      email:        r.recipient_email,
-      joinedAt:     r.joined_at,
-      accessType:   r.access_type,
-      page:         pres?.page ?? r.last_seen_page,
-      following:    pres?.following,
+      email:                    r.recipient_email,
+      joinedAt:                 r.joined_at,
+      accessType:               r.access_type,
+      page:                     pres?.page ?? r.last_seen_page,
+      following:                pres?.following,
       isLive,
       goneAt,
-      isFlashing:   !!flashAt && Date.now() - flashAt < 3000,
+      isFlashing:               !!flashAt && Date.now() - flashAt < 3000,
+      freeScrollGranted:        r.free_scroll_granted,
+      freeScrollRequestedAt:    r.free_scroll_requested_at,
     };
   }).sort((a, b) => {
     if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
@@ -337,6 +377,10 @@ export function PresenterParticipantPanel({
               isFlashing={r.isFlashing}
               goneAt={r.goneAt}
               presenterPage={currentPage}
+              freeScrollGranted={r.freeScrollGranted}
+              freeScrollRequestedAt={r.freeScrollRequestedAt}
+              onGrantFreeScroll={() => setFreeScroll(r.email, true)}
+              onRevokeFreeScroll={() => setFreeScroll(r.email, false)}
             />
           ))
         )}
@@ -355,16 +399,24 @@ function RowView({
   isFlashing,
   goneAt,
   presenterPage,
+  freeScrollGranted,
+  freeScrollRequestedAt,
+  onGrantFreeScroll,
+  onRevokeFreeScroll,
 }: {
-  email:         string;
-  joinedAt:      string;
-  accessType:    'permanent' | 'session_only';
-  page:          number;
-  following?:    boolean;
-  isLive:        boolean;
-  isFlashing:    boolean;
-  goneAt:        number | null;
-  presenterPage: number;
+  email:                   string;
+  joinedAt:                string;
+  accessType:              'permanent' | 'session_only';
+  page:                    number;
+  following?:              boolean;
+  isLive:                  boolean;
+  isFlashing:              boolean;
+  goneAt:                  number | null;
+  presenterPage:           number;
+  freeScrollGranted:       boolean;
+  freeScrollRequestedAt:   string | null;
+  onGrantFreeScroll:       () => void;
+  onRevokeFreeScroll:      () => void;
 }) {
   const initials  = email.slice(0, 2).toUpperCase();
   const bg        = colorFromEmail(email);
@@ -442,6 +494,33 @@ function RowView({
         </p>
       </div>
 
+      {/* Permission controls — only relevant while live */}
+      {isLive && (
+        <>
+          {freeScrollRequestedAt && !freeScrollGranted && (
+            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+              <button
+                onClick={onGrantFreeScroll}
+                title={`Grant free scroll to ${email}`}
+                style={permBtnStyle('grant')}
+              >Grant</button>
+              <button
+                onClick={onRevokeFreeScroll}
+                title="Dismiss the request"
+                style={permBtnStyle('deny')}
+              >Deny</button>
+            </div>
+          )}
+          {freeScrollGranted && (
+            <button
+              onClick={onRevokeFreeScroll}
+              title={`Revoke free scroll from ${email}`}
+              style={permBtnStyle('revoke')}
+            >Revoke</button>
+          )}
+        </>
+      )}
+
       {/* Page badge */}
       <span
         title={isLive ? (onSame ? 'On your page' : `Viewing page ${page}`) : `Last seen on page ${page}`}
@@ -459,6 +538,27 @@ function RowView({
       </span>
     </div>
   );
+}
+
+function permBtnStyle(kind: 'grant' | 'deny' | 'revoke'): React.CSSProperties {
+  const palette = {
+    grant:  { bg: 'rgba(134,239,172,0.18)', fg: '#86EFAC', border: 'rgba(134,239,172,0.4)' },
+    deny:   { bg: 'rgba(255,255,255,0.06)', fg: 'rgba(255,255,255,0.6)', border: 'rgba(255,255,255,0.15)' },
+    revoke: { bg: 'rgba(252,165,165,0.16)', fg: '#FCA5A5', border: 'rgba(252,165,165,0.4)' },
+  }[kind];
+  return {
+    flexShrink:   0,
+    fontSize:     10,
+    fontWeight:   500,
+    padding:      '3px 8px',
+    borderRadius: 8,
+    background:   palette.bg,
+    color:        palette.fg,
+    border:       `0.5px solid ${palette.border}`,
+    cursor:       'pointer',
+    fontFamily:   FONT,
+    whiteSpace:   'nowrap',
+  };
 }
 
 function elapsedLabel(isoStart: string): string {

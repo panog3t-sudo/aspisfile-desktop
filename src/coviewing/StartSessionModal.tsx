@@ -22,7 +22,9 @@ interface StartSessionModalProps {
 }
 
 export function StartSessionModal({ fileId, fileName, token, onStart, onClose }: StartSessionModalProps) {
-  const [mode,       setMode]       = useState<'synchronized' | 'free'>('synchronized');
+  // Sprint 8 — sessions always start synchronized. Per-participant
+  // free scroll is granted on request via the new permission flow.
+  const mode: 'synchronized' = 'synchronized';
   const [context,   setContext]     = useState<'standalone' | 'teams' | 'zoom'>('standalone');
   const [guests,    setGuests]      = useState<string[]>([]);
   const [guestInput, setGuestInput] = useState('');
@@ -150,13 +152,10 @@ export function StartSessionModal({ fileId, fileName, token, onStart, onClose }:
           </button>
         </div>
 
-        {/* Viewing mode */}
-        <FieldLabel label="Viewing mode" />
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {(['synchronized', 'free'] as const).map(m => (
-            <ModeChip key={m} label={m === 'synchronized' ? 'Synchronized' : 'Free scroll'} active={mode === m} onClick={() => setMode(m)} />
-          ))}
-        </div>
+        {/* Viewing mode picker removed in Sprint 8 — every session
+            now starts in synchronized (follow) mode. Recipients ask
+            for free scroll per-participant via the request/grant flow
+            in CoViewingRecipient + PresenterParticipantPanel. */}
 
         {/* Context */}
         <FieldLabel label="Context" />

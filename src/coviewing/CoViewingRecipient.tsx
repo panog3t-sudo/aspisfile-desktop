@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import {
   createCoViewingChannel,
@@ -14,29 +14,27 @@ interface CoViewingRecipientProps {
   channel:        string;
   mode:           'synchronized' | 'free';
   following:      boolean;
-  // Recipient identity + page state — published as Realtime presence so
-  // the presenter's participant panel can render live status (page,
-  // follow mode, joined/left).
   email:          string;
   currentPage:    number;
-  joinedAt:       string; // ISO from the moment /join succeeded
+  joinedAt:       string;
   onPageChange:   (page: number) => void;
   onSessionEnd:   () => void;
   onSetFollowing: (following: boolean) => void;
-  // Scroll + zoom mirror callbacks. Fire when the presenter broadcasts
-  // a change; SecureViewer updates its state and TileRenderer applies
-  // it (only when followingPresenter — free-mode recipients ignore).
   onScrollChange?: (s: ScrollChangePayload) => void;
   onZoomChange?:   (z: ZoomChangePayload)   => void;
+  // Sprint 8 — free scroll request/grant/revoke
+  sessionId:      string;     // for the request-permission POST
+  accessToken:    string;     // X-Access-Token header
+  freeScrollGranted: boolean; // from /participants poll
 }
 
-// Bottom-of-viewer pill shown to recipients in a synchronized session.
-// Two-cell segmented control — the active cell is highlighted; clicking
-// the other cell switches mode.
-//
-// In addition to UI, this component subscribes to the co-viewing channel
-// and tracks Realtime presence so the presenter sees this recipient as
-// live with their current page + follow mode.
+type PermissionUiState =
+  | 'idle'              // no permission, no pending request
+  | 'requesting'        // POST in flight
+  | 'pending'           // request sent, awaiting presenter
+  | 'granted'           // permission active — can toggle Free
+  | 'revoked-just-now'; // brief flash when presenter revokes
+
 export function CoViewingRecipient({
   channel,
   mode,
@@ -49,6 +47,9 @@ export function CoViewingRecipient({
   onSetFollowing,
   onScrollChange,
   onZoomChange,
+  sessionId,
+  accessToken,
+  freeScrollGranted,
 }: CoViewingRecipientProps) {
   const followingRef     = useRef(following);
   followingRef.current   = following;
@@ -57,57 +58,124 @@ export function CoViewingRecipient({
   const onZoomRef        = useRef(onZoomChange);
   onZoomRef.current      = onZoomChange;
 
-  // One channel object for the lifetime of this component. Subscribes
-  // for broadcasts (presenter page sync, session end) AND tracks the
-  // recipient's presence. The channel auto-publishes presence_leave on
-  // teardown.
+  const [permState, setPermState] = useState<PermissionUiState>(
+    freeScrollGranted ? 'granted' : 'idle',
+  );
+
+  // Keep UI state in sync with the authoritative DB-backed flag from
+  // the participants poll. Resets pending → granted when presenter
+  // confirms via broadcast, OR via the next 10s poll.
+  useEffect(() => {
+    if (freeScrollGranted) {
+      setPermState('granted');
+    } else {
+      setPermState(prev => (prev === 'pending' || prev === 'requesting') ? prev : 'idle');
+    }
+  }, [freeScrollGranted]);
+
   useEffect(() => {
     const ch = createCoViewingChannel(channel);
     attachBroadcasts(ch, {
       onPageChange: (page) => { if (followingRef.current) onPageChange(page); },
       onSessionEnd: () => onSessionEnd(),
-      // Scroll + zoom mirror only while following. Free-mode recipients
-      // ignore presenter scroll/zoom and navigate independently.
       onScrollChange: (s) => { if (followingRef.current) onScrollRef.current?.(s); },
       onZoomChange:   (z) => { if (followingRef.current) onZoomRef.current?.(z); },
     });
+    // Sprint 8 — listen for presenter grant/deny. Only react to events
+    // addressed to OUR email (the channel is shared across guests).
+    ch.on('broadcast', { event: 'permission_changed' }, ({ payload }: { payload?: { email?: string; type?: string; granted?: boolean } }) => {
+      if (!payload || payload.email?.toLowerCase() !== email.toLowerCase()) return;
+      if (payload.type !== 'free_scroll') return;
+      if (payload.granted) {
+        setPermState('granted');
+      } else {
+        setPermState('revoked-just-now');
+        onSetFollowing(true);
+        setTimeout(() => {
+          setPermState(prev => prev === 'revoked-just-now' ? 'idle' : prev);
+        }, 1500);
+      }
+    });
     ch.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
-        await ch.track({
-          email,
-          page:      currentPage,
-          following,
-          joined_at: joinedAt,
-        } as RecipientPresence);
+        await ch.track({ email, page: currentPage, following, joined_at: joinedAt } as RecipientPresence);
       }
     });
     return () => {
-      // Explicit untrack flushes presence_leave to the channel
-      // synchronously. Without this, the presenter's strikethrough
-      // sometimes takes the full Supabase heartbeat timeout (30-60s)
-      // to drop the entry. removeChannel alone is meant to deliver
-      // the leave but the broadcast can race the disconnect.
       ch.untrack().catch(() => {});
       supabase.removeChannel(ch);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel]);
 
-  // Re-publish presence whenever page or following changes. The track
-  // helper merges into the existing presence entry so the presenter sees
-  // an update instantly via presence_sync.
   useEffect(() => {
     const ch = supabase.getChannels().find(c => c.topic === `realtime:${channel}`);
     if (!ch) return;
-    ch.track({
-      email,
-      page:      currentPage,
-      following,
-      joined_at: joinedAt,
-    } as RecipientPresence).catch(() => {});
+    ch.track({ email, page: currentPage, following, joined_at: joinedAt } as RecipientPresence).catch(() => {});
   }, [channel, email, currentPage, following, joinedAt]);
 
+  async function requestFreeScroll() {
+    if (permState === 'requesting' || permState === 'pending' || permState === 'granted') return;
+    setPermState('requesting');
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/request-permission`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':   'application/json',
+          'X-App-Platform': 'desktop',
+          'X-Access-Token': accessToken,
+        },
+        body: JSON.stringify({ type: 'free_scroll' }),
+      });
+      if (!res.ok) {
+        setPermState('idle');
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      setPermState(data.already_granted ? 'granted' : 'pending');
+    } catch {
+      setPermState('idle');
+    }
+  }
+
   if (mode === 'free') return null;
+
+  // Recipient can ALWAYS choose to follow (no permission needed).
+  // The free-scroll segment is gated:
+  //   idle       → "Request free scroll" (button outlined)
+  //   requesting → "Requesting…" (disabled)
+  //   pending    → "Waiting for approval…" (disabled, dimmed amber)
+  //   granted    → "Scroll freely" (toggles like the follow segment)
+  //   revoked-just-now → brief "Returned to follow" flash, then idle
+  const freeChip = (() => {
+    switch (permState) {
+      case 'granted':
+        return (
+          <SegmentBtn
+            active={!following}
+            onClick={() => onSetFollowing(false)}
+            label="Scroll freely"
+            icon={<FreeScrollIcon />}
+          />
+        );
+      case 'requesting':
+        return <SegmentBtn active={false} onClick={() => {}} label="Requesting…" icon={<FreeScrollIcon />} disabled />;
+      case 'pending':
+        return <SegmentBtn active={false} onClick={() => {}} label="Waiting for approval" icon={<FreeScrollIcon />} disabled amber />;
+      case 'revoked-just-now':
+        return <SegmentBtn active={false} onClick={() => {}} label="Returned to follow" icon={<FreeScrollIcon />} disabled />;
+      case 'idle':
+      default:
+        return (
+          <SegmentBtn
+            active={false}
+            onClick={requestFreeScroll}
+            label="Request free scroll"
+            icon={<FreeScrollIcon />}
+          />
+        );
+    }
+  })();
 
   return (
     <div style={{
@@ -136,17 +204,16 @@ export function CoViewingRecipient({
           </svg>
         }
       />
-      <SegmentBtn
-        active={!following}
-        onClick={() => onSetFollowing(false)}
-        label="Scroll freely"
-        icon={
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M7 7l-4 5 4 5"/><path d="M17 7l4 5-4 5"/><line x1="3" y1="12" x2="21" y2="12"/>
-          </svg>
-        }
-      />
+      {freeChip}
     </div>
+  );
+}
+
+function FreeScrollIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 7l-4 5 4 5"/><path d="M17 7l4 5-4 5"/><line x1="3" y1="12" x2="21" y2="12"/>
+    </svg>
   );
 }
 
@@ -155,15 +222,22 @@ function SegmentBtn({
   onClick,
   label,
   icon,
+  disabled,
+  amber,
 }: {
-  active:  boolean;
-  onClick: () => void;
-  label:   string;
-  icon:    React.ReactNode;
+  active:    boolean;
+  onClick:   () => void;
+  label:     string;
+  icon:      React.ReactNode;
+  disabled?: boolean;
+  amber?:    boolean;
 }) {
+  const baseColor   = active ? '#FFFFFF' : amber ? '#FBBF24' : 'rgba(255,255,255,0.55)';
+  const baseBg      = active ? '#1D4ED8' : 'transparent';
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
         display:        'flex',
         alignItems:     'center',
@@ -171,18 +245,21 @@ function SegmentBtn({
         padding:        '5px 12px',
         borderRadius:   18,
         border:         'none',
-        cursor:         active ? 'default' : 'pointer',
-        background:     active ? '#1D4ED8' : 'transparent',
-        color:          active ? '#FFFFFF' : 'rgba(255,255,255,0.55)',
+        cursor:         disabled ? 'default' : active ? 'default' : 'pointer',
+        background:     baseBg,
+        color:          baseColor,
         fontSize:       11,
         fontWeight:     500,
         fontFamily:     FONT,
         whiteSpace:     'nowrap',
+        opacity:        disabled ? 0.85 : 1,
         transition:     'background 0.12s ease, color 0.12s ease',
       }}
     >
       {icon}
-      {label}
+      <span style={{ pointerEvents: 'none' }}>{label}</span>
     </button>
   );
 }
+
+declare const __API_BASE__: string;
