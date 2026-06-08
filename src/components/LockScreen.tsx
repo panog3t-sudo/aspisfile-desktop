@@ -95,14 +95,16 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     }
   };
 
-  // Auto-prompt biometric on mount + window-focus regain. Window
-  // focus retry exists because the OS biometric prompt is modal
-  // outside the Tauri webview; once dismissed, focus returns here.
+  // Auto-prompt biometric on mount only. Earlier this also re-fired
+  // on every window-focus event so cold-start launches caught the
+  // OS biometric dialog correctly. Side-effect: cancelling Touch ID
+  // returns focus to the window → focus handler re-fires → Touch ID
+  // pops again, trapping the user in a prompt loop. They had to
+  // cancel several times before falling through to PIN. Now we only
+  // auto-attempt once on mount; if the user cancels, the manual
+  // "Use Touch ID" button (further down this screen) is the way back.
   useEffect(() => {
     attemptBiometric();
-    const handleFocus = () => { if (status !== "verifying") attemptBiometric(); };
-    window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canUseBiometric]);
 

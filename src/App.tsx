@@ -277,7 +277,23 @@ function AppContent() {
       present: params.present,
       hasSession: !!getActiveSessionToken(),
       appLocked,
+      lockInitialised,
     });
+    // Wait for LockProvider to finish reading setupComplete from
+    // local storage. On cold-start the deep-link arrives before
+    // LockProvider initialises — appLocked is still its default
+    // false, so openLink falls through to the per-file biometric
+    // gate and fires Touch ID #1. Half a second later LockProvider
+    // sets appLocked=true and LockScreen renders over the viewer,
+    // demanding Touch ID #2. Stash here and let the lock-replay
+    // effect re-fire once initialisation is done; the freshly-
+    // recorded biometric from LockScreen will dedup the per-file
+    // gate so the user sees ONE prompt instead of two.
+    if (!lockInitialised) {
+      pendingLinkRef.current = params;
+      debugLog('coview', 'openLink !lockInitialised → stashed', { coview: params.coview?.slice(0,8) ?? null });
+      return;
+    }
     // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
     // open files. The server enforces this via BINDING_REQUIRED 403 if
     // no Bearer is present; we do the client-side route here so the
@@ -393,11 +409,13 @@ function AppContent() {
   useEffect(() => {
     debugLog('coview', 'lock-replay effect fired', {
       appLocked,
+      lockInitialised,
       hasPending: !!pendingLinkRef.current,
       pendingCoview: pendingLinkRef.current?.coview?.slice(0,8) ?? null,
       hasSession: !!getActiveSessionToken(),
       lastBiometricAt,
     });
+    if (!lockInitialised) return;
     if (appLocked) return;
     const replay = pendingLinkRef.current;
     if (!replay) return;
@@ -415,7 +433,7 @@ function AppContent() {
     // for replay is fine, no stale-closure risk because openLink
     // reads lastBiometricAt at call time from the LockContext.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appLocked]);
+  }, [appLocked, lockInitialised]);
 
   // Auto-resume after a sender approval granted while away. Cold-
   // start path: recipient has a valid session, no deep-link being
