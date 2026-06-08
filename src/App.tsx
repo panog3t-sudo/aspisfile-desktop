@@ -345,7 +345,14 @@ function AppContent() {
     // the app within the last 30s (BIOMETRIC_FRESH_MS). That single
     // verification proves presence for both "unlock the app" and
     // "open this file" as one logical action — no double Touch ID.
-    if (Date.now() - lastBiometricAt < BIOMETRIC_FRESH_MS) {
+    const sinceLast = Date.now() - lastBiometricAt;
+    debugLog('coview', 'per-file gate', {
+      lastBiometricAt,
+      sinceLast,
+      freshMs: BIOMETRIC_FRESH_MS,
+      dedupPass: sinceLast < BIOMETRIC_FRESH_MS,
+    });
+    if (sinceLast < BIOMETRIC_FRESH_MS) {
       setViewerParams(params);
       setMode("viewer");
       return;
@@ -356,12 +363,16 @@ function AppContent() {
     // flight. Without this, openLink could fire authenticate_biometric
     // concurrent with LockScreen's, same crash scenario as mobile.
     if (!tryBeginBiometric()) {
+      debugLog('coview', 'per-file gate: tryBeginBiometric failed');
       return;
     }
+    debugLog('coview', 'per-file gate: invoking authenticate_biometric');
     try {
       await invoke<void>("authenticate_biometric");
       recordBiometric();
-    } catch {
+      debugLog('coview', 'per-file gate: biometric ok');
+    } catch (err) {
+      debugLog('coview', 'per-file gate: biometric err', { err: String(err) });
       return;
     } finally {
       endBiometric();
@@ -380,6 +391,13 @@ function AppContent() {
   // enrolment flow (different cause, same buffering pattern) —
   // completeEnrolment handles that branch.
   useEffect(() => {
+    debugLog('coview', 'lock-replay effect fired', {
+      appLocked,
+      hasPending: !!pendingLinkRef.current,
+      pendingCoview: pendingLinkRef.current?.coview?.slice(0,8) ?? null,
+      hasSession: !!getActiveSessionToken(),
+      lastBiometricAt,
+    });
     if (appLocked) return;
     const replay = pendingLinkRef.current;
     if (!replay) return;
@@ -391,6 +409,7 @@ function AppContent() {
     // session ready (post-enrol).
     if (!getActiveSessionToken()) return;
     pendingLinkRef.current = null;
+    debugLog('coview', 'lock-replay → openLink');
     openLink(replay);
     // openLink is intentionally not a useCallback — capturing here
     // for replay is fine, no stale-closure risk because openLink
