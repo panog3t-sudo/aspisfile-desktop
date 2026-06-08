@@ -65,12 +65,32 @@ function extractFromUrl(url: string): ViewerParams | null {
       }
     }
 
-    // Token can be in pathname (/access/[token]) for universal links,
-    // OR in a query param (?token=...) for aspisfile://open?token=X deep links.
-    let token: string | undefined;
-    const pathnameParts = parsed.pathname.split("/access/");
-    if (pathnameParts[1]) {
-      token = pathnameParts[1].split("?")[0].split("/")[0];
+    // Three URL shapes to recognise:
+    //
+    //   /access/<token>?sig=…&env=…
+    //     Standard share link. Universal Link or web → browser fallback.
+    //
+    //   aspisfile://open?token=…&coview=…&rt=…
+    //     Custom-scheme deep link, fired by browser-side AppRequiredScreen
+    //     or FirstTimeBootstrap once they detect AspisFile is installed.
+    //
+    //   /coview/<sessionId>?t=<token>
+    //     Co-viewing join link. AASA claims /coview/* so macOS hands
+    //     this URL straight to AspisFile, bypassing the browser-side
+    //     AppRequiredScreen that would otherwise re-shape it into the
+    //     aspisfile:// form. Without translation here, openLink never
+    //     fires and the recipient sits on IdleScreen (v1.8.11/v1.8.12
+    //     trace).
+    let token:  string | undefined;
+    let coview: string | null = parsed.searchParams.get("coview");
+    const coviewParts = parsed.pathname.split("/coview/");
+    const accessParts = parsed.pathname.split("/access/");
+    if (coviewParts[1]) {
+      // Universal Link coview shape: token is in ?t=, session in path.
+      coview = coviewParts[1].split("?")[0].split("/")[0];
+      token  = parsed.searchParams.get("t") ?? undefined;
+    } else if (accessParts[1]) {
+      token = accessParts[1].split("?")[0].split("/")[0];
     } else {
       token = parsed.searchParams.get("token") ?? undefined;
     }
@@ -81,7 +101,7 @@ function extractFromUrl(url: string): ViewerParams | null {
       sig:     parsed.searchParams.get("sig"),
       env:     parsed.searchParams.get("env"),
       present: parsed.searchParams.get("present") === "true",
-      coview:  parsed.searchParams.get("coview"),
+      coview,
       rt:      parsed.searchParams.get("rt"),
     };
   } catch {
