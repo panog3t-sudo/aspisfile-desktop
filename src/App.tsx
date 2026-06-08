@@ -299,7 +299,14 @@ function AppContent() {
     // no Bearer is present; we do the client-side route here so the
     // un-enrolled user lands on a useful screen (EnrolmentScreen) and
     // can replay the link after entering their enrolment code.
-    if (!getActiveSessionToken()) {
+    //
+    // Owner-token flows (present=true from "Present this file" on the
+    // dashboard) are exempt — the X-Access-Token header IS the auth,
+    // and the /mobile/access route skips the binding check when
+    // is_owner_token=true. Without this exemption, a presenter whose
+    // recipient session has expired hits enrolment instead of mounting
+    // the viewer for their own file.
+    if (!params.present && !getActiveSessionToken()) {
       pendingLinkRef.current = params;
       debugLog('coview', 'openLink no session → stashed pendingLinkRef', { coview: params.coview?.slice(0,8) ?? null });
       // First-time bootstrap path A — deep link carries a registration
@@ -424,8 +431,10 @@ function AppContent() {
     // explicit completeEnrolment via the deep-link return; it
     // sets pendingLinkRef but expects the explicit completion
     // call to consume it. We only replay when we have a viewer
-    // session ready (post-enrol).
-    if (!getActiveSessionToken()) return;
+    // session ready (post-enrol). Owner-token (present=true) flows
+    // skip this — they're authed by the X-Access-Token header, not
+    // a recipient passkey session.
+    if (!replay.present && !getActiveSessionToken()) return;
     pendingLinkRef.current = null;
     debugLog('coview', 'lock-replay → openLink');
     openLink(replay);
