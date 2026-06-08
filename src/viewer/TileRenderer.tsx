@@ -23,7 +23,6 @@ type Props = {
   file: FileInfo;
   recipient?: RecipientInfo;
   totalPages: number;
-  onClose: () => void;
   onLock: () => void;
   // Co-viewing page sync — both optional, no behaviour change when unset
   targetPage?: number;
@@ -75,7 +74,7 @@ const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
 });
 
 export function TileRenderer({
-  sessionId, fileId, file, totalPages, onClose, onLock,
+  sessionId, fileId, file, totalPages, onLock,
   targetPage, onCurrentPageChange, onPresent, followMode,
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
   onDownload, downloadState,
@@ -260,15 +259,12 @@ export function TileRenderer({
           gap: 12,
         }}
       >
-        {/* Left: close button + file name */}
+        {/* Left: lock button + file name.
+            Doc-level close (X) removed — the native window close
+            button does the same thing (unmounts SecureViewer, fires
+            /close, terminates the viewer_session) and having two
+            close affordances was confusing recipients. */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
-          <button
-            onClick={() => { sessionStore.clear(); onClose(); }}
-            title="Close document"
-            style={toolbarBtnStyle(false)}
-          >
-            ✕
-          </button>
           <button
             onClick={onLock}
             title="Lock viewer"

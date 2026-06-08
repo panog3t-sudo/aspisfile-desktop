@@ -504,6 +504,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => {
       if (sessionEndedFiredRef.current) return;
       sessionEndedFiredRef.current = true;
+      // Doc-X removed in v1.8.18; window close is the only close path
+      // now. Clear the in-memory session key here so it doesn't
+      // outlive the viewer (matching what the doc-X used to do).
+      sessionStore.clear();
       const finalSessionId = sessionId;
       const finalFileId    = file.id;
       const lastPage       = currentPage;
@@ -812,7 +816,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             fileId={file.id}
             file={file}
             totalPages={totalPages}
-            onClose={onClose}
             onLock={() => setLocked(true)}
             targetPage={currentPage}
             onCurrentPageChange={setCurrentPage}
