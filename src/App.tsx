@@ -426,15 +426,22 @@ function AppContent() {
     if (appLocked) return;
     const replay = pendingLinkRef.current;
     if (!replay) return;
-    // Only replay if the buffered link is for opening a viewer
-    // (not for completeEnrolment). The enrolment flow needs
-    // explicit completeEnrolment via the deep-link return; it
-    // sets pendingLinkRef but expects the explicit completion
-    // call to consume it. We only replay when we have a viewer
-    // session ready (post-enrol). Owner-token (present=true) flows
-    // skip this — they're authed by the X-Access-Token header, not
-    // a recipient passkey session.
-    if (!replay.present && !getActiveSessionToken()) return;
+    // Always re-run openLink with the buffered params. It handles all
+    // three cases itself:
+    //   - has session                → mount the viewer
+    //   - no session, recipient link → kick off the auto-enrolment
+    //                                  flow (request fresh code →
+    //                                  setMode('enrol'))
+    //   - present=true               → per-file biometric → viewer
+    //
+    // Previously this effect short-circuited when getActiveSessionToken
+    // returned null, which trapped first-time recipients (or any
+    // recipient with an expired session) on the IdleScreen — openLink
+    // had stashed pendingLinkRef during !lockInitialised, lock-replay
+    // bailed because no session, and the enrolment branch inside
+    // openLink never ran. completeEnrolment's pendingLinkRef = null
+    // before it re-runs openLink already prevents the racing-with-
+    // completeEnrolment scenario the old guard was guarding against.
     pendingLinkRef.current = null;
     debugLog('coview', 'lock-replay → openLink');
     openLink(replay);
