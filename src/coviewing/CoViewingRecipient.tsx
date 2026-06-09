@@ -25,7 +25,11 @@ interface CoViewingRecipientProps {
   // Sprint 8 — free scroll request/grant/revoke
   sessionId:      string;     // for the request-permission POST
   accessToken:    string;     // X-Access-Token header
-  freeScrollGranted: boolean; // from /participants poll
+  freeScrollGranted: boolean; // from /join response (initial value)
+  // Bubble grant/revoke broadcasts up to SecureViewer so the
+  // freeScrollGranted state and following mode stay in sync without
+  // the prop going stale.
+  onFreeScrollChanged: (granted: boolean) => void;
 }
 
 type PermissionUiState =
@@ -50,6 +54,7 @@ export function CoViewingRecipient({
   sessionId,
   accessToken,
   freeScrollGranted,
+  onFreeScrollChanged,
 }: CoViewingRecipientProps) {
   const followingRef     = useRef(following);
   followingRef.current   = following;
@@ -86,8 +91,15 @@ export function CoViewingRecipient({
     ch.on('broadcast', { event: 'permission_changed' }, ({ payload }: { payload?: { email?: string; type?: string; granted?: boolean } }) => {
       if (!payload || payload.email?.toLowerCase() !== email.toLowerCase()) return;
       if (payload.type !== 'free_scroll') return;
+      // Tell the parent FIRST so freeScrollGranted prop updates and
+      // the local useEffect on [freeScrollGranted] doesn't revert
+      // permState based on the now-stale prop value.
+      onFreeScrollChanged(!!payload.granted);
       if (payload.granted) {
         setPermState('granted');
+        // Auto-flip the recipient out of follow mode so they don't
+        // have to click "Scroll freely" themselves after the grant.
+        onSetFollowing(false);
       } else {
         setPermState('revoked-just-now');
         onSetFollowing(true);

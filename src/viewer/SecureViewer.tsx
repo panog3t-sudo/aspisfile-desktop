@@ -893,6 +893,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           sessionId={activeCoViewSessionId}
           accessToken={token}
           freeScrollGranted={freeScrollGranted}
+          onFreeScrollChanged={setFreeScrollGranted}
         />
       )}
 
