@@ -694,13 +694,21 @@ function AppContent() {
 // being viewed.
 function AppWithLockOverlay() {
   const { locked, unlock } = useLock();
+  // DebugOverlay is wired and ready but hidden by default. To turn on
+  // for cross-platform / cross-user testing, open devtools and run:
+  //   localStorage.setItem('aspisfile_debug_overlay', '1'); location.reload();
+  // To turn off again: localStorage.removeItem('aspisfile_debug_overlay').
+  // Keep the import + debugLog call sites in source — no rebuild needed
+  // to flip the flag during a live test session.
+  const showDebug = (() => {
+    try { return localStorage.getItem('aspisfile_debug_overlay') === '1'; }
+    catch { return false; }
+  })();
   return (
     <>
       <AppContent />
       {locked && <LockScreen onUnlock={unlock} />}
-      {/* Tracing the co-view IdleScreen bug — overlay shows every
-          debugLog call in order. Remove when the bug is resolved. */}
-      <DebugOverlay />
+      {showDebug && <DebugOverlay />}
     </>
   );
 }

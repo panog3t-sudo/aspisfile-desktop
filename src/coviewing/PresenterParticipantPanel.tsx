@@ -468,40 +468,43 @@ function RowView({
     ? `Left ${new Date(goneAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
     : null;
 
+  const showFreeRow    = isLive && (freeScrollGranted    || !!freeScrollRequestedAt);
+  const showControlRow = isLive && (pointerControlGranted || !!pointerControlRequestedAt);
+
   return (
     <div style={{
-      display:      'flex',
-      gap:          10,
-      alignItems:   'center',
-      padding:      '8px 10px',
-      borderRadius: 6,
-      marginBottom: 4,
-      background:   isFlashing ? 'rgba(134,239,172,0.10)' : 'transparent',
-      border:       isFlashing ? '0.5px solid rgba(134,239,172,0.6)' : '0.5px solid transparent',
-      opacity:      isLive ? 1 : 0.45,
-      transition:   'background 0.2s ease, opacity 0.2s ease, border-color 0.2s ease',
+      display:        'flex',
+      flexDirection:  'column',
+      gap:            4,
+      padding:        '8px 10px',
+      borderRadius:   6,
+      marginBottom:   4,
+      background:     isFlashing ? 'rgba(134,239,172,0.10)' : 'transparent',
+      border:         isFlashing ? '0.5px solid rgba(134,239,172,0.6)' : '0.5px solid transparent',
+      opacity:        isLive ? 1 : 0.45,
+      transition:     'background 0.2s ease, opacity 0.2s ease, border-color 0.2s ease',
     }}>
-      {/* Avatar */}
-      <span style={{
-        flexShrink:     0,
-        width:          28,
-        height:         28,
-        borderRadius:   '50%',
-        background:     bg,
-        color:          '#FFFFFF',
-        display:        'flex',
-        alignItems:     'center',
-        justifyContent: 'center',
-        fontSize:       10,
-        fontWeight:     600,
-        letterSpacing:  0.4,
-      }}>
-        {initials}
-      </span>
-
-      {/* Email + secondary line */}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      {/* Top row: avatar + email + page badge. Always present. */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <span style={{
+          flexShrink:     0,
+          width:          24,
+          height:         24,
+          borderRadius:   '50%',
+          background:     bg,
+          color:          '#FFFFFF',
+          display:        'flex',
+          alignItems:     'center',
+          justifyContent: 'center',
+          fontSize:       10,
+          fontWeight:     600,
+          letterSpacing:  0.4,
+        }}>
+          {initials}
+        </span>
         <p style={{
+          flex:           1,
+          minWidth:       0,
           fontSize:       12,
           fontWeight:     500,
           color:          'rgba(255,255,255,0.9)',
@@ -513,35 +516,51 @@ function RowView({
         }}>
           {email}
         </p>
-        <p style={{
-          fontSize:     10,
-          color:        'rgba(255,255,255,0.5)',
-          margin:       '2px 0 0',
-          whiteSpace:   'nowrap',
-          overflow:     'hidden',
-          textOverflow: 'ellipsis',
-        }}>
-          {leftLabel ?? (
-            <>
-              {isLive ? elapsedLabel(joinedAt) : '—'}
-              {accessType === 'session_only' && (
-                <span style={{ color: 'rgba(255,255,255,0.4)' }}> · guest</span>
-              )}
-              {isLive && following !== undefined && (
-                <span style={{ color: following ? '#93C5FD' : 'rgba(255,255,255,0.5)' }}>
-                  {' · '}{following ? 'Following' : 'Free'}
-                </span>
-              )}
-            </>
-          )}
-        </p>
+        <span
+          title={isLive ? (onSame ? 'On your page' : `Viewing page ${page}`) : `Last seen on page ${page}`}
+          style={{
+            flexShrink:   0,
+            fontSize:     10,
+            color:        onSame ? '#86EFAC' : '#FDE68A',
+            background:   onSame ? 'rgba(134,239,172,0.12)' : 'rgba(253,230,138,0.12)',
+            padding:      '2px 7px',
+            borderRadius: 9,
+            fontWeight:   500,
+          }}
+        >
+          p{page}
+        </span>
       </div>
 
-      {/* Permission controls — only relevant while live. Stacked
-          vertically so both permission rows fit when both are active
-          without blowing out row width on long emails. */}
-      {isLive && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0, alignItems: 'flex-end' }}>
+      {/* Status line — joined / left / guest / Following. Always present. */}
+      <p style={{
+        fontSize:     10,
+        color:        'rgba(255,255,255,0.5)',
+        margin:       '0 0 0 34px',   // align under email (avatar 24 + gap 10)
+        whiteSpace:   'nowrap',
+        overflow:     'hidden',
+        textOverflow: 'ellipsis',
+      }}>
+        {leftLabel ?? (
+          <>
+            {isLive ? elapsedLabel(joinedAt) : '—'}
+            {accessType === 'session_only' && (
+              <span style={{ color: 'rgba(255,255,255,0.4)' }}> · guest</span>
+            )}
+            {isLive && following !== undefined && (
+              <span style={{ color: following ? '#93C5FD' : 'rgba(255,255,255,0.5)' }}>
+                {' · '}{following ? 'Following' : 'Free'}
+              </span>
+            )}
+          </>
+        )}
+      </p>
+
+      {/* Permission rows — only rendered when there's something to
+          show (pending request OR granted). Indented under the email
+          so they scan visually as "belonging to" this participant. */}
+      {showFreeRow && (
+        <div style={{ marginLeft: 34 }}>
           <PermControls
             label="scroll"
             requestedAt={freeScrollRequestedAt}
@@ -549,6 +568,10 @@ function RowView({
             email={email}
             onSet={(g) => onSetPermission('free_scroll', g)}
           />
+        </div>
+      )}
+      {showControlRow && (
+        <div style={{ marginLeft: 34 }}>
           <PermControls
             label="control"
             requestedAt={pointerControlRequestedAt}
@@ -558,22 +581,6 @@ function RowView({
           />
         </div>
       )}
-
-      {/* Page badge */}
-      <span
-        title={isLive ? (onSame ? 'On your page' : `Viewing page ${page}`) : `Last seen on page ${page}`}
-        style={{
-          flexShrink:   0,
-          fontSize:     10,
-          color:        onSame ? '#86EFAC' : '#FDE68A',
-          background:   onSame ? 'rgba(134,239,172,0.12)' : 'rgba(253,230,138,0.12)',
-          padding:      '2px 7px',
-          borderRadius: 9,
-          fontWeight:   500,
-        }}
-      >
-        p{page}
-      </span>
     </div>
   );
 }
@@ -585,10 +592,22 @@ function PermControls({ label, requestedAt, granted, email, onSet }: {
   email:       string;
   onSet:       (granted: boolean) => void;
 }) {
+  // Fixed-width label column so scroll: and control: line up
+  // vertically when both rows are visible. Buttons sit to the right
+  // of the label in a stable order.
+  const labelStyle: React.CSSProperties = {
+    fontSize:     9,
+    fontWeight:   500,
+    color:        granted ? 'rgba(134,239,172,0.85)' : 'rgba(255,255,255,0.5)',
+    width:        52,
+    flexShrink:   0,
+    textTransform:'uppercase',
+    letterSpacing: 0.4,
+  };
   if (requestedAt && !granted) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', marginRight: 2 }}>{label}:</span>
+        <span style={labelStyle}>{label}</span>
         <button onClick={() => onSet(true)}  title={`Grant ${label} to ${email}`} style={permBtnStyle('grant')}>Grant</button>
         <button onClick={() => onSet(false)} title="Dismiss the request"          style={permBtnStyle('deny')}>Deny</button>
       </div>
@@ -597,7 +616,7 @@ function PermControls({ label, requestedAt, granted, email, onSet }: {
   if (granted) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={{ fontSize: 9, color: 'rgba(134,239,172,0.7)', marginRight: 2 }}>{label}:</span>
+        <span style={labelStyle}>{label}</span>
         <button onClick={() => onSet(false)} title={`Revoke ${label} from ${email}`} style={permBtnStyle('revoke')}>Revoke</button>
       </div>
     );
