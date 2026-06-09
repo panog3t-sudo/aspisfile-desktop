@@ -247,6 +247,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       if (page === null) return;
       setCurrentPage(page);
     });
+    // Mirror controller scrolls. Recipient with pointer_control
+    // broadcasts on 'scroll_change' (same event the presenter would
+    // normally publish on); we subscribe so the presenter view
+    // follows the controller. Edge case: if presenter ever scrolls
+    // themselves while broadcasting, self=false on this channel
+    // suppresses the echo, so we won't fight our own publishes.
+    ch.on('broadcast', { event: 'scroll_change' }, ({ payload }: { payload?: { v?: number; h?: number } }) => {
+      const p = payload;
+      if (!p) return;
+      const v = typeof p.v === 'number' ? p.v : 0;
+      const h = typeof p.h === 'number' ? p.h : 0;
+      setSubscribedScroll({ v, h });
+    });
     // Track who currently holds pointer_control so the "Controlled by"
     // chip can render. Server-side mutex guarantees only one
     // recipient at a time, so we can clobber on each event without a
@@ -757,13 +770,23 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [currentZoom, presenterSession?.sessionId, presenterSession?.mode]);
 
   // Scroll-publish callback for TileRenderer — fires (throttled inside
-  // TileRenderer) when the presenter scrolls. No-op when no presenter
-  // pub channel is available (i.e., recipient side).
+  // TileRenderer) when the presenter scrolls, OR when a recipient
+  // holding pointer_control scrolls. The presenter side has its own
+  // channel (presenterPubChannelRef); the recipient side uses the
+  // already-mounted CoViewingRecipient channel looked up by topic.
+  // Same broadcast event in both cases so every party in follow mode
+  // mirrors whoever is currently driving.
   const handlePublishScroll = useCallback((s: { v: number; h: number }) => {
-    const ch = presenterPubChannelRef.current;
-    if (!ch) return;
-    broadcastScroll(ch, s);
-  }, []);
+    const presCh = presenterPubChannelRef.current;
+    if (presCh) {
+      broadcastScroll(presCh, s);
+      return;
+    }
+    if (pointerControlGranted && coViewingChannel) {
+      const ch = supabase.getChannels().find(c => c.topic === `realtime:${coViewingChannel}`);
+      if (ch) broadcastScroll(ch, s);
+    }
+  }, [pointerControlGranted, coViewingChannel]);
 
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen friendly={error} />;
@@ -861,17 +884,29 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
             onPresent={canPresent && !presenterSession ? () => setShowStartModal(true) : undefined}
-            // Co-viewing recipient + Follow → mirror the presenter
-            // exactly (no zoom controls, no manual scroll, no page
-            // navigation; subscribedScroll drives the scroll position).
-            followMode={!!activeCoViewSessionId && followingPresenter}
-            // Presenter side: publish scroll on user interaction.
-            // Recipient side: this is undefined → TileRenderer's onScroll
-            // is a no-op for publish purposes.
-            onPublishScroll={presenterSession ? handlePublishScroll : undefined}
-            // Recipient side: apply scroll programmatically when the
-            // presenter publishes.
-            subscribedScroll={activeCoViewSessionId && followingPresenter ? subscribedScroll : null}
+            // Lock manual scroll + zoom when any of these are true:
+            //  - Recipient is following the presenter (existing behaviour)
+            //  - Presenter has handed control to a recipient (Phase 2a:
+            //    presenter mirrors the controller; if presenter could
+            //    also scroll, the two would fight)
+            followMode={
+              (!!activeCoViewSessionId && followingPresenter)
+              || (!!presenterSession && !!currentControllerEmail)
+            }
+            // Publish scroll when this client is currently driving:
+            //  - presenterSession   → presenter publishes (default)
+            //  - pointerControlGranted → recipient with control publishes
+            onPublishScroll={
+              (presenterSession || pointerControlGranted) ? handlePublishScroll : undefined
+            }
+            // Apply scroll programmatically when we're not driving:
+            //  - recipient + following → mirror presenter
+            //  - presenter + controlled → mirror controller
+            subscribedScroll={
+              (activeCoViewSessionId && followingPresenter && subscribedScroll)
+              || (presenterSession && currentControllerEmail && subscribedScroll)
+              || null
+            }
             // Sprint 2 — recipient .afs download. Prop omitted entirely
             // for owners / disabled / already-deleted-blob so the button
             // does not render at all (per state-machine §1.2).
