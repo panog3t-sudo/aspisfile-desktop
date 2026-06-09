@@ -150,6 +150,34 @@ export function CoViewingRecipient({
     }
   }
 
+  // Recipient clicked "Follow presenter" while permission is granted —
+  // treat this as voluntarily handing the permission back. The next
+  // time they want free scroll they'll request it again. Without this,
+  // the presenter's Revoke button stays on indefinitely even though
+  // Andrew is no longer using the permission.
+  async function releaseFreeScroll() {
+    onSetFollowing(true);
+    // Optimistic local update so the UI flips even if the network is
+    // slow; broadcast from the server is the canonical sync signal
+    // (it lands as permission_changed{granted:false} on both sides).
+    setPermState('idle');
+    onFreeScrollChanged(false);
+    try {
+      await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/release-permission`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':   'application/json',
+          'X-App-Platform': 'desktop',
+          'X-Access-Token': accessToken,
+        },
+        body: JSON.stringify({ type: 'free_scroll' }),
+      });
+    } catch {
+      // Best-effort — the participants poll on the presenter side
+      // will eventually converge if the broadcast was lost.
+    }
+  }
+
   if (mode === 'free') return null;
 
   // Recipient can ALWAYS choose to follow (no permission needed).
@@ -208,7 +236,18 @@ export function CoViewingRecipient({
     }}>
       <SegmentBtn
         active={following}
-        onClick={() => onSetFollowing(true)}
+        onClick={() => {
+          // While permission is granted, clicking Follow also gives
+          // the permission back to the presenter — otherwise their
+          // Revoke button would linger after the recipient stopped
+          // using free scroll. When not granted, this is just a
+          // regular follow toggle.
+          if (permState === 'granted') {
+            releaseFreeScroll();
+          } else {
+            onSetFollowing(true);
+          }
+        }}
         label="Follow presenter"
         icon={
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
