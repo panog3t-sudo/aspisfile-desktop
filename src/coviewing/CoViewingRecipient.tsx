@@ -28,6 +28,9 @@ interface CoViewingRecipientProps {
   pointerControlGranted: boolean;
   onFreeScrollChanged:     (granted: boolean) => void;
   onPointerControlChanged: (granted: boolean) => void;
+  // Incoming cursor from another participant (typically the
+  // presenter). null when no cursor is currently in view.
+  onRemoteCursor?: (c: { email: string; page: number; xRatio: number; yRatio: number } | null) => void;
 }
 
 type PermState =
@@ -59,13 +62,16 @@ export function CoViewingRecipient({
   pointerControlGranted,
   onFreeScrollChanged,
   onPointerControlChanged,
+  onRemoteCursor,
 }: CoViewingRecipientProps) {
-  const followingRef     = useRef(following);
-  followingRef.current   = following;
-  const onScrollRef      = useRef(onScrollChange);
-  onScrollRef.current    = onScrollChange;
-  const onZoomRef        = useRef(onZoomChange);
-  onZoomRef.current      = onZoomChange;
+  const followingRef       = useRef(following);
+  followingRef.current     = following;
+  const onScrollRef        = useRef(onScrollChange);
+  onScrollRef.current      = onScrollChange;
+  const onZoomRef          = useRef(onZoomChange);
+  onZoomRef.current        = onZoomChange;
+  const onRemoteCursorRef  = useRef(onRemoteCursor);
+  onRemoteCursorRef.current = onRemoteCursor;
 
   const [freeScrollState, setFreeScrollState] = useState<PermState>(
     freeScrollGranted ? 'granted' : 'idle',
@@ -98,6 +104,36 @@ export function CoViewingRecipient({
       onZoomChange:   (z) => { if (followingRef.current) onZoomRef.current?.(z); },
     });
 
+    // Presenter cursor broadcast (and any other party's cursor on
+    // this channel). Only surface to the UI while we're in Follow
+    // mode — when we're scrolling freely or driving the doc, the
+    // presenter's cursor would be pointing at content we're not
+    // looking at, which is more confusing than helpful.
+    // Filter out our own cursor echoes (the controller scenario:
+    // CoViewingRecipient's parent is the controller and also sends
+    // to this channel; self-broadcast may still arrive depending on
+    // channel config).
+    ch.on('broadcast', { event: 'controller_cursor' }, ({ payload }: { payload?: { email?: string; page?: number; xRatio?: number; yRatio?: number } }) => {
+      const p = payload;
+      if (!p || !p.email) return;
+      if (p.email.toLowerCase() === email.toLowerCase()) return; // echo of our own
+      if (!followingRef.current) {
+        // Once we leave follow, drop any cursor that may already be
+        // on screen so it doesn't linger over content we've scrolled
+        // past.
+        onRemoteCursorRef.current?.(null);
+        return;
+      }
+      const page    = typeof p.page === 'number'   ? p.page   : null;
+      const xRatio  = typeof p.xRatio === 'number' ? p.xRatio : null;
+      const yRatio  = typeof p.yRatio === 'number' ? p.yRatio : null;
+      if (page === null || xRatio === null || yRatio === null) return;
+      if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) {
+        onRemoteCursorRef.current?.(null);
+        return;
+      }
+      onRemoteCursorRef.current?.({ email: p.email, page, xRatio, yRatio });
+    });
     ch.on('broadcast', { event: 'permission_changed' }, ({ payload }: { payload?: { email?: string; type?: string; granted?: boolean } }) => {
       if (!payload || payload.email?.toLowerCase() !== email.toLowerCase()) return;
       const granted = !!payload.granted;

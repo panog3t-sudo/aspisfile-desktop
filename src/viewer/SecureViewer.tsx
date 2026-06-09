@@ -320,6 +320,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [controllerCursor, setControllerCursor] = useState<{
     page: number; xRatio: number; yRatio: number; email: string; at: number;
   } | null>(null);
+  // Symmetric — latest cursor position from the presenter, surfaced
+  // to the recipient when in Follow mode. Same render component
+  // (ControllerCursor); same auto-decay rules. Populated by the
+  // CoViewingRecipient via onRemoteCursor; CoViewingRecipient itself
+  // gates on followingRef so this only fills while we're following.
+  const [remoteCursor, setRemoteCursor] = useState<{
+    page: number; xRatio: number; yRatio: number; email: string; at: number;
+  } | null>(null);
 
   const canPresent = file?.is_owner === true;
 
@@ -807,6 +815,26 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => window.clearTimeout(t);
   }, [controllerCursor]);
 
+  // Same auto-decay for the recipient-side remote cursor.
+  useEffect(() => {
+    if (!remoteCursor) return;
+    const remaining = 500 - (Date.now() - remoteCursor.at);
+    if (remaining <= 0) { setRemoteCursor(null); return; }
+    const t = window.setTimeout(() => {
+      setRemoteCursor(prev => prev && Date.now() - prev.at >= 500 ? null : prev);
+    }, remaining);
+    return () => window.clearTimeout(t);
+  }, [remoteCursor]);
+
+  // Drop any cursor on screen as soon as we leave follow mode (e.g.
+  // user clicks "Request free scroll" or grabs pointer control). The
+  // CoViewingRecipient broadcast listener also filters incoming
+  // cursors when not following, but anything already in state needs
+  // to be cleared here.
+  useEffect(() => {
+    if (!followingPresenter) setRemoteCursor(null);
+  }, [followingPresenter]);
+
   // TileRenderer) when the presenter scrolls, OR when a recipient
   // holding pointer_control scrolls. The presenter side has its own
   // channel (presenterPubChannelRef); the recipient side uses the
@@ -825,18 +853,32 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     }
   }, [pointerControlGranted, coViewingChannel]);
 
-  // Phase 2b — recipient cursor publish. Only fires when this client
-  // holds pointer_control; uses the existing coview channel so the
-  // presenter can subscribe on their own channel ref.
+  // Cursor publish for whoever's currently driving:
+  //  - Phase 2b: recipient with pointer_control publishes on the
+  //    coview channel
+  //  - "Presenter cursor always visible": presenter publishes on
+  //    the presenter channel so recipients can render the overlay
+  // Same broadcast event in both directions; receivers render
+  // whichever email shows up in the payload.
   const handlePublishCursor = useCallback((c: { page: number; xRatio: number; yRatio: number }) => {
-    if (!pointerControlGranted || !coViewingChannel || !recipient) return;
-    const ch = supabase.getChannels().find(c2 => c2.topic === `realtime:${coViewingChannel}`);
-    if (!ch) return;
-    ch.send({
-      type:    'broadcast',
-      event:   'controller_cursor',
-      payload: { email: recipient.email, page: c.page, xRatio: c.xRatio, yRatio: c.yRatio },
-    }).catch(() => {});
+    if (!recipient) return;
+    const presCh = presenterPubChannelRef.current;
+    if (presCh) {
+      presCh.send({
+        type:    'broadcast',
+        event:   'controller_cursor',
+        payload: { email: recipient.email, page: c.page, xRatio: c.xRatio, yRatio: c.yRatio },
+      }).catch(() => {});
+      return;
+    }
+    if (pointerControlGranted && coViewingChannel) {
+      const ch = supabase.getChannels().find(c2 => c2.topic === `realtime:${coViewingChannel}`);
+      if (ch) ch.send({
+        type:    'broadcast',
+        event:   'controller_cursor',
+        payload: { email: recipient.email, page: c.page, xRatio: c.xRatio, yRatio: c.yRatio },
+      }).catch(() => {});
+    }
   }, [pointerControlGranted, coViewingChannel, recipient]);
 
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
@@ -935,6 +977,21 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
               currentPage={currentPage}
             />
           )}
+          {/* Symmetric overlay for the recipient: shows the
+              presenter's cursor while we're following them. The
+              underlying state is only populated by CoViewingRecipient
+              when followingRef.current is true, but we double-check
+              followingPresenter here so a stale frame can't render
+              after the user leaves follow mode. */}
+          {activeCoViewSessionId && followingPresenter && remoteCursor && (
+            <ControllerCursor
+              email={remoteCursor.email}
+              page={remoteCursor.page}
+              xRatio={remoteCursor.xRatio}
+              yRatio={remoteCursor.yRatio}
+              currentPage={currentPage}
+            />
+          )}
           <TileRenderer
             sessionId={sessionId}
             fileId={file.id}
@@ -964,9 +1021,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onPublishScroll={
               (presenterSession || pointerControlGranted) ? handlePublishScroll : undefined
             }
-            // Phase 2b — recipient with pointer_control also publishes
-            // cursor moves so the presenter can render the overlay.
-            onPublishCursor={pointerControlGranted ? handlePublishCursor : undefined}
+            // Cursor publish: presenter shares their cursor with all
+            // recipients by default; recipient with pointer_control
+            // shares theirs back. Each side renders the other's cursor
+            // via the ControllerCursor overlay.
+            onPublishCursor={
+              (presenterSession || pointerControlGranted) ? handlePublishCursor : undefined
+            }
             // Apply scroll programmatically when we're not driving:
             //  - recipient + following → mirror presenter
             //  - presenter + controlled → mirror controller
@@ -1031,6 +1092,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onFreeScrollChanged={setFreeScrollGranted}
           pointerControlGranted={pointerControlGranted}
           onPointerControlChanged={setPointerControlGranted}
+          onRemoteCursor={(c) => setRemoteCursor(c ? { ...c, at: Date.now() } : null)}
         />
       )}
 
