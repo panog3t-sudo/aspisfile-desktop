@@ -29,10 +29,14 @@ interface PresenterToolbarProps {
   // viewer is running off an owner-token, not whichever recipient
   // happens to be enrolled on this Mac.
   presenterEmail?: string;
+  // Sprint 8 Phase 2a — recipient currently holding pointer_control,
+  // if any. Null when no recipient is driving. Rendered as a
+  // distinct chip so the presenter sees at a glance who's steering.
+  controllerEmail?: string | null;
 }
 
 export function PresenterToolbar({
-  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail,
+  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail, controllerEmail,
 }: PresenterToolbarProps) {
   const [stopping,     setStopping]     = useState(false);
   const [linkCopied,   setLinkCopied]   = useState(false);
@@ -107,6 +111,31 @@ export function PresenterToolbar({
       <span style={{ fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 10, background: '#1D4ED8', color: '#FFFFFF', flexShrink: 0 }}>
         {CONTEXT_LABEL[context]} · {mode === 'synchronized' ? 'Sync' : 'Free'}
       </span>
+
+      {/* Controller chip — surfaces who's currently driving the doc
+          when a recipient holds pointer_control. Empty when the
+          presenter is in normal sync mode. */}
+      {controllerEmail && (
+        <span
+          title={`${controllerEmail} is driving — your view follows them`}
+          style={{
+            fontSize: 10,
+            fontWeight: 500,
+            padding: '2px 8px',
+            borderRadius: 10,
+            background: 'rgba(252,165,165,0.18)',
+            color: '#FCA5A5',
+            border: '0.5px solid rgba(252,165,165,0.4)',
+            flexShrink: 0,
+            maxWidth: 220,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          Controlled by {controllerEmail}
+        </span>
+      )}
 
       {/* Presenter identity chip — shows the sender email behind the
           owner-token so it's obvious the open isn't using whatever

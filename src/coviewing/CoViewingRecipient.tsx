@@ -22,22 +22,24 @@ interface CoViewingRecipientProps {
   onSetFollowing: (following: boolean) => void;
   onScrollChange?: (s: ScrollChangePayload) => void;
   onZoomChange?:   (z: ZoomChangePayload)   => void;
-  // Sprint 8 — free scroll request/grant/revoke
-  sessionId:      string;     // for the request-permission POST
-  accessToken:    string;     // X-Access-Token header
-  freeScrollGranted: boolean; // from /join response (initial value)
-  // Bubble grant/revoke broadcasts up to SecureViewer so the
-  // freeScrollGranted state and following mode stay in sync without
-  // the prop going stale.
-  onFreeScrollChanged: (granted: boolean) => void;
+  sessionId:      string;
+  accessToken:    string;
+  freeScrollGranted:     boolean;
+  pointerControlGranted: boolean;
+  onFreeScrollChanged:     (granted: boolean) => void;
+  onPointerControlChanged: (granted: boolean) => void;
 }
 
-type PermissionUiState =
+type PermState =
   | 'idle'              // no permission, no pending request
   | 'requesting'        // POST in flight
   | 'pending'           // request sent, awaiting presenter
-  | 'granted'           // permission active — can toggle Free
+  | 'granted'           // permission active
   | 'revoked-just-now'; // brief flash when presenter revokes
+
+type PermType = 'free_scroll' | 'pointer_control';
+
+declare const __API_BASE__: string;
 
 export function CoViewingRecipient({
   channel,
@@ -54,7 +56,9 @@ export function CoViewingRecipient({
   sessionId,
   accessToken,
   freeScrollGranted,
+  pointerControlGranted,
   onFreeScrollChanged,
+  onPointerControlChanged,
 }: CoViewingRecipientProps) {
   const followingRef     = useRef(following);
   followingRef.current   = following;
@@ -63,20 +67,27 @@ export function CoViewingRecipient({
   const onZoomRef        = useRef(onZoomChange);
   onZoomRef.current      = onZoomChange;
 
-  const [permState, setPermState] = useState<PermissionUiState>(
+  const [freeScrollState, setFreeScrollState] = useState<PermState>(
     freeScrollGranted ? 'granted' : 'idle',
   );
+  const [controlState, setControlState] = useState<PermState>(
+    pointerControlGranted ? 'granted' : 'idle',
+  );
 
-  // Keep UI state in sync with the authoritative DB-backed flag from
-  // the participants poll. Resets pending → granted when presenter
-  // confirms via broadcast, OR via the next 10s poll.
+  // Keep local state in sync with the authoritative DB-backed flag.
+  // Resets pending → granted when presenter confirms via broadcast,
+  // OR via the next /participants poll on the presenter side which
+  // pushes a permission_changed broadcast.
   useEffect(() => {
-    if (freeScrollGranted) {
-      setPermState('granted');
-    } else {
-      setPermState(prev => (prev === 'pending' || prev === 'requesting') ? prev : 'idle');
-    }
+    if (freeScrollGranted) setFreeScrollState('granted');
+    else setFreeScrollState(prev =>
+      (prev === 'pending' || prev === 'requesting') ? prev : 'idle');
   }, [freeScrollGranted]);
+  useEffect(() => {
+    if (pointerControlGranted) setControlState('granted');
+    else setControlState(prev =>
+      (prev === 'pending' || prev === 'requesting') ? prev : 'idle');
+  }, [pointerControlGranted]);
 
   useEffect(() => {
     const ch = createCoViewingChannel(channel);
@@ -86,28 +97,40 @@ export function CoViewingRecipient({
       onScrollChange: (s) => { if (followingRef.current) onScrollRef.current?.(s); },
       onZoomChange:   (z) => { if (followingRef.current) onZoomRef.current?.(z); },
     });
-    // Sprint 8 — listen for presenter grant/deny. Only react to events
-    // addressed to OUR email (the channel is shared across guests).
+
     ch.on('broadcast', { event: 'permission_changed' }, ({ payload }: { payload?: { email?: string; type?: string; granted?: boolean } }) => {
       if (!payload || payload.email?.toLowerCase() !== email.toLowerCase()) return;
-      if (payload.type !== 'free_scroll') return;
-      // Tell the parent FIRST so freeScrollGranted prop updates and
-      // the local useEffect on [freeScrollGranted] doesn't revert
-      // permState based on the now-stale prop value.
-      onFreeScrollChanged(!!payload.granted);
-      if (payload.granted) {
-        setPermState('granted');
-        // Auto-flip the recipient out of follow mode so they don't
-        // have to click "Scroll freely" themselves after the grant.
-        onSetFollowing(false);
-      } else {
-        setPermState('revoked-just-now');
-        onSetFollowing(true);
-        setTimeout(() => {
-          setPermState(prev => prev === 'revoked-just-now' ? 'idle' : prev);
-        }, 1500);
+      const granted = !!payload.granted;
+      if (payload.type === 'free_scroll') {
+        onFreeScrollChanged(granted);
+        if (granted) {
+          setFreeScrollState('granted');
+          onSetFollowing(false);
+        } else {
+          setFreeScrollState('revoked-just-now');
+          onSetFollowing(true);
+          setTimeout(() => {
+            setFreeScrollState(prev => prev === 'revoked-just-now' ? 'idle' : prev);
+          }, 1500);
+        }
+      } else if (payload.type === 'pointer_control') {
+        onPointerControlChanged(granted);
+        if (granted) {
+          setControlState('granted');
+          // When the recipient gets control, they're driving — pull
+          // them out of follow mode too so their scroll/page changes
+          // aren't fighting the presenter's mirror.
+          onSetFollowing(false);
+        } else {
+          setControlState('revoked-just-now');
+          onSetFollowing(true);
+          setTimeout(() => {
+            setControlState(prev => prev === 'revoked-just-now' ? 'idle' : prev);
+          }, 1500);
+        }
       }
     });
+
     ch.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await ch.track({ email, page: currentPage, following, joined_at: joinedAt } as RecipientPresence);
@@ -126,9 +149,29 @@ export function CoViewingRecipient({
     ch.track({ email, page: currentPage, following, joined_at: joinedAt } as RecipientPresence).catch(() => {});
   }, [channel, email, currentPage, following, joinedAt]);
 
-  async function requestFreeScroll() {
-    if (permState === 'requesting' || permState === 'pending' || permState === 'granted') return;
-    setPermState('requesting');
+  // Pointer-control: when we hold it, every page change we make is
+  // broadcast to the presenter so they mirror. controlState comes
+  // from our state machine (drops on revoke/release within a tick),
+  // so we don't keep publishing past the moment control transfers.
+  const lastPublishedPageRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (controlState !== 'granted') return;
+    if (lastPublishedPageRef.current === currentPage) return;
+    lastPublishedPageRef.current = currentPage;
+    const ch = supabase.getChannels().find(c => c.topic === `realtime:${channel}`);
+    if (!ch) return;
+    ch.send({
+      type:  'broadcast',
+      event: 'controller_page_change',
+      payload: { email, page: currentPage },
+    }).catch(() => {});
+  }, [channel, controlState, currentPage, email]);
+
+  async function requestPermission(type: PermType) {
+    const setState = type === 'free_scroll' ? setFreeScrollState : setControlState;
+    const current  = type === 'free_scroll' ? freeScrollState : controlState;
+    if (current === 'requesting' || current === 'pending' || current === 'granted') return;
+    setState('requesting');
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/request-permission`, {
         method:  'POST',
@@ -137,31 +180,26 @@ export function CoViewingRecipient({
           'X-App-Platform': 'desktop',
           'X-Access-Token': accessToken,
         },
-        body: JSON.stringify({ type: 'free_scroll' }),
+        body: JSON.stringify({ type }),
       });
-      if (!res.ok) {
-        setPermState('idle');
-        return;
-      }
+      if (!res.ok) { setState('idle'); return; }
       const data = await res.json().catch(() => ({}));
-      setPermState(data.already_granted ? 'granted' : 'pending');
+      setState(data.already_granted ? 'granted' : 'pending');
     } catch {
-      setPermState('idle');
+      setState('idle');
     }
   }
 
-  // Recipient clicked "Follow presenter" while permission is granted —
-  // treat this as voluntarily handing the permission back. The next
-  // time they want free scroll they'll request it again. Without this,
-  // the presenter's Revoke button stays on indefinitely even though
-  // Andrew is no longer using the permission.
-  async function releaseFreeScroll() {
-    onSetFollowing(true);
-    // Optimistic local update so the UI flips even if the network is
-    // slow; broadcast from the server is the canonical sync signal
-    // (it lands as permission_changed{granted:false} on both sides).
-    setPermState('idle');
-    onFreeScrollChanged(false);
+  async function releasePermission(type: PermType) {
+    if (type === 'free_scroll') {
+      onSetFollowing(true);
+      setFreeScrollState('idle');
+      onFreeScrollChanged(false);
+    } else {
+      onSetFollowing(true);
+      setControlState('idle');
+      onPointerControlChanged(false);
+    }
     try {
       await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/release-permission`, {
         method:  'POST',
@@ -170,94 +208,115 @@ export function CoViewingRecipient({
           'X-App-Platform': 'desktop',
           'X-Access-Token': accessToken,
         },
-        body: JSON.stringify({ type: 'free_scroll' }),
+        body: JSON.stringify({ type }),
       });
     } catch {
-      // Best-effort — the participants poll on the presenter side
-      // will eventually converge if the broadcast was lost.
+      // Best-effort — server poll converges.
     }
   }
 
   if (mode === 'free') return null;
 
-  // Recipient can ALWAYS choose to follow (no permission needed).
-  // The free-scroll segment is gated:
-  //   idle       → "Request free scroll" (button outlined)
-  //   requesting → "Requesting…" (disabled)
-  //   pending    → "Waiting for approval…" (disabled, dimmed amber)
-  //   granted    → "Scroll freely" (toggles like the follow segment)
-  //   revoked-just-now → brief "Returned to follow" flash, then idle
-  const freeChip = (() => {
-    switch (permState) {
-      case 'granted':
-        return (
-          <SegmentBtn
-            active={!following}
-            onClick={() => onSetFollowing(false)}
-            label="Scroll freely"
-            icon={<FreeScrollIcon />}
-          />
-        );
-      case 'requesting':
-        return <SegmentBtn active={false} onClick={() => {}} label="Requesting…" icon={<FreeScrollIcon />} disabled />;
-      case 'pending':
-        return <SegmentBtn active={false} onClick={() => {}} label="Waiting for approval" icon={<FreeScrollIcon />} disabled amber />;
-      case 'revoked-just-now':
-        return <SegmentBtn active={false} onClick={() => {}} label="Returned to follow" icon={<FreeScrollIcon />} disabled />;
-      case 'idle':
-      default:
-        return (
-          <SegmentBtn
-            active={false}
-            onClick={requestFreeScroll}
-            label="Request free scroll"
-            icon={<FreeScrollIcon />}
-          />
-        );
-    }
-  })();
+  const freeChip = renderChip({
+    state:    freeScrollState,
+    grantedLabel: 'Scroll freely',
+    requestLabel: 'Request free scroll',
+    active:   !following && freeScrollState === 'granted',
+    onActivate: () => onSetFollowing(false),
+    onRequest:  () => requestPermission('free_scroll'),
+    icon:     <FreeScrollIcon />,
+  });
+
+  const controlChip = renderChip({
+    state:    controlState,
+    grantedLabel: 'Controlling',
+    requestLabel: 'Request control',
+    active:   !following && controlState === 'granted',
+    onActivate: () => onSetFollowing(false),
+    onRequest:  () => requestPermission('pointer_control'),
+    icon:     <ControlIcon />,
+  });
+
+  // Releasing one permission while holding the other shouldn't drop
+  // the Follow toggle into a weird state — Follow always means "yield
+  // to the presenter". So the click handler releases BOTH if held.
+  const handleFollowClick = () => {
+    const heldFree    = freeScrollState === 'granted';
+    const heldControl = controlState   === 'granted';
+    if (heldFree)    releasePermission('free_scroll');
+    if (heldControl) releasePermission('pointer_control');
+    if (!heldFree && !heldControl) onSetFollowing(true);
+  };
 
   return (
-    <div style={{
-      position:     'fixed',
-      bottom:       38,
-      left:         '50%',
-      transform:    'translateX(-50%)',
-      zIndex:       55,
-      background:   'rgba(15,23,42,0.92)',
-      border:       '0.5px solid rgba(59,130,246,0.4)',
-      borderRadius: 22,
-      padding:      4,
-      display:      'flex',
-      alignItems:   'center',
-      gap:          2,
-      fontFamily:   FONT,
-      boxShadow:    '0 6px 18px rgba(0,0,0,0.3)',
-    }}>
-      <SegmentBtn
-        active={following}
-        onClick={() => {
-          // While permission is granted, clicking Follow also gives
-          // the permission back to the presenter — otherwise their
-          // Revoke button would linger after the recipient stopped
-          // using free scroll. When not granted, this is just a
-          // regular follow toggle.
-          if (permState === 'granted') {
-            releaseFreeScroll();
-          } else {
-            onSetFollowing(true);
+    <>
+      {controlState === 'granted' && (
+        <div style={{
+          position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 56, background: 'rgba(29,78,216,0.95)', color: '#FFFFFF',
+          padding: '5px 12px', borderRadius: 14, fontSize: 11, fontWeight: 500,
+          fontFamily: FONT, boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <ControlIcon />
+          You are controlling the document
+        </div>
+      )}
+      <div style={{
+        position:     'fixed',
+        bottom:       38,
+        left:         '50%',
+        transform:    'translateX(-50%)',
+        zIndex:       55,
+        background:   'rgba(15,23,42,0.92)',
+        border:       '0.5px solid rgba(59,130,246,0.4)',
+        borderRadius: 22,
+        padding:      4,
+        display:      'flex',
+        alignItems:   'center',
+        gap:          2,
+        fontFamily:   FONT,
+        boxShadow:    '0 6px 18px rgba(0,0,0,0.3)',
+      }}>
+        <SegmentBtn
+          active={following}
+          onClick={handleFollowClick}
+          label="Follow presenter"
+          icon={
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 11l19-9-9 19-2-8-8-2z"/>
+            </svg>
           }
-        }}
-        label="Follow presenter"
-        icon={
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 11l19-9-9 19-2-8-8-2z"/>
-          </svg>
-        }
-      />
-      {freeChip}
-    </div>
+        />
+        {freeChip}
+        {controlChip}
+      </div>
+    </>
   );
+}
+
+function renderChip({ state, grantedLabel, requestLabel, active, onActivate, onRequest, icon }: {
+  state:        PermState;
+  grantedLabel: string;
+  requestLabel: string;
+  active:       boolean;
+  onActivate:   () => void;
+  onRequest:    () => void;
+  icon:         React.ReactNode;
+}) {
+  switch (state) {
+    case 'granted':
+      return <SegmentBtn active={active} onClick={onActivate} label={grantedLabel} icon={icon} />;
+    case 'requesting':
+      return <SegmentBtn active={false} onClick={() => {}} label="Requesting…" icon={icon} disabled />;
+    case 'pending':
+      return <SegmentBtn active={false} onClick={() => {}} label="Waiting for approval" icon={icon} disabled amber />;
+    case 'revoked-just-now':
+      return <SegmentBtn active={false} onClick={() => {}} label="Returned to follow" icon={icon} disabled />;
+    case 'idle':
+    default:
+      return <SegmentBtn active={false} onClick={onRequest} label={requestLabel} icon={icon} />;
+  }
 }
 
 function FreeScrollIcon() {
@@ -268,13 +327,16 @@ function FreeScrollIcon() {
   );
 }
 
+function ControlIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 3l14 8-6 2-2 6-6-16z"/>
+    </svg>
+  );
+}
+
 function SegmentBtn({
-  active,
-  onClick,
-  label,
-  icon,
-  disabled,
-  amber,
+  active, onClick, label, icon, disabled, amber,
 }: {
   active:    boolean;
   onClick:   () => void;
@@ -283,28 +345,28 @@ function SegmentBtn({
   disabled?: boolean;
   amber?:    boolean;
 }) {
-  const baseColor   = active ? '#FFFFFF' : amber ? '#FBBF24' : 'rgba(255,255,255,0.55)';
-  const baseBg      = active ? '#1D4ED8' : 'transparent';
+  const color = active ? '#FFFFFF' : amber ? '#FBBF24' : 'rgba(255,255,255,0.55)';
+  const bg    = active ? '#1D4ED8' : 'transparent';
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       style={{
-        display:        'flex',
-        alignItems:     'center',
-        gap:            6,
-        padding:        '5px 12px',
-        borderRadius:   18,
-        border:         'none',
-        cursor:         disabled ? 'default' : active ? 'default' : 'pointer',
-        background:     baseBg,
-        color:          baseColor,
-        fontSize:       11,
-        fontWeight:     500,
-        fontFamily:     FONT,
-        whiteSpace:     'nowrap',
-        opacity:        disabled ? 0.85 : 1,
-        transition:     'background 0.12s ease, color 0.12s ease',
+        display:      'flex',
+        alignItems:   'center',
+        gap:          6,
+        padding:      '5px 12px',
+        borderRadius: 18,
+        border:       'none',
+        cursor:       disabled ? 'default' : active ? 'default' : 'pointer',
+        background:   bg,
+        color,
+        fontSize:     11,
+        fontWeight:   500,
+        fontFamily:   FONT,
+        whiteSpace:   'nowrap',
+        opacity:      disabled ? 0.85 : 1,
+        transition:   'background 0.12s ease, color 0.12s ease',
       }}
     >
       {icon}
@@ -312,5 +374,3 @@ function SegmentBtn({
     </button>
   );
 }
-
-declare const __API_BASE__: string;

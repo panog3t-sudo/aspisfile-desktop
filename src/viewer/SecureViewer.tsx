@@ -236,6 +236,31 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     const ch = supabase.channel(presenterSession.channel, {
       config: { broadcast: { self: false } },
     });
+    // Sprint 8 Phase 2a — when a recipient has pointer_control, they
+    // publish their page changes; the presenter mirrors. Subscribe
+    // here on the presenter's own channel so we apply incoming
+    // changes without re-rendering the panel.
+    ch.on('broadcast', { event: 'controller_page_change' }, ({ payload }: { payload?: { email?: string; page?: number } }) => {
+      const p = payload;
+      if (!p) return;
+      const page = typeof p.page === 'number' ? p.page : null;
+      if (page === null) return;
+      setCurrentPage(page);
+    });
+    // Track who currently holds pointer_control so the "Controlled by"
+    // chip can render. Server-side mutex guarantees only one
+    // recipient at a time, so we can clobber on each event without a
+    // stack of holders.
+    ch.on('broadcast', { event: 'permission_changed' }, ({ payload }: { payload?: { email?: string; type?: string; granted?: boolean } }) => {
+      const p = payload;
+      if (!p || p.type !== 'pointer_control') return;
+      const email = p.email?.toLowerCase() ?? null;
+      if (p.granted && email) {
+        setCurrentControllerEmail(email);
+      } else if (!p.granted && email) {
+        setCurrentControllerEmail(prev => (prev === email ? null : prev));
+      }
+    });
     ch.subscribe();
     presenterPubChannelRef.current = ch;
     return () => {
@@ -249,10 +274,15 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [currentPage, setCurrentPage] = useState(1);
   // Step 10d — channel returned by /co-viewing/join, used by CoViewingRecipient.
   const [coViewingChannel, setCoViewingChannel] = useState<string | null>(null);
-  // Sprint 8 — per-participant free scroll permission. Initial value
-  // comes from /co-viewing/<id>/join; live updates from broadcasts
-  // arrive inside CoViewingRecipient itself.
-  const [freeScrollGranted, setFreeScrollGranted] = useState(false);
+  // Sprint 8 — per-participant permissions. Initial values come from
+  // /co-viewing/<id>/join; live updates from broadcasts arrive inside
+  // CoViewingRecipient itself and bubble up via callbacks below.
+  const [freeScrollGranted,     setFreeScrollGranted]     = useState(false);
+  const [pointerControlGranted, setPointerControlGranted] = useState(false);
+  // Presenter side: which recipient is currently driving the doc
+  // (Phase 2a pointer-control). null when no one is. Drives the
+  // "Controlled by <email>" chip in PresenterToolbar.
+  const [currentControllerEmail, setCurrentControllerEmail] = useState<string | null>(null);
 
   const canPresent = file?.is_owner === true;
 
@@ -663,6 +693,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       setCoViewingBanner(null);
       setCoViewingJoinedAt(new Date().toISOString());
       setFreeScrollGranted(!!data.free_scroll_granted);
+      setPointerControlGranted(!!data.pointer_control_granted);
       if (typeof data.current_page === 'number') setCurrentPage(data.current_page);
     } catch {
       setCoViewingBanner(null);
@@ -874,6 +905,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           panelOpen={participantPanelOpen}
           onTogglePanel={() => setParticipantPanelOpen(o => !o)}
           presenterEmail={recipient?.email}
+          controllerEmail={currentControllerEmail}
         />
       )}
 
@@ -894,6 +926,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           accessToken={token}
           freeScrollGranted={freeScrollGranted}
           onFreeScrollChanged={setFreeScrollGranted}
+          pointerControlGranted={pointerControlGranted}
+          onPointerControlChanged={setPointerControlGranted}
         />
       )}
 

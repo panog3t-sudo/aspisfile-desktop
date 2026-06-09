@@ -28,7 +28,11 @@ interface ParticipantRow {
   last_seen_page:  number;
   free_scroll_granted:      boolean;
   free_scroll_requested_at: string | null;
+  pointer_control_granted:      boolean;
+  pointer_control_requested_at: string | null;
 }
+
+type PermType = 'free_scroll' | 'pointer_control';
 
 interface PresenceRow {
   email:     string;
@@ -210,14 +214,37 @@ export function PresenterParticipantPanel({
     // update the roster row so the presenter sees the pending badge
     // before the next /participants poll. The poll itself converges
     // the canonical state.
-    ch.on('broadcast', { event: 'permission_request' }, ({ payload }: { payload?: { email?: string; type?: string; requested_at?: string } }) => {
-      const email = payload?.email?.toLowerCase();
-      if (!email || payload?.type !== 'free_scroll') return;
-      setRoster(prev => prev.map(r =>
-        r.recipient_email.toLowerCase() === email
-          ? { ...r, free_scroll_requested_at: payload.requested_at ?? new Date().toISOString() }
-          : r,
-      ));
+    ch.on('broadcast', { event: 'permission_request' }, ({ payload }: { payload?: { email?: string; type?: PermType; requested_at?: string } }) => {
+      const p = payload;
+      const email = p?.email?.toLowerCase();
+      if (!p || !email) return;
+      const ts = p.requested_at ?? new Date().toISOString();
+      setRoster(prev => prev.map(r => {
+        if (r.recipient_email.toLowerCase() !== email) return r;
+        if (p.type === 'free_scroll')     return { ...r, free_scroll_requested_at: ts };
+        if (p.type === 'pointer_control') return { ...r, pointer_control_requested_at: ts };
+        return r;
+      }));
+    });
+    // Pointer-control is mutex — server revokes any current holder
+    // when granting to someone new and broadcasts their loss as
+    // permission_changed{granted:false}. The presenter panel needs to
+    // reflect that immediately so the participants poll isn't the
+    // only source of truth.
+    ch.on('broadcast', { event: 'permission_changed' }, ({ payload }: { payload?: { email?: string; type?: PermType; granted?: boolean } }) => {
+      const p = payload;
+      const email = p?.email?.toLowerCase();
+      if (!p || !email) return;
+      setRoster(prev => prev.map(r => {
+        if (r.recipient_email.toLowerCase() !== email) return r;
+        if (p.type === 'free_scroll') {
+          return { ...r, free_scroll_granted: !!p.granted, free_scroll_requested_at: null };
+        }
+        if (p.type === 'pointer_control') {
+          return { ...r, pointer_control_granted: !!p.granted, pointer_control_requested_at: null };
+        }
+        return r;
+      }));
     });
     ch.subscribe();
     return () => {
@@ -250,14 +277,25 @@ export function PresenterParticipantPanel({
     return () => clearInterval(iv);
   }, []);
 
-  // Sprint 8 — Grant/revoke free scroll. Optimistic update on the
-  // local roster row; the /participants poll converges canonical state.
-  async function setFreeScroll(email: string, granted: boolean) {
-    setRoster(prev => prev.map(r =>
-      r.recipient_email.toLowerCase() === email.toLowerCase()
-        ? { ...r, free_scroll_granted: granted, free_scroll_requested_at: null }
-        : r,
-    ));
+  // Sprint 8 — Grant/revoke a permission (free_scroll or
+  // pointer_control). Optimistic update on the local roster row; the
+  // /participants poll converges canonical state.
+  async function setPermission(email: string, type: PermType, granted: boolean) {
+    setRoster(prev => prev.map(r => {
+      if (r.recipient_email.toLowerCase() !== email.toLowerCase()) {
+        // Mutex: granting pointer_control to someone else revokes any
+        // OTHER row's pointer_control. Mirror the server-side mutex
+        // optimistically so the UI doesn't briefly show two holders.
+        if (type === 'pointer_control' && granted && r.pointer_control_granted) {
+          return { ...r, pointer_control_granted: false, pointer_control_requested_at: null };
+        }
+        return r;
+      }
+      if (type === 'free_scroll') {
+        return { ...r, free_scroll_granted: granted, free_scroll_requested_at: null };
+      }
+      return { ...r, pointer_control_granted: granted, pointer_control_requested_at: null };
+    }));
     try {
       await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/grant-permission`, {
         method:  'POST',
@@ -266,7 +304,7 @@ export function PresenterParticipantPanel({
           'X-App-Platform': 'desktop',
           'X-Access-Token': token,
         },
-        body: JSON.stringify({ recipient_email: email, type: 'free_scroll', granted }),
+        body: JSON.stringify({ recipient_email: email, type, granted }),
       });
     } catch {
       // Best-effort — the next poll will correct any drift.
@@ -280,16 +318,18 @@ export function PresenterParticipantPanel({
     const isLive   = !!pres && !goneAt;
     const flashAt  = recentJoin[emailKey];
     return {
-      email:                    r.recipient_email,
-      joinedAt:                 r.joined_at,
-      accessType:               r.access_type,
-      page:                     pres?.page ?? r.last_seen_page,
-      following:                pres?.following,
+      email:                       r.recipient_email,
+      joinedAt:                    r.joined_at,
+      accessType:                  r.access_type,
+      page:                        pres?.page ?? r.last_seen_page,
+      following:                   pres?.following,
       isLive,
       goneAt,
-      isFlashing:               !!flashAt && Date.now() - flashAt < 3000,
-      freeScrollGranted:        r.free_scroll_granted,
-      freeScrollRequestedAt:    r.free_scroll_requested_at,
+      isFlashing:                  !!flashAt && Date.now() - flashAt < 3000,
+      freeScrollGranted:           r.free_scroll_granted,
+      freeScrollRequestedAt:       r.free_scroll_requested_at,
+      pointerControlGranted:       r.pointer_control_granted,
+      pointerControlRequestedAt:   r.pointer_control_requested_at,
     };
   }).sort((a, b) => {
     if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
@@ -379,8 +419,9 @@ export function PresenterParticipantPanel({
               presenterPage={currentPage}
               freeScrollGranted={r.freeScrollGranted}
               freeScrollRequestedAt={r.freeScrollRequestedAt}
-              onGrantFreeScroll={() => setFreeScroll(r.email, true)}
-              onRevokeFreeScroll={() => setFreeScroll(r.email, false)}
+              pointerControlGranted={r.pointerControlGranted}
+              pointerControlRequestedAt={r.pointerControlRequestedAt}
+              onSetPermission={(type, granted) => setPermission(r.email, type, granted)}
             />
           ))
         )}
@@ -401,22 +442,24 @@ function RowView({
   presenterPage,
   freeScrollGranted,
   freeScrollRequestedAt,
-  onGrantFreeScroll,
-  onRevokeFreeScroll,
+  pointerControlGranted,
+  pointerControlRequestedAt,
+  onSetPermission,
 }: {
-  email:                   string;
-  joinedAt:                string;
-  accessType:              'permanent' | 'session_only';
-  page:                    number;
-  following?:              boolean;
-  isLive:                  boolean;
-  isFlashing:              boolean;
-  goneAt:                  number | null;
-  presenterPage:           number;
-  freeScrollGranted:       boolean;
-  freeScrollRequestedAt:   string | null;
-  onGrantFreeScroll:       () => void;
-  onRevokeFreeScroll:      () => void;
+  email:                       string;
+  joinedAt:                    string;
+  accessType:                  'permanent' | 'session_only';
+  page:                        number;
+  following?:                  boolean;
+  isLive:                      boolean;
+  isFlashing:                  boolean;
+  goneAt:                      number | null;
+  presenterPage:               number;
+  freeScrollGranted:           boolean;
+  freeScrollRequestedAt:       string | null;
+  pointerControlGranted:       boolean;
+  pointerControlRequestedAt:   string | null;
+  onSetPermission:             (type: PermType, granted: boolean) => void;
 }) {
   const initials  = email.slice(0, 2).toUpperCase();
   const bg        = colorFromEmail(email);
@@ -494,31 +537,26 @@ function RowView({
         </p>
       </div>
 
-      {/* Permission controls — only relevant while live */}
+      {/* Permission controls — only relevant while live. Stacked
+          vertically so both permission rows fit when both are active
+          without blowing out row width on long emails. */}
       {isLive && (
-        <>
-          {freeScrollRequestedAt && !freeScrollGranted && (
-            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-              <button
-                onClick={onGrantFreeScroll}
-                title={`Grant free scroll to ${email}`}
-                style={permBtnStyle('grant')}
-              >Grant</button>
-              <button
-                onClick={onRevokeFreeScroll}
-                title="Dismiss the request"
-                style={permBtnStyle('deny')}
-              >Deny</button>
-            </div>
-          )}
-          {freeScrollGranted && (
-            <button
-              onClick={onRevokeFreeScroll}
-              title={`Revoke free scroll from ${email}`}
-              style={permBtnStyle('revoke')}
-            >Revoke</button>
-          )}
-        </>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flexShrink: 0, alignItems: 'flex-end' }}>
+          <PermControls
+            label="scroll"
+            requestedAt={freeScrollRequestedAt}
+            granted={freeScrollGranted}
+            email={email}
+            onSet={(g) => onSetPermission('free_scroll', g)}
+          />
+          <PermControls
+            label="control"
+            requestedAt={pointerControlRequestedAt}
+            granted={pointerControlGranted}
+            email={email}
+            onSet={(g) => onSetPermission('pointer_control', g)}
+          />
+        </div>
       )}
 
       {/* Page badge */}
@@ -538,6 +576,33 @@ function RowView({
       </span>
     </div>
   );
+}
+
+function PermControls({ label, requestedAt, granted, email, onSet }: {
+  label:       string;   // shown to disambiguate when both rows can appear
+  requestedAt: string | null;
+  granted:     boolean;
+  email:       string;
+  onSet:       (granted: boolean) => void;
+}) {
+  if (requestedAt && !granted) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', marginRight: 2 }}>{label}:</span>
+        <button onClick={() => onSet(true)}  title={`Grant ${label} to ${email}`} style={permBtnStyle('grant')}>Grant</button>
+        <button onClick={() => onSet(false)} title="Dismiss the request"          style={permBtnStyle('deny')}>Deny</button>
+      </div>
+    );
+  }
+  if (granted) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 9, color: 'rgba(134,239,172,0.7)', marginRight: 2 }}>{label}:</span>
+        <button onClick={() => onSet(false)} title={`Revoke ${label} from ${email}`} style={permBtnStyle('revoke')}>Revoke</button>
+      </div>
+    );
+  }
+  return null;
 }
 
 function permBtnStyle(kind: 'grant' | 'deny' | 'revoke'): React.CSSProperties {
