@@ -46,6 +46,11 @@ type Props = {
   // applied programmatically to the scroll container.
   onPublishScroll?: (s: { v: number; h: number }) => void;
   subscribedScroll?: { v: number; h: number } | null;
+  // Sprint 8 Phase 2b — cursor publish (recipient with pointer_control).
+  // Coords expressed as ratios relative to the current page's
+  // rendered bounding box so the presenter can render at the same
+  // RELATIVE position regardless of their zoom/scroll.
+  onPublishCursor?: (c: { page: number; xRatio: number; yRatio: number }) => void;
   // Sprint 2 — .afs download entry point. SecureViewer passes onDownload
   // only when canDownload is true (file.allow_download && recipient_allow_download
   // && !is_owner && !blobDeleted), so the button is fully hidden in those
@@ -77,6 +82,7 @@ export function TileRenderer({
   sessionId, fileId, file, totalPages, onLock,
   targetPage, onCurrentPageChange, onPresent, followMode,
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
+  onPublishCursor,
   onDownload, downloadState,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
@@ -150,6 +156,30 @@ export function TileRenderer({
     onPublishScroll(pending);
     scrollPendingRef.current = null;
   }, [onPublishScroll]);
+  // Phase 2b — cursor publish for pointer_control recipients. Throttle
+  // to 50ms (20fps) so we don't flood the channel; computes ratios
+  // against the visible image so the presenter renders at the same
+  // relative position regardless of their zoom/scroll.
+  const lastCursorPublishRef = useRef<number>(0);
+  const onCursorMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onPublishCursor) return;
+    const now = Date.now();
+    if (now - lastCursorPublishRef.current < 50) return;
+    lastCursorPublishRef.current = now;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const xRatio = (e.clientX - rect.left) / rect.width;
+    const yRatio = (e.clientY - rect.top)  / rect.height;
+    if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) return;
+    onPublishCursor({ page: currentPage, xRatio, yRatio });
+  }, [onPublishCursor, currentPage]);
+  const onCursorLeave = useCallback(() => {
+    if (!onPublishCursor) return;
+    // Signal "cursor is off the page" with out-of-range ratios; the
+    // presenter side treats anything outside [0, 1] as "hide".
+    onPublishCursor({ page: currentPage, xRatio: -1, yRatio: -1 });
+  }, [onPublishCursor, currentPage]);
+
   const onScrollEvent = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (!onPublishScroll) return; // recipient side: no publish
     const el = e.currentTarget;
@@ -447,6 +477,7 @@ export function TileRenderer({
                 src={tileUrl}
                 alt=""
                 draggable={false}
+                data-cursor-target="tile"
                 style={{
                   display: "block",
                   width: "100%",
@@ -457,7 +488,9 @@ export function TileRenderer({
                   WebkitUserDrag: "none",
                 } as React.CSSProperties}
               />
-              {/* Transparent overlay — blocks click-to-select and right-click on the image */}
+              {/* Transparent overlay — blocks click-to-select and right-click on the image.
+                  Also captures mousemove for the Phase 2b cursor broadcast when this
+                  client has pointer_control (onPublishCursor is non-undefined). */}
               <div
                 style={{
                   position: "absolute",
@@ -467,6 +500,8 @@ export function TileRenderer({
                   WebkitUserSelect: "none",
                 } as React.CSSProperties}
                 onContextMenu={(e) => e.preventDefault()}
+                onMouseMove={onCursorMove}
+                onMouseLeave={onCursorLeave}
               />
             </div>
           ) : (

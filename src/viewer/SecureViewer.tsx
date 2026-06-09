@@ -29,6 +29,7 @@ import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
 import { PresenterToolbar }           from "../coviewing/PresenterToolbar";
 import { PresenterParticipantPanel }  from "../coviewing/PresenterParticipantPanel";
 import { StartSessionModal }          from "../coviewing/StartSessionModal";
+import { ControllerCursor }           from "../coviewing/ControllerCursor";
 import { SessionEndedScreen }         from "../coviewing/SessionEndedScreen";
 import { broadcastScroll, broadcastZoom, type ScrollChangePayload } from "../lib/coviewing-realtime";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -260,6 +261,22 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const h = typeof p.h === 'number' ? p.h : 0;
       setSubscribedScroll({ v, h });
     });
+    // Phase 2b — controller cursor stream. Out-of-range ratios mean
+    // the cursor is off the page; clear the overlay in that case.
+    ch.on('broadcast', { event: 'controller_cursor' }, ({ payload }: { payload?: { email?: string; page?: number; xRatio?: number; yRatio?: number } }) => {
+      const p = payload;
+      if (!p) return;
+      const email   = p.email?.toLowerCase() ?? null;
+      const page    = typeof p.page === 'number' ? p.page : null;
+      const xRatio  = typeof p.xRatio === 'number' ? p.xRatio : null;
+      const yRatio  = typeof p.yRatio === 'number' ? p.yRatio : null;
+      if (!email || page === null || xRatio === null || yRatio === null) return;
+      if (xRatio < 0 || xRatio > 1 || yRatio < 0 || yRatio > 1) {
+        setControllerCursor(null);
+        return;
+      }
+      setControllerCursor({ email, page, xRatio, yRatio, at: Date.now() });
+    });
     // Track who currently holds pointer_control so the "Controlled by"
     // chip can render. Server-side mutex guarantees only one
     // recipient at a time, so we can clobber on each event without a
@@ -272,6 +289,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setCurrentControllerEmail(email);
       } else if (!p.granted && email) {
         setCurrentControllerEmail(prev => (prev === email ? null : prev));
+        // Clear any lingering cursor from the now-revoked controller
+        setControllerCursor(prev => prev?.email === email ? null : prev);
       }
     });
     ch.subscribe();
@@ -296,6 +315,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // (Phase 2a pointer-control). null when no one is. Drives the
   // "Controlled by <email>" chip in PresenterToolbar.
   const [currentControllerEmail, setCurrentControllerEmail] = useState<string | null>(null);
+  // Phase 2b — latest cursor position from the controller, scoped to
+  // the page they were on. Cleared on revoke or after 500ms idle.
+  const [controllerCursor, setControllerCursor] = useState<{
+    page: number; xRatio: number; yRatio: number; email: string; at: number;
+  } | null>(null);
 
   const canPresent = file?.is_owner === true;
 
@@ -770,6 +794,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [currentZoom, presenterSession?.sessionId, presenterSession?.mode]);
 
   // Scroll-publish callback for TileRenderer — fires (throttled inside
+  // Phase 2b — cursor auto-decay. Idle the overlay 500ms after the
+  // last received broadcast so a stuck cursor doesn't linger forever
+  // if the controller's network drops mid-stream.
+  useEffect(() => {
+    if (!controllerCursor) return;
+    const remaining = 500 - (Date.now() - controllerCursor.at);
+    if (remaining <= 0) { setControllerCursor(null); return; }
+    const t = window.setTimeout(() => {
+      setControllerCursor(prev => prev && Date.now() - prev.at >= 500 ? null : prev);
+    }, remaining);
+    return () => window.clearTimeout(t);
+  }, [controllerCursor]);
+
   // TileRenderer) when the presenter scrolls, OR when a recipient
   // holding pointer_control scrolls. The presenter side has its own
   // channel (presenterPubChannelRef); the recipient side uses the
@@ -787,6 +824,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       if (ch) broadcastScroll(ch, s);
     }
   }, [pointerControlGranted, coViewingChannel]);
+
+  // Phase 2b — recipient cursor publish. Only fires when this client
+  // holds pointer_control; uses the existing coview channel so the
+  // presenter can subscribe on their own channel ref.
+  const handlePublishCursor = useCallback((c: { page: number; xRatio: number; yRatio: number }) => {
+    if (!pointerControlGranted || !coViewingChannel || !recipient) return;
+    const ch = supabase.getChannels().find(c2 => c2.topic === `realtime:${coViewingChannel}`);
+    if (!ch) return;
+    ch.send({
+      type:    'broadcast',
+      event:   'controller_cursor',
+      payload: { email: recipient.email, page: c.page, xRatio: c.xRatio, yRatio: c.yRatio },
+    }).catch(() => {});
+  }, [pointerControlGranted, coViewingChannel, recipient]);
 
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen friendly={error} />;
@@ -870,6 +921,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         marginTop:  presenterSession ? 44 : 0,
       }}>
         <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          {/* Phase 2b — controller cursor overlay. Renders nothing
+              when no controller is active or the cursor's page
+              differs from the rendered page. Position is fixed
+              relative to the tile image via querySelector, so the
+              overlay survives presenter scroll/zoom of the area. */}
+          {presenterSession && currentControllerEmail && controllerCursor && (
+            <ControllerCursor
+              email={controllerCursor.email}
+              page={controllerCursor.page}
+              xRatio={controllerCursor.xRatio}
+              yRatio={controllerCursor.yRatio}
+              currentPage={currentPage}
+            />
+          )}
           <TileRenderer
             sessionId={sessionId}
             fileId={file.id}
@@ -899,6 +964,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onPublishScroll={
               (presenterSession || pointerControlGranted) ? handlePublishScroll : undefined
             }
+            // Phase 2b — recipient with pointer_control also publishes
+            // cursor moves so the presenter can render the overlay.
+            onPublishCursor={pointerControlGranted ? handlePublishCursor : undefined}
             // Apply scroll programmatically when we're not driving:
             //  - recipient + following → mirror presenter
             //  - presenter + controlled → mirror controller
