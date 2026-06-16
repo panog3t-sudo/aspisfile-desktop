@@ -12,6 +12,7 @@ import { EnrolmentScreen } from "./components/EnrolmentScreen";
 import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, saveRecipientSession } from "./lib/recipient-session";
+import { authenticatePasskey } from "./lib/passkey";
 import "./App.css";
 import { DebugOverlay } from "./components/DebugOverlay";
 import { debugLog } from "./lib/debug-log";
@@ -198,9 +199,34 @@ async function startAutoEnrolment(token: string, rt: string): Promise<void> {
   }
 }
 
-// Universal-Link bypass recovery is inlined in openLink (above) so it
-// can call setMode("enrol") when the server returns 404 (recipient is
-// already enrolled — viewer falls back to the manual sign-in screen).
+// Sign in with a passkey ALREADY on this device. The common case the
+// viewer previously mishandled: the recipient is enrolled (e.g. an
+// iCloud-synced passkey from another Mac, or this same Mac after the
+// local session token expired / was never stored — a self-share), but
+// has no active session token locally. The old flow assumed "no session
+// = must enrol" and forced the fresh-code path, which dead-ended at
+// register-verify's already-registered-on-this-device guard.
+//
+// Here we fetch the recipient_email from /meta, then run a standard
+// authentication ceremony (native AS bridge → Touch ID on macOS,
+// Windows Hello via WKWebView2 elsewhere). authenticatePasskey saves
+// the recipient session on success. Returns true if a session was
+// minted, false if no usable passkey is on this device (caller then
+// falls back to the fresh-code enrolment path).
+async function trySignInWithExistingPasskey(token: string): Promise<boolean> {
+  try {
+    const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
+    if (!metaRes.ok) return false;
+    const meta = await metaRes.json() as { recipient_email?: string };
+    if (!meta.recipient_email) return false;
+    await authenticatePasskey({ email: meta.recipient_email });
+    return true;
+  } catch {
+    // No discoverable passkey on this device, user cancelled, or the
+    // server rejected the assertion — fall back to enrolment.
+    return false;
+  }
+}
 
 // Phase 1 Day 12.5 — recognise OAuth callbacks (aspisfile://auth/
 // callback?code=…) coming back from the external browser after
@@ -329,19 +355,36 @@ function AppContent() {
       //     so they can enter the code without typing the email.
       fetch(`${BASE}/api/v1/access/${params.token}/registration-token`)
         .then(r => r.ok ? r.json() : null)
-        .then((j: { registration_token?: string } | null) => {
+        .then(async (j: { registration_token?: string } | null) => {
           const rt = j?.registration_token;
           if (rt) {
             startAutoEnrolment(params.token, rt);
-          } else {
-            // Already enrolled — auto-request a fresh code and drop
-            // into EnrolmentScreen. Best-effort: even if the fresh-
-            // code call fails, the EnrolmentScreen still works (user
-            // can ask sender for a code or use an old one if valid).
-            fetch(`${BASE}/api/v1/access/${params.token}/request-fresh-code`, { method: 'POST' })
-              .catch(() => {});
-            setMode("enrol");
+            return;
           }
+          // Already enrolled, but no local session. Before forcing a
+          // fresh enrolment code, try to SIGN IN with a passkey already
+          // on this device (iCloud-synced / Windows Hello / same-device
+          // expired-session). This is the path the viewer was missing —
+          // authenticatePasskey was never called anywhere, so every
+          // session-less open went to enrolment and dead-ended on
+          // register-verify's already-registered guard.
+          const signedIn = await trySignInWithExistingPasskey(params.token);
+          if (signedIn) {
+            // The passkey ceremony just proved presence — dedup the
+            // per-file native biometric gate, clear the buffered link,
+            // and replay so openLink mounts the viewer (session now set).
+            recordBiometric();
+            pendingLinkRef.current = null;
+            openLinkRef.current?.(params);
+            return;
+          }
+          // No usable passkey on this device — auto-request a fresh code
+          // and drop into EnrolmentScreen. Best-effort: even if the
+          // fresh-code call fails, the EnrolmentScreen still works (user
+          // can ask the sender for a code or use an old one if valid).
+          fetch(`${BASE}/api/v1/access/${params.token}/request-fresh-code`, { method: 'POST' })
+            .catch(() => {});
+          setMode("enrol");
         })
         .catch(() => setMode("enrol"));
       return;
