@@ -1,4 +1,5 @@
 import { fetch } from '@tauri-apps/plugin-http';
+import { writeFile, readFile, exists, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { sessionStore } from './sessionStore';
 
 declare const __API_BASE__: string;
@@ -45,59 +46,94 @@ function authHeaders(fingerprint: string): Record<string, string> {
   return h;
 }
 
-// Fetch the recipient's .afs (B3) then re-supply it (B4 inline / P2 presigned)
-// so the server primes the render cache. Returns ok on success; on failure
-// the caller falls back to the durable-S3 tile path (still works in the
-// transition), so a prime failure never blocks viewing.
-export async function primeAfsRender(opts: {
-  fileId: string; sessionId: string; fingerprint: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { fileId, sessionId, fingerprint } = opts;
-  const h = authHeaders(fingerprint);
+// ── Local .afs store (B5 step 2) ──
+// The recipient HOLDS their .afs. We cache it in the app-data dir so reopens
+// re-supply from disk (no server fetch) and — post-B6-cutover, when the
+// server keeps no durable copy — it's the only source. Ciphertext only:
+// inert without the server's key shares + a live session, so this respects
+// no-plaintext-at-rest and no-offline-viewing. Best-effort — fs failures
+// fall back to fetching from /afs, so persistence can never block viewing.
+const AFS_DIR = 'afs';
+const afsFile = (fileId: string) => `${AFS_DIR}/${fileId}.afs`;
 
-  // 1. Fetch the .afs. In the transition the server builds it from the
-  //    durable ciphertext + parks a ≤24h relay copy.
-  let afs: Uint8Array;
+async function loadStoredAfs(fileId: string): Promise<Uint8Array | null> {
+  try {
+    if (!(await exists(afsFile(fileId), { baseDir: BaseDirectory.AppData }))) return null;
+    const bytes = await readFile(afsFile(fileId), { baseDir: BaseDirectory.AppData });
+    return bytes.length > 0 ? bytes : null;
+  } catch { return null; }
+}
+
+async function storeAfs(fileId: string, bytes: Uint8Array): Promise<void> {
+  try {
+    await mkdir(AFS_DIR, { baseDir: BaseDirectory.AppData, recursive: true });
+    await writeFile(afsFile(fileId), bytes, { baseDir: BaseDirectory.AppData });
+  } catch { /* best-effort cache — non-fatal */ }
+}
+
+// Fetch the .afs from the server (B3). In the transition the server builds
+// it from durable ciphertext + parks a ≤24h relay copy.
+async function fetchAfs(fileId: string, sessionId: string, h: Record<string, string>): Promise<Uint8Array | null> {
   try {
     const res = await fetch(`${BASE}/api/v1/viewer/${fileId}/afs?session=${sessionId}`, { headers: h });
-    if (!res.ok) return { ok: false, error: `afs ${res.status}` };
-    afs = new Uint8Array(await res.arrayBuffer());
-  } catch (e: any) {
-    return { ok: false, error: `afs fetch: ${e?.message ?? e}` };
-  }
-  if (afs.length === 0) return { ok: false, error: 'empty afs' };
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return bytes.length > 0 ? bytes : null;
+  } catch { return null; }
+}
 
-  // 2. Re-supply so the server renders transiently from it.
+// Re-supply the .afs so the server renders transiently from it (B4 inline /
+// P2 presigned relay for >4MB). Returns ok on success.
+async function resupply(
+  fileId: string, sessionId: string, h: Record<string, string>, afs: Uint8Array,
+): Promise<{ ok: boolean; error?: string }> {
   try {
     if (afs.length <= MAX_INLINE) {
       const res = await fetch(`${BASE}/api/v1/viewer/${fileId}/supply?session=${sessionId}`, {
-        method: 'POST',
-        headers: { ...h, 'Content-Type': 'application/octet-stream' },
-        body: afs,
+        method: 'POST', headers: { ...h, 'Content-Type': 'application/octet-stream' }, body: afs,
       });
-      if (!res.ok) return { ok: false, error: `supply ${res.status}` };
-    } else {
-      const pres = await fetch(`${BASE}/api/v1/viewer/${fileId}/supply/presign?session=${sessionId}`, {
-        method: 'POST', headers: h,
-      });
-      if (!pres.ok) return { ok: false, error: `presign ${pres.status}` };
-      const { uploadUrl } = (await pres.json()) as { uploadUrl: string };
-      const put = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: { 'x-amz-server-side-encryption': 'AES256' },
-        body: afs,
-      });
-      if (!put.ok) return { ok: false, error: `relay PUT ${put.status}` };
-      const fin = await fetch(`${BASE}/api/v1/viewer/${fileId}/supply?session=${sessionId}`, {
-        method: 'POST',
-        headers: { ...h, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fromRelay: true }),
-      });
-      if (!fin.ok) return { ok: false, error: `supply(relay) ${fin.status}` };
+      return res.ok ? { ok: true } : { ok: false, error: `supply ${res.status}` };
     }
+    const pres = await fetch(`${BASE}/api/v1/viewer/${fileId}/supply/presign?session=${sessionId}`, {
+      method: 'POST', headers: h,
+    });
+    if (!pres.ok) return { ok: false, error: `presign ${pres.status}` };
+    const { uploadUrl } = (await pres.json()) as { uploadUrl: string };
+    const put = await fetch(uploadUrl, {
+      method: 'PUT', headers: { 'x-amz-server-side-encryption': 'AES256' }, body: afs,
+    });
+    if (!put.ok) return { ok: false, error: `relay PUT ${put.status}` };
+    const fin = await fetch(`${BASE}/api/v1/viewer/${fileId}/supply?session=${sessionId}`, {
+      method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ fromRelay: true }),
+    });
+    return fin.ok ? { ok: true } : { ok: false, error: `supply(relay) ${fin.status}` };
   } catch (e: any) {
     return { ok: false, error: `re-supply: ${e?.message ?? e}` };
   }
+}
 
-  return { ok: true };
+// Prime the server-transient render. Prefer the locally-held .afs (no server
+// fetch); if it's stale (token rotated / revoked → re-supply rejected) we
+// re-fetch, re-store, and retry once. On any failure the caller falls back to
+// the durable-S3 tile path, so this never blocks viewing.
+export async function primeAfsRender(opts: {
+  fileId: string; sessionId: string; fingerprint: string;
+}): Promise<{ ok: true; source: 'stored' | 'fetched' } | { ok: false; error: string }> {
+  const { fileId, sessionId, fingerprint } = opts;
+  const h = authHeaders(fingerprint);
+
+  // 1. Try the held copy first (fast reopen; the only source post-cutover).
+  const stored = await loadStoredAfs(fileId);
+  if (stored) {
+    const r = await resupply(fileId, sessionId, h, stored);
+    if (r.ok) return { ok: true, source: 'stored' };
+    // stale/rejected → fall through to a fresh fetch.
+  }
+
+  // 2. Fetch fresh, persist, re-supply.
+  const fresh = await fetchAfs(fileId, sessionId, h);
+  if (!fresh) return { ok: false, error: 'afs fetch failed' };
+  await storeAfs(fileId, fresh);
+  const r2 = await resupply(fileId, sessionId, h, fresh);
+  return r2.ok ? { ok: true, source: 'fetched' } : { ok: false, error: r2.error ?? 're-supply failed' };
 }
