@@ -108,3 +108,53 @@ pub async fn log_security_event(
     println!("[security] {} session={}", event_type, session_id);
     Ok(())
 }
+
+// Dedicated screen-capture / recording tools, matched case-insensitively
+// as a substring of the process name (so "OBS Studio", "obs64.exe" and
+// "obs" all hit "obs"). The second field is the display name shown to the
+// sender in the alert.
+//
+// We deliberately DO NOT list always-on conferencing apps (Zoom, Teams,
+// Webex, Discord): they launch at login and run in the background all day
+// whether or not anyone is sharing, so matching them on mere presence
+// would black out the document constantly. Their screen-share is already
+// defeated by the window's `contentProtected` flag (the AspisFile window
+// shows up black in any shared/recorded stream). Dedicated capture tools,
+// by contrast, are only running when someone intends to capture — so
+// presence is a high-signal event worth blacking out + alerting on.
+const CAPTURE_APPS: &[(&str, &str)] = &[
+    ("obs", "OBS"),
+    ("snagit", "Snagit"),
+    ("sharex", "ShareX"),
+    ("loom", "Loom"),
+    ("cleanshot", "CleanShot"),
+    ("camtasia", "Camtasia"),
+    ("screenflow", "ScreenFlow"),
+    ("bandicam", "Bandicam"),
+    ("fraps", "Fraps"),
+    ("kap", "Kap"),
+    ("screenstudio", "Screen Studio"),
+];
+
+/// Scan running processes for dedicated screen-capture / recording tools.
+/// Returns the deduped display names of any detected. The JS viewer polls
+/// this during an active session and, on detection, blacks out the tiles
+/// and reports a (soft, non-revoking) `screen_share_detected` violation.
+#[tauri::command]
+pub fn detect_capture_processes() -> Vec<String> {
+    use sysinfo::System;
+
+    let mut sys = System::new();
+    sys.refresh_processes();
+
+    let mut found = std::collections::BTreeSet::new();
+    for process in sys.processes().values() {
+        let name = process.name().to_lowercase();
+        for (needle, display) in CAPTURE_APPS {
+            if name.contains(needle) {
+                found.insert((*display).to_string());
+            }
+        }
+    }
+    found.into_iter().collect()
+}

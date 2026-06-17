@@ -15,6 +15,7 @@ import {
 import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
+import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
@@ -106,6 +107,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [offline, setOffline]         = useState(false);
   const [error, setError]             = useState<FriendlyAccessError | null>(null);
   const [locked, setLocked]           = useState(false);
+  // Dedicated screen-capture tools detected running (OBS/Loom/…). When
+  // non-empty, the viewer blacks out + a soft screen_share_detected
+  // violation is reported. Reversible — clears when the tool closes.
+  const [captureApps, setCaptureApps] = useState<string[]>([]);
   // Phase 1 Day 9 — pre-approval gate state.
   // pendingApprovalId is set when /mobile/access returns status:
   // 'pending_approval'. mechanism distinguishes which screen handles it:
@@ -572,6 +577,44 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [sessionId, file, revoked, offline]);
 
+  // Screen-capture process detection. While viewing, poll the native
+  // process scan every 7s. On the transition into "detected", report a
+  // soft screen_share_detected violation (server records + alerts the
+  // sender at Notable tier; it never strikes/revokes). The blackout
+  // itself is driven by captureApps in the render guard below, and
+  // reverses automatically when the tool closes.
+  useEffect(() => {
+    if (!isViewing || !sessionId || !file) return;
+    let cancelled = false;
+    let wasDetected = false;
+    const poll = async () => {
+      let apps: string[] = [];
+      try {
+        apps = await invoke<string[]>('detect_capture_processes');
+      } catch {
+        return; // command unavailable (older shell) — fail open, don't blackout
+      }
+      if (cancelled) return;
+      setCaptureApps(apps);
+      const detected = apps.length > 0;
+      if (detected && !wasDetected) {
+        fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/violation`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            violation_type: 'screen_share_detected',
+            metadata: { apps },
+          }),
+        }).catch(() => {});
+      }
+      wasDetected = detected;
+    };
+    poll();
+    const timer = window.setInterval(poll, 7_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [isViewing, sessionId, file]);
+
   // Sprint 3 — session_ended audit event. Fires once on unmount. The
   // endReasonRef is mutated by the paths that lead to teardown —
   // revocation listener sets 'revoked'; default is 'user_close' (close
@@ -937,6 +980,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     );
   }
   if (!sessionId || totalPages === 0) return <AuthLoadingScreen />;
+
+  // Screen-capture tool running → black out (unmounts the TileRenderer so
+  // tiles stop rendering). Reverses when the poll above clears captureApps.
+  if (captureApps.length > 0) return <CaptureBlackoutScreen apps={captureApps} />;
 
   return (
     <>
