@@ -83,6 +83,7 @@ pub fn run() {
             commands::open_external,
             commands::log_security_event,
             commands::authenticate_biometric,
+            commands::detect_capture_processes,
             fileassoc::read_afs,
             fileassoc::take_pending_afs,
             passkey::passkey_register,
