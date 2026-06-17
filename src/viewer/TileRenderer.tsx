@@ -230,26 +230,89 @@ export function TileRenderer({
     return URL.createObjectURL(blob);
   }, [sessionId, fileId]);
 
+  // Synchronous mirrors so loaders can dedup without re-subscribing to
+  // state (which would re-fire effects on every prefetched tile).
+  const tileUrlsRef = useRef<Record<number, string>>({});
+  useEffect(() => { tileUrlsRef.current = tileUrls; }, [tileUrls]);
+  const inflightRef = useRef<Map<number, Promise<string | null>>>(new Map());
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // Load a single page once. Returns the cached URL, the in-flight
+  // promise if a fetch is already running, or starts a new fetch.
+  // Centralised so the current-page render and the background prefetch
+  // never double-fetch the same tile.
+  const loadPage = useCallback((page: number): Promise<string | null> => {
+    const cached = tileUrlsRef.current[page];
+    if (cached) return Promise.resolve(cached);
+    const existing = inflightRef.current.get(page);
+    if (existing) return existing;
+    const p = fetchTile(page)
+      .then((url) => {
+        if (url && mountedRef.current) setTileUrls((prev) => ({ ...prev, [page]: url }));
+        else if (url) { try { URL.revokeObjectURL(url); } catch { /* unmounted */ } }
+        inflightRef.current.delete(page);
+        return url;
+      })
+      .catch(() => { inflightRef.current.delete(page); return null; });
+    inflightRef.current.set(page, p);
+    return p;
+  }, [fetchTile]);
+
+  // Current page — render as soon as it's available. Cached pages flip
+  // instantly (no spinner); otherwise we await the (possibly already
+  // in-flight, from prefetch) fetch.
   useEffect(() => {
     let cancelled = false;
+    if (tileUrlsRef.current[currentPage]) { setLoading(false); return; }
     setLoading(true);
+    loadPage(currentPage).then(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [currentPage, loadPage]);
 
-    fetchTile(currentPage).then((url) => {
-      if (cancelled || !url) return;
-      setTileUrls((prev) => ({ ...prev, [currentPage]: url }));
-      setLoading(false);
-    });
+  // Background prefetch — once the viewer is up, eagerly pull every page
+  // (bounded concurrency) so forward/back navigation is instant instead
+  // of fetching per click. Page 1 still shows immediately via the effect
+  // above; this just fills the cache for the rest. Capped so a very large
+  // document doesn't pin too much memory at once — beyond the cap we fall
+  // back to a small look-ahead around the current page.
+  useEffect(() => {
+    if (totalPages <= 1) return;
+    let cancelled = false;
+    const CONCURRENCY = 4;
+    const MAX_EAGER = 150;
 
-    // Prefetch next page
-    if (currentPage < totalPages) {
-      fetchTile(currentPage + 1).then((url) => {
-        if (cancelled || !url) return;
-        setTileUrls((prev) => ({ ...prev, [currentPage + 1]: url }));
-      });
-    }
+    let nextPage = 1;
+    const upper = Math.min(totalPages, MAX_EAGER);
+    const pump = async (): Promise<void> => {
+      while (!cancelled) {
+        const page = nextPage++;
+        if (page > upper) return;
+        await loadPage(page);
+      }
+    };
+    const workers = Array.from({ length: Math.min(CONCURRENCY, upper) }, () => pump());
+    void Promise.allSettled(workers);
 
     return () => { cancelled = true; };
-  }, [currentPage, fetchTile, totalPages]);
+  }, [totalPages, loadPage]);
+
+  // Look-ahead for documents larger than the eager cap: keep the next
+  // couple of pages warm as the reader advances.
+  useEffect(() => {
+    if (totalPages <= 150) return; // eager prefetch already covers these
+    let cancelled = false;
+    for (let p = currentPage + 1; p <= Math.min(currentPage + 2, totalPages); p++) {
+      if (!cancelled) void loadPage(p);
+    }
+    return () => { cancelled = true; };
+  }, [currentPage, totalPages, loadPage]);
+
+  // Revoke all object URLs when the viewer unmounts so a long reading
+  // session of a big document doesn't leak blob memory.
+  useEffect(() => () => {
+    Object.values(tileUrlsRef.current).forEach((u) => { try { URL.revokeObjectURL(u); } catch { /* noop */ } });
+  }, []);
 
   const tileUrl = tileUrls[currentPage];
 
