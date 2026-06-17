@@ -13,6 +13,7 @@ import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContex
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, saveRecipientSession } from "./lib/recipient-session";
 import { authenticatePasskey } from "./lib/passkey";
+import { toggleAfsRender } from "./lib/afs-render";
 import "./App.css";
 import { DebugOverlay } from "./components/DebugOverlay";
 import { debugLog } from "./lib/debug-log";
@@ -563,6 +564,24 @@ function AppContent() {
     debugLog('coview', 'completeEnrolment no replay → setMode(idle)');
     setMode("idle");
   }
+
+  // Dev/test toggle for the Phase B .afs render path. Release builds have
+  // no devtools, so the localStorage flag can't be set from a console —
+  // Cmd/Ctrl+Shift+A flips it + reloads. Capture phase so viewer key
+  // handlers don't swallow it. (Harmless in prod; does nothing unless used.)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === "KeyA") {
+        e.preventDefault();
+        const on = toggleAfsRender();
+        // eslint-disable-next-line no-alert
+        window.alert(`AspisFile: .afs render ${on ? "ENABLED" : "disabled"} — reloading`);
+        window.location.reload();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
 
   // Track Supabase session presence so SetupModal renders only when
   // the recipient is actually signed in. Phase A+ recipients are

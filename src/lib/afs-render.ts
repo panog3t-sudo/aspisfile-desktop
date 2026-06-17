@@ -22,6 +22,16 @@ export function isAfsRenderEnabled(): boolean {
   catch { return false; }
 }
 
+// Flip the flag (persists in localStorage) and return the new state.
+// Release builds ship with NO devtools, so the flag can't be set from a
+// console — App wires this to a keyboard combo (Cmd/Ctrl+Shift+A) so it's
+// toggleable for testing on a signed build.
+export function toggleAfsRender(): boolean {
+  const next = !isAfsRenderEnabled();
+  try { localStorage.setItem('aspisfile_afs_render', next ? '1' : '0'); } catch { /* ignore */ }
+  return next;
+}
+
 // Same auth surface the tile requests use, so /afs + /supply pass
 // validateTileRequest (Bearer session key + device fingerprint + share).
 function authHeaders(fingerprint: string): Record<string, string> {
