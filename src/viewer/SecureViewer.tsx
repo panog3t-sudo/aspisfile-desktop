@@ -16,6 +16,7 @@ import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
+import { isAfsRenderEnabled, primeAfsRender } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
@@ -111,6 +112,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // non-empty, the viewer blacks out + a soft screen_share_detected
   // violation is reported. Reversible — clears when the tool closes.
   const [captureApps, setCaptureApps] = useState<string[]>([]);
+  // Phase B (B5) — flagged + additive. When the flag is on, prime the
+  // server's render cache from the recipient's .afs before showing tiles;
+  // default OFF keeps the durable-S3 tile path unchanged.
+  const afsRenderEnabled = isAfsRenderEnabled();
+  const [afsPrimed, setAfsPrimed] = useState(false);
   // Phase 1 Day 9 — pre-approval gate state.
   // pendingApprovalId is set when /mobile/access returns status:
   // 'pending_approval'. mechanism distinguishes which screen handles it:
@@ -615,6 +621,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [isViewing, sessionId, file]);
 
+  // Phase B (B5) — prime the server-transient render from the recipient's
+  // .afs when the flag is on. Fetch + re-supply once per session; on success
+  // /tile renders from the primed cache, on failure we fall back to durable
+  // S3 (so a prime error never blocks viewing). Flag OFF → skip entirely.
+  useEffect(() => {
+    if (!afsRenderEnabled || !sessionId || !file || afsPrimed) return;
+    let cancelled = false;
+    (async () => {
+      const platform = /Mac/i.test(navigator.userAgent) ? 'macOS' : 'Windows';
+      let fp = '';
+      try { fp = await getDesktopFingerprint(platform); } catch { /* best-effort */ }
+      const res = await primeAfsRender({ fileId: file.id, sessionId, fingerprint: fp });
+      if (cancelled) return;
+      if (!res.ok) console.warn('[afs-render] prime failed (falling back to durable S3):', res.error);
+      setAfsPrimed(true);
+    })();
+    return () => { cancelled = true; };
+  }, [afsRenderEnabled, sessionId, file, afsPrimed]);
+
   // Sprint 3 — session_ended audit event. Fires once on unmount. The
   // endReasonRef is mutated by the paths that lead to teardown —
   // revocation listener sets 'revoked'; default is 'user_close' (close
@@ -980,6 +1005,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     );
   }
   if (!sessionId || totalPages === 0) return <AuthLoadingScreen />;
+
+  // B5 flag on → wait for the .afs prime before rendering, so tiles come
+  // from the re-supplied ciphertext rather than durable S3. (No-op when off.)
+  if (afsRenderEnabled && !afsPrimed) return <AuthLoadingScreen />;
 
   // Screen-capture tool running → black out (unmounts the TileRenderer so
   // tiles stop rendering). Reverses when the poll above clears captureApps.
