@@ -56,12 +56,62 @@ fn parse_afs_path(path: &str) -> Option<AfsLink> {
     Some(link)
 }
 
+/// Parse a v2 (ciphertext-bearing) .afs and STAGE it into the app-data
+/// cache, so the JS render flow re-supplies it as the recipient's held copy
+/// (matches the JS BaseDirectory.AppData + `afs/<file_id>.afs` location that
+/// loadStoredAfs() reads). Returns a v1-shaped link carrying the token so the
+/// existing open path (openLink → session → primeAfsRender) can run unchanged.
+///
+/// v2 layout: "AFS2"(4) ‖ headerLen u32-BE(4) ‖ header JSON ‖ ciphertext.
+/// The header exposes only link/handshake fields (token/sig/env/file_id) +
+/// metadata — no key material — so reading it here leaks nothing.
+fn parse_and_stage_afs_v2(app: &AppHandle, path: &str) -> Option<AfsLink> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() < 8 || &bytes[0..4] != b"AFS2" {
+        return None;
+    }
+    let header_len = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    let header_end = 8usize.checked_add(header_len)?;
+    if bytes.len() < header_end {
+        return None;
+    }
+    let header: serde_json::Value = serde_json::from_slice(&bytes[8..header_end]).ok()?;
+
+    let token = header.get("token")?.as_str()?.to_string();
+    let file_id = header.get("file_id")?.as_str()?.to_string();
+    if token.is_empty() || file_id.is_empty() {
+        return None;
+    }
+    let str_field = |k: &str| header.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    // Stage the file into the app-data cache. Best-effort: if it fails the
+    // open still proceeds via /afs fetch (transition) or durable S3.
+    if let Ok(dir) = app.path().app_data_dir() {
+        let afs_dir = dir.join("afs");
+        let _ = fs::create_dir_all(&afs_dir);
+        let _ = fs::write(afs_dir.join(format!("{}.afs", file_id)), &bytes);
+    }
+
+    Some(AfsLink {
+        v: 1,
+        type_: "aspisfile-link".to_string(),
+        token,
+        sig: str_field("sig"),
+        env: str_field("env"),
+        share_url: None,
+        file_name: str_field("file_name"),
+        sender_name: str_field("sender_name"),
+    })
+}
+
 /// Read an .afs path, parse it, and emit `open-afs-link` to the React
 /// side. Called from drag-and-drop, cold-start argv, and macOS Apple
 /// Events. Non-fatal — silently no-ops on parse failure to avoid
 /// spamming popups for malformed files.
 pub fn try_open_afs(app: &AppHandle, path: &str) {
-    let Some(link) = parse_afs_path(path) else { return };
+    // Try v2 (binary, ciphertext-bearing) first — it stages the held copy;
+    // fall back to the v1 JSON link descriptor.
+    let Some(link) = parse_and_stage_afs_v2(app, path).or_else(|| parse_afs_path(path)) else { return };
     // Buffer first, emit second. Cold-start: React is not yet listening,
     // the emit is lost, drain on mount picks it up via take_pending_afs.
     // Warm-start: React is listening, the emit fires immediately.
