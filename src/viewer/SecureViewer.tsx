@@ -430,20 +430,33 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15_000);
 
+      const doStart = (forceMove: boolean) => fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-App-Platform": "desktop",
+          "X-Desktop-OS": platform,
+          "User-Agent": navigator.userAgent,
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
+        body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint, ...(forceMove ? { forceMove: true } : {}) }),
+        signal: controller.signal,
+      });
+
       let res: Response;
       try {
-        res = await fetch(`${__API_BASE__}/api/v1/mobile/access/${token}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-App-Platform": "desktop",
-            "X-Desktop-OS": platform,
-            "User-Agent": navigator.userAgent,
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-          },
-          body: JSON.stringify({ sig, env, deviceFingerprint: fingerprint }),
-          signal: controller.signal,
-        });
+        res = await doStart(false);
+        // 409 ALREADY_OPEN — a recent session for this recipient is still
+        // live server-side (we reopened before the previous window's /close
+        // landed, or window-close never fired it). The recipient is
+        // reopening their OWN file, and only their own passkey-enrolled
+        // devices can start a session at all, so retry once asking the
+        // server to MOVE the session here (it terminates the stale one).
+        // Still exactly one active session → the concurrent-viewing guard
+        // holds; this just unblocks close→reopen.
+        if (res.status === 409) {
+          res = await doStart(true);
+        }
       } catch (err: any) {
         clearTimeout(timeoutId);
         if (err?.name === 'AbortError') {
