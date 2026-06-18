@@ -11,7 +11,8 @@ import { SetupModal } from "./components/SetupModal";
 import { EnrolmentScreen } from "./components/EnrolmentScreen";
 import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
-import { getActiveSessionToken, saveRecipientSession } from "./lib/recipient-session";
+import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, saveRecipientSession } from "./lib/recipient-session";
+import { WrongAccountScreen } from "./components/WrongAccountScreen";
 import { authenticatePasskey } from "./lib/passkey";
 import { toggleAfsRender } from "./lib/afs-render";
 import "./App.css";
@@ -21,7 +22,7 @@ import { debugLog } from "./lib/debug-log";
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
 
-type Mode = "idle" | "viewer" | "enrol";
+type Mode = "idle" | "viewer" | "enrol" | "wrong_account";
 
 type ViewerParams = {
   token:   string;
@@ -270,6 +271,9 @@ function checkLaunchArgs(): ViewerParams | null {
 function AppContent() {
   const [mode, setMode] = useState<Mode>("idle");
   const [viewerParams, setViewerParams] = useState<ViewerParams | null>(null);
+  // Set when a deep-link's file recipient doesn't match the viewer's bound
+  // identity — drives the WrongAccountScreen (deliberate switch, never silent).
+  const [wrongAccount, setWrongAccount] = useState<{ fileRecipient: string; boundEmail: string; params: ViewerParams } | null>(null);
   // pendingLink: a deep-link arrived while the recipient wasn't enrolled.
   // Buffer it, route to EnrolmentScreen, replay it once enrolment completes.
   // Without this gate the server returns BINDING_REQUIRED 403 from
@@ -320,6 +324,33 @@ function AppContent() {
       pendingLinkRef.current = params;
       debugLog('coview', 'openLink !lockInitialised → stashed', { coview: params.coview?.slice(0,8) ?? null });
       return;
+    }
+    // ── SECURITY INVARIANT (memory: feedback-viewer-identity-binding) ──
+    // The file's recipient MUST match the identity this viewer is signed in
+    // as. NEVER silently re-authenticate as a different recipient (that's the
+    // c41da75 regression). If a bound identity exists and the file is for a
+    // different recipient, block and require an explicit account switch.
+    // Owner/present tokens are exempt — the owner has no recipient row for
+    // their own file. Only fetch /meta when a bound identity exists, so a
+    // fresh/unbound viewer (first enrolment) is unaffected.
+    if (!params.present) {
+      const boundEmail = getRecipientSession()?.email?.toLowerCase() ?? null;
+      if (boundEmail) {
+        let fileRecipient: string | null = null;
+        try {
+          const metaRes = await fetch(`${BASE}/api/v1/access/${params.token}/meta`);
+          if (metaRes.ok) {
+            const m = await metaRes.json() as { recipient_email?: string };
+            fileRecipient = m.recipient_email?.toLowerCase() ?? null;
+          }
+        } catch { /* network — fall through; the server still enforces binding */ }
+        if (fileRecipient && fileRecipient !== boundEmail) {
+          pendingLinkRef.current = null;
+          setWrongAccount({ fileRecipient, boundEmail, params });
+          setMode('wrong_account');
+          return;
+        }
+      }
     }
     // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
     // open files. The server enforces this via BINDING_REQUIRED 403 if
@@ -716,6 +747,27 @@ function AppContent() {
             localStorage. */}
         {hasSession && !setupComplete && <SetupModal />}
       </>
+    );
+  }
+
+  if (mode === "wrong_account" && wrongAccount) {
+    return (
+      <WrongAccountScreen
+        fileRecipient={wrongAccount.fileRecipient}
+        boundEmail={wrongAccount.boundEmail}
+        onSwitch={async () => {
+          // Deliberate identity switch: drop the current recipient identity
+          // entirely, then replay the link as a fresh viewer so it re-enrols
+          // / re-authenticates as the file's recipient.
+          const replay = wrongAccount.params;
+          clearAllRecipientState();
+          try { await supabase.auth.signOut({ scope: "local" }); } catch { /* best-effort */ }
+          setWrongAccount(null);
+          setMode("idle");
+          openLinkRef.current?.(replay);
+        }}
+        onCancel={() => { setWrongAccount(null); setMode("idle"); }}
+      />
     );
   }
 
