@@ -310,6 +310,17 @@ function AppContent() {
       appLocked,
       lockInitialised,
     });
+    // Launch beacon — tell the web Inbox the viewer received this link, the
+    // instant we get it (before auth / Touch ID / the file loads), so it can
+    // confirm "the viewer opened" without guessing and drop its get-the-viewer
+    // prompt. Fire-and-forget; recipient (non-owner) tokens only.
+    if (params.token && !params.present) {
+      fetch(`${BASE}/api/v1/viewer/launching`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: params.token }),
+      }).catch(() => { /* best-effort */ });
+    }
     // Wait for LockProvider to finish reading setupComplete from
     // local storage. On cold-start the deep-link arrives before
     // LockProvider initialises — appLocked is still its default
