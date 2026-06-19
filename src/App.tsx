@@ -285,6 +285,9 @@ function AppContent() {
   // and completeEnrolment() read it. State here would trip TS6133
   // because nothing references the reactive value.
   const pendingLinkRef = useRef<ViewerParams | null>(null);
+  // Cold-start: counts per-file-biometric mutex retries so a deep link isn't
+  // dropped while the LockScreen's unlock biometric is still settling.
+  const bioRetryRef = useRef(0);
   const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, initialised: lockInitialised, tryBeginBiometric, endBiometric } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
@@ -462,6 +465,7 @@ function AppContent() {
       dedupPass: sinceLast < BIOMETRIC_FRESH_MS,
     });
     if (sinceLast < BIOMETRIC_FRESH_MS) {
+      bioRetryRef.current = 0;
       setViewerParams(params);
       setMode("viewer");
       return;
@@ -472,7 +476,19 @@ function AppContent() {
     // flight. Without this, openLink could fire authenticate_biometric
     // concurrent with LockScreen's, same crash scenario as mobile.
     if (!tryBeginBiometric()) {
-      debugLog('coview', 'per-file gate: tryBeginBiometric failed');
+      // COLD-START FIX: the LockScreen's just-finished unlock biometric is
+      // still settling, so the per-file mutex is briefly held. The old code
+      // returned here and DROPPED the deep link (the replay had already
+      // cleared pendingLinkRef) — leaving the user stuck on "Opening…" with
+      // nothing mounted, needing a manual retry. Instead, re-fire shortly
+      // until the mutex frees, capped to avoid a loop.
+      debugLog('coview', 'per-file gate: tryBeginBiometric busy → retry', { attempt: bioRetryRef.current });
+      if (bioRetryRef.current < 6) {
+        bioRetryRef.current += 1;
+        window.setTimeout(() => openLinkRef.current?.(params), 300);
+      } else {
+        bioRetryRef.current = 0;   // give up after ~1.8s; a fresh open recovers
+      }
       return;
     }
     debugLog('coview', 'per-file gate: invoking authenticate_biometric');
@@ -486,6 +502,7 @@ function AppContent() {
     } finally {
       endBiometric();
     }
+    bioRetryRef.current = 0;
     setViewerParams(params);
     setMode("viewer");
   }
