@@ -67,11 +67,15 @@ async function loadStoredAfs(fileId: string): Promise<Uint8Array | null> {
   } catch { return null; }
 }
 
-async function storeAfs(fileId: string, bytes: Uint8Array): Promise<void> {
+// Returns true ONLY if the .afs is actually persisted — the caller gates
+// confirm-hold on this so a failed write never triggers an early server-side
+// source purge that would strand us.
+async function storeAfs(fileId: string, bytes: Uint8Array): Promise<boolean> {
   try {
     await mkdir(AFS_DIR, { baseDir: BaseDirectory.AppData, recursive: true });
     await writeFile(afsFile(fileId), bytes, { baseDir: BaseDirectory.AppData });
-  } catch { /* best-effort cache — non-fatal */ }
+    return true;
+  } catch { return false; /* best-effort cache — non-fatal */ }
 }
 
 // Fetch the .afs from the server (B3). In the transition the server builds
@@ -136,11 +140,12 @@ export async function primeAfsRender(opts: {
   // 2. Fetch fresh, persist, re-supply.
   const fresh = await fetchAfs(fileId, sessionId, h);
   if (!fresh) return { ok: false, error: 'afs fetch failed' };
-  await storeAfs(fileId, fresh);
-  // W3: we now hold the .afs locally — confirm hold so the server can purge our
-  // relay slot + (once all recipients hold) the shared source early, instead of
-  // waiting the 7-day backstop. Fire-and-forget; the backstop covers a miss.
-  confirmHold(fileId, sessionId, h);
+  const held = await storeAfs(fileId, fresh);
+  // W3: if we actually hold the .afs locally, confirm hold so the server can
+  // purge our relay slot + (once all recipients hold) the shared source early,
+  // instead of waiting the 7-day backstop. Gated on a successful store so a
+  // failed write never triggers an early source purge. Fire-and-forget.
+  if (held) confirmHold(fileId, sessionId, h);
   const r2 = await resupply(fileId, sessionId, h, fresh);
   return r2.ok ? { ok: true, source: 'fetched' } : { ok: false, error: r2.error ?? 're-supply failed' };
 }
