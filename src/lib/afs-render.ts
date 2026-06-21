@@ -13,14 +13,17 @@ const MAX_INLINE = 4 * 1024 * 1024;
 // Phase B (B5) — flagged + additive. When enabled, the viewer exercises the
 // relay/.afs render path: fetch the recipient's .afs, then re-supply it so
 // the server renders transiently from it (primes the per-session cache →
-// /tile renders from memory, not durable S3). Toggle for dev/testing
-// WITHOUT a rebuild:
-//   localStorage.setItem('aspisfile_afs_render','1'); location.reload()
-// Default OFF → the viewer streams tiles from durable S3 exactly as today,
-// so this cannot affect shipping behaviour until the B6 cutover flips it on.
+// /tile renders from memory, not durable S3).
+//
+// Phase B B6 Part 1 (2026-06-21): .afs render is now the DEFAULT. The flag is
+// a reversible KILL SWITCH — only an explicit '0' disables it (reverts to the
+// durable-S3 tile path, which still exists as the /tile fallback). Durable is
+// NOT yet retired (that's B6 Part 3, held until B7 re-share exists), so a
+// kill-switch flip is fully safe.
+//   Revert one device:  localStorage.setItem('aspisfile_afs_render','0'); location.reload()
 export function isAfsRenderEnabled(): boolean {
-  try { return localStorage.getItem('aspisfile_afs_render') === '1'; }
-  catch { return false; }
+  try { return localStorage.getItem('aspisfile_afs_render') !== '0'; }
+  catch { return true; }
 }
 
 // Flip the flag (persists in localStorage) and return the new state.

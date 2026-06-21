@@ -139,11 +139,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // .afs file — flip this const at that integration point. page_views_batch
   // only fires for 'afs_local' sessions per Unified Tracking Brief §1.2
   // (link sessions already log every page turn via tile requests).
-  // Widened cast keeps TypeScript from narrowing accessMethod down to
-  // the literal 'link' — which would make trackPages a dead-code false
-  // and trip TS2367 on the comparison. Phase B flips the cast value to
-  // 'afs_local' for local-file opens.
-  const accessMethod = 'link' as AccessMethod;
+  // Widened cast keeps TypeScript from narrowing accessMethod down to a
+  // literal — which would make the trackPages comparison dead-code and trip
+  // TS2367. Phase B B6 Part 1 (2026-06-21): flipped 'link' → 'afs_local' now
+  // that the .afs render path is the default (reversible via the kill switch
+  // in afs-render.ts). trackPages is therefore active.
+  const accessMethod = 'afs_local' as AccessMethod;
   const trackPages = accessMethod === 'afs_local';
 
   // ─── Sprint 2 — .afs download state machine ─────────────────────
