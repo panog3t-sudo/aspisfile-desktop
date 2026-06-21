@@ -137,6 +137,17 @@ export async function primeAfsRender(opts: {
   const fresh = await fetchAfs(fileId, sessionId, h);
   if (!fresh) return { ok: false, error: 'afs fetch failed' };
   await storeAfs(fileId, fresh);
+  // W3: we now hold the .afs locally — confirm hold so the server can purge our
+  // relay slot + (once all recipients hold) the shared source early, instead of
+  // waiting the 7-day backstop. Fire-and-forget; the backstop covers a miss.
+  confirmHold(fileId, sessionId, h);
   const r2 = await resupply(fileId, sessionId, h, fresh);
   return r2.ok ? { ok: true, source: 'fetched' } : { ok: false, error: r2.error ?? 're-supply failed' };
+}
+
+// W3 — tell the server we've cached the .afs locally (confirmed hold). Best-
+// effort; never blocks viewing. Drives early relay purge (slot + all-held source).
+function confirmHold(fileId: string, sessionId: string, h: Record<string, string>): void {
+  fetch(`${BASE}/api/v1/viewer/${fileId}/afs/confirm-hold?session=${sessionId}`, { method: 'POST', headers: h })
+    .catch(() => { /* best-effort; 7-day lifecycle is the backstop */ });
 }
