@@ -16,7 +16,7 @@ import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
-import { isAfsRenderEnabled, primeAfsRender } from "../lib/afs-render";
+import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, type HeldStatus } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
@@ -117,6 +117,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // default OFF keeps the durable-S3 tile path unchanged.
   const afsRenderEnabled = isAfsRenderEnabled();
   const [afsPrimed, setAfsPrimed] = useState(false);
+  // B+ multi-device (memory `multidevice-recipient-decision`).
+  const [sourceExpired, setSourceExpired] = useState(false);
+  const [heldStatus,    setHeldStatus]    = useState<HeldStatus | null>(null);
+  const [canSend,       setCanSend]       = useState(false);
+  const fpRef           = useRef<string>('');
   // Phase 1 Day 9 — pre-approval gate state.
   // pendingApprovalId is set when /mobile/access returns status:
   // 'pending_approval'. mechanism distinguishes which screen handles it:
@@ -646,13 +651,36 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const platform = /Mac/i.test(navigator.userAgent) ? 'macOS' : 'Windows';
       let fp = '';
       try { fp = await getDesktopFingerprint(platform); } catch { /* best-effort */ }
+      fpRef.current = fp;
       const res = await primeAfsRender({ fileId: file.id, sessionId, fingerprint: fp });
       if (cancelled) return;
-      if (!res.ok) console.warn('[afs-render] prime failed (falling back to durable S3):', res.error);
-      setAfsPrimed(true);
+      if (!res.ok) {
+        console.warn('[afs-render] prime failed (falling back to durable S3):', res.error);
+        // B+ — no local copy AND the server window elapsed (no durable
+        // backstop post-cutover). Fetch device context for the guided message.
+        if (res.reason === 'source_expired') {
+          const hs = await getHeldStatus(file.id, sessionId, fp);
+          if (!cancelled) { setHeldStatus(hs); setSourceExpired(true); }
+        }
+      }
+      // B+ — device context for the Send button + exit-save prompt (best-effort).
+      try {
+        const [held, hs] = await Promise.all([hasStoredAfs(file.id), getHeldStatus(file.id, sessionId, fp)]);
+        if (!cancelled) { setCanSend(held); setHeldStatus(prev => prev ?? hs); }
+      } catch { /* button/prompt just won't show */ }
+      if (!cancelled) setAfsPrimed(true);
     })();
     return () => { cancelled = true; };
   }, [afsRenderEnabled, sessionId, file, afsPrimed]);
+
+  // B+ — export the held .afs to another of the recipient's devices. Surfaced
+  // as an always-visible toolbar button (the desktop viewer closes via the OS
+  // window, so there's no in-app close to hang an exit-prompt on — the button
+  // lets the recipient send a copy at any time).
+  const handleSendToDevice = useCallback(async () => {
+    if (!file) return;
+    await exportAfs(file.id, file.name);
+  }, [file]);
 
   // Sprint 3 — session_ended audit event. Fires once on unmount. The
   // endReasonRef is mutated by the paths that lead to teardown —
@@ -966,6 +994,34 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   if (revoked)                        return <RevokedScreen reason={revokeReason} />;
   if (error)                          return <RevokedScreen friendly={error} />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
+  if (sourceExpired) {
+    // B+ guided purged-link message. Device labels come from the session-gated
+    // held-status endpoint (never shown without a valid session).
+    const others = (heldStatus?.devices ?? []).map(d => d.label).filter(Boolean);
+    const heldElsewhere = !!heldStatus?.held_by_recipient && others.length > 0;
+    const where = others.length > 1 ? `one of your other devices (${others.join(', ')})` : others[0];
+    const senderName = file.sender?.full_name ?? file.sender?.email ?? 'the sender';
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, background: '#000', zIndex: 10000,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 32,
+        fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
+      }}>
+        <p style={{ color: '#fff', fontSize: 18, fontWeight: 600, margin: '0 0 10px', textAlign: 'center' }}>
+          {heldElsewhere ? 'Open it from your other device' : 'This file is no longer available here'}
+        </p>
+        <p style={{ color: '#94A3B8', fontSize: 14, lineHeight: 1.5, textAlign: 'center', maxWidth: 480, margin: '0 0 24px' }}>
+          {heldElsewhere
+            ? `For your security, AspisFile no longer keeps this file on its servers. You saved it on ${where} — open it there, then send a copy to this device.`
+            : `For your security, AspisFile no longer keeps this file on its servers, and you don't have a saved copy on this device. Ask ${senderName} to re-send it.`}
+        </p>
+        <button onClick={onClose} style={{
+          height: 38, padding: '0 28px', borderRadius: 10, border: 'none',
+          background: '#1E293B', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer',
+        }}>Done</button>
+      </div>
+    );
+  }
   if (!legalAccepted)                 return <LegalOverlay file={file} onAccept={() => setLegalAccepted(true)} />;
   // Offline overlay — solid black with reconnect copy. session_key is
   // NOT cleared (only on actual revocation) so when heartbeat comes
@@ -1131,6 +1187,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // does not render at all (per state-machine §1.2).
             onDownload={canDownload ? handleDownload : undefined}
             downloadState={canDownload ? downloadState : undefined}
+            // B+ — "Send to another device" export. Shown only once a held
+            // .afs copy exists locally (canSend). Owners don't see it (no
+            // recipient device context); recipients can send a copy to their
+            // other enrolled devices.
+            onSend={canSend && !file.is_owner ? handleSendToDevice : undefined}
           />
         </div>
         {presenterSession && participantPanelOpen && (

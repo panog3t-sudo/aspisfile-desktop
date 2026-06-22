@@ -79,14 +79,22 @@ async function storeAfs(fileId: string, bytes: Uint8Array): Promise<boolean> {
 }
 
 // Fetch the .afs from the server (B3). In the transition the server builds
-// it from durable ciphertext + parks a ≤24h relay copy.
-async function fetchAfs(fileId: string, sessionId: string, h: Record<string, string>): Promise<Uint8Array | null> {
+// it from durable ciphertext + parks a ≤window relay copy.
+// Discriminated result so primeAfsRender can tell a benign-but-recoverable
+// "the window elapsed" (410 SOURCE_EXPIRED → guided multi-device message)
+// apart from a generic failure.
+type FetchAfsResult =
+  | { kind: 'ok'; bytes: Uint8Array }
+  | { kind: 'expired' }
+  | { kind: 'failed' };
+async function fetchAfs(fileId: string, sessionId: string, h: Record<string, string>): Promise<FetchAfsResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/viewer/${fileId}/afs?session=${sessionId}`, { headers: h });
-    if (!res.ok) return null;
+    if (res.status === 410) return { kind: 'expired' };
+    if (!res.ok) return { kind: 'failed' };
     const bytes = new Uint8Array(await res.arrayBuffer());
-    return bytes.length > 0 ? bytes : null;
-  } catch { return null; }
+    return bytes.length > 0 ? { kind: 'ok', bytes } : { kind: 'failed' };
+  } catch { return { kind: 'failed' }; }
 }
 
 // Re-supply the .afs so the server renders transiently from it (B4 inline /
@@ -125,7 +133,7 @@ async function resupply(
 // the durable-S3 tile path, so this never blocks viewing.
 export async function primeAfsRender(opts: {
   fileId: string; sessionId: string; fingerprint: string;
-}): Promise<{ ok: true; source: 'stored' | 'fetched' } | { ok: false; error: string }> {
+}): Promise<{ ok: true; source: 'stored' | 'fetched' } | { ok: false; error: string; reason?: 'source_expired' }> {
   const { fileId, sessionId, fingerprint } = opts;
   const h = authHeaders(fingerprint);
 
@@ -139,15 +147,72 @@ export async function primeAfsRender(opts: {
 
   // 2. Fetch fresh, persist, re-supply.
   const fresh = await fetchAfs(fileId, sessionId, h);
-  if (!fresh) return { ok: false, error: 'afs fetch failed' };
-  const held = await storeAfs(fileId, fresh);
+  if (fresh.kind === 'expired') {
+    // B+ — no local copy AND the server window elapsed (post-cutover, no
+    // durable). Surface a distinct reason so the viewer shows the guided
+    // "open on your other device / ask the sender to re-send" message.
+    return { ok: false, reason: 'source_expired', error: 'source expired' };
+  }
+  if (fresh.kind !== 'ok') return { ok: false, error: 'afs fetch failed' };
+  const held = await storeAfs(fileId, fresh.bytes);
   // W3: if we actually hold the .afs locally, confirm hold so the server can
-  // purge our relay slot + (once all recipients hold) the shared source early,
-  // instead of waiting the 7-day backstop. Gated on a successful store so a
-  // failed write never triggers an early source purge. Fire-and-forget.
+  // purge our relay slot early. (B+: the shared source is NOT purged early — it
+  // lives the window so a second device can re-fetch.) Gated on a successful
+  // store so a failed write never triggers a purge. Fire-and-forget.
   if (held) confirmHold(fileId, sessionId, h);
-  const r2 = await resupply(fileId, sessionId, h, fresh);
+  const r2 = await resupply(fileId, sessionId, h, fresh.bytes);
   return r2.ok ? { ok: true, source: 'fetched' } : { ok: false, error: r2.error ?? 're-supply failed' };
+}
+
+// ── B+ multi-device helpers (memory `multidevice-recipient-decision`) ──
+
+export type HeldStatus = {
+  held_by_recipient: boolean;
+  device_count: number;
+  is_synced: boolean;
+  devices: { label: string; sync_status: string }[];
+};
+
+// Device context for the exit-save prompt + guided purged-link message.
+// Session-gated server-side (no device labels without a live session). Null on
+// any failure → the viewer degrades to a generic message / no prompt.
+export async function getHeldStatus(fileId: string, sessionId: string, fingerprint: string): Promise<HeldStatus | null> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/viewer/${fileId}/afs/held-status?session=${sessionId}`, {
+      headers: authHeaders(fingerprint),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as HeldStatus;
+  } catch { return null; }
+}
+
+// Whether a held .afs exists locally to export (drives the "Send to another
+// device" affordance + the exit-save prompt — only offer if we hold a copy).
+export async function hasStoredAfs(fileId: string): Promise<boolean> {
+  return (await loadStoredAfs(fileId)) !== null;
+}
+
+// Export the held .afs via a Save dialog so the recipient can move it to
+// another of THEIR enrolled devices (AirDrop / Files / drive). The .afs is
+// inert ciphertext — useless without enrollment + the server + a non-revoked
+// token — so saving/sharing it is safe. Returns false if there's no held copy
+// or the user cancels.
+export async function exportAfs(fileId: string, suggestedName?: string): Promise<boolean> {
+  try {
+    const bytes = await loadStoredAfs(fileId);
+    if (!bytes) return false;
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    const base = (suggestedName ?? fileId).replace(/\.afs$/i, '').replace(/[^\w.\- ]+/g, '_');
+    const path = await save({
+      title: 'Send to another device',
+      defaultPath: `${base}.afs`,
+      filters: [{ name: 'AspisFile Viewer Document', extensions: ['afs'] }],
+    });
+    if (!path) return false;
+    await writeFile(path, bytes);
+    return true;
+  } catch { return false; }
 }
 
 // W3 — tell the server we've cached the .afs locally (confirmed hold). Best-

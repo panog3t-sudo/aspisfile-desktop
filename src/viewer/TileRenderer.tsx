@@ -57,6 +57,9 @@ type Props = {
   // cases. downloadState drives label + disabled state once the button shows.
   onDownload?:    () => void;
   downloadState?: 'available' | 'in_progress' | 'confirmed';
+  // B+ multi-device — "Send to another device" export of the held .afs.
+  // SecureViewer passes onSend only once a local .afs copy exists to export.
+  onSend?:        () => void;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -83,7 +86,7 @@ export function TileRenderer({
   targetPage, onCurrentPageChange, onPresent, followMode,
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
   onPublishCursor,
-  onDownload, downloadState,
+  onDownload, downloadState, onSend,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -410,6 +413,22 @@ export function TileRenderer({
             SecureViewer omits it when the user can't or shouldn't
             download (owner, blob deleted, allow_download false). */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {onSend && (
+            <button
+              onClick={onSend}
+              title="Send a copy to another of your devices"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                height: 26, padding: '0 10px', borderRadius: 4,
+                border: '0.5px solid #334155', background: 'transparent',
+                color: '#F1F5F9', cursor: 'pointer',
+                fontSize: 12, fontWeight: 500, lineHeight: 1,
+                fontFamily: 'system-ui', flexShrink: 0,
+              }}
+            >
+              ⇪ Send to device
+            </button>
+          )}
           {onDownload && downloadState && (
             <button
               onClick={downloadState === 'available' ? onDownload : undefined}
