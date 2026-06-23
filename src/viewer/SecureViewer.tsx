@@ -507,13 +507,32 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       };
       if (data.device_share) pageHeaders["X-Device-Share"] = data.device_share;
 
-      const pagesRes = await fetch(
-        `${__API_BASE__}/api/v1/viewer/${file.id}/pages?session=${data.session_id}`,
-        { headers: pageHeaders }
-      );
-      if (pagesRes.ok) {
-        const pagesData = await pagesRes.json();
-        setTotalPages(pagesData.count ?? 1);
+      // Fetch page count. RETRY + SURFACE: /pages races the render-prime
+      // (/supply) effect. If /pages wins it takes the cache-miss self-decrypt
+      // path, which can transiently fail — and the old `if (pagesRes.ok)`
+      // SILENTLY swallowed failures, leaving totalPages=0 → an infinite
+      // "Authenticating…" spinner. Retry so /supply has time to prime the
+      // cache (the retry then hits it); if it still fails, surface the real
+      // reason instead of hanging.
+      let pagesOk = false;
+      let lastPagesErr = 'RENDER_FAILED';
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const pagesRes = await fetch(
+          `${__API_BASE__}/api/v1/viewer/${file.id}/pages?session=${data.session_id}`,
+          { headers: pageHeaders }
+        );
+        if (pagesRes.ok) {
+          const pagesData = await pagesRes.json();
+          setTotalPages(pagesData.count ?? 1);
+          pagesOk = true;
+          break;
+        }
+        lastPagesErr = ((await pagesRes.json().catch(() => ({}))) as any)?.error || `PAGES_${pagesRes.status}`;
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 700));
+      }
+      if (!pagesOk) {
+        setError(translateAccessError(lastPagesErr));
+        return;
       }
 
       // ─── Sprint 3 — file_opened audit event ──────────────────────
