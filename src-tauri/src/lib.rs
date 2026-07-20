@@ -54,6 +54,31 @@ pub fn run() {
             security::apply_window_security(&window);
             fileassoc::register_handler(app.handle().clone());
 
+            // Windows portable build: claim `aspisfile://` at runtime.
+            //
+            // The installers register the scheme for us, but the portable
+            // AspisFile.exe has no installer — and without the scheme the
+            // browser → viewer handoff (/access → aspisfile://…) dead-ends,
+            // which is the whole flow. register_all() writes to
+            // CURRENT_USER\Software\Classes, so it needs NO admin rights;
+            // the plugin documents it for exactly this "user did not install
+            // the app properly" case.
+            //
+            // Idempotent, so running it on installed builds too is harmless —
+            // it just re-points the scheme at the running exe, which is the
+            // behaviour you want when someone runs a portable copy anyway.
+            // Windows-only: register() returns UnsupportedPlatform on macOS,
+            // where LaunchServices reads the scheme from Info.plist instead.
+            #[cfg(windows)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(e) = app.deep_link().register_all() {
+                    // Non-fatal: an installed build already has the scheme, and
+                    // a portable one degrades to .afs double-click.
+                    eprintln!("[deep-link] scheme registration failed: {e}");
+                }
+            }
+
             // Replace the default macOS menu with the minimal App + Window
             // structure. Strips Edit (Copy/Paste/Select All), File, View
             // (Find), and Help — none of which apply to a rasterised

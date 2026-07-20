@@ -369,6 +369,18 @@ jobs:
           $exe = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
           if (-not $exe) { throw "NSIS installer not found" }
           Copy-Item $exe.FullName -Destination artifacts\AspisFile-Setup.exe
+          # Portable: the raw binary, before any bundling. Runs straight from
+          # Downloads — no installer, no admin, nothing written outside the
+          # user's profile. Last-resort path for locked-down machines where
+          # even the per-user installer is blocked. The app calls
+          # register_all() on first run to claim aspisfile:// under HKCU, so
+          # the browser handoff still works. Requires the WebView2 runtime
+          # (present by default on Win 11 and current Win 10).
+          $portable = Get-ChildItem -Path src-tauri\target\release\*.exe |
+            Where-Object { $_.Name -notlike '*setup*' -and $_.Name -notlike '*Setup*' } |
+            Select-Object -First 1
+          if (-not $portable) { throw "Portable exe not found" }
+          Copy-Item $portable.FullName -Destination artifacts\AspisFile-Portable.exe
           Get-ChildItem artifacts
 
       - name: Upload Windows artifacts
@@ -378,6 +390,7 @@ jobs:
           path: |
             artifacts/AspisFile.msi
             artifacts/AspisFile-Setup.exe
+            artifacts/AspisFile-Portable.exe
           retention-days: 1
 
   create-release:
@@ -410,6 +423,7 @@ jobs:
             - **macOS** — `AspisFile.pkg` (universal: Apple Silicon + Intel)
             - **Windows** — `AspisFile-Setup.exe` (recommended — no admin rights needed)
             - **Windows (IT-managed)** — `AspisFile.msi` (per-machine, for Intune/SCCM/GPO deployment)
+            - **Windows (no install)** — `AspisFile-Portable.exe` (runs from Downloads; for locked-down machines)
 
             ### Requirements
             - macOS 12 or later
@@ -419,9 +433,11 @@ jobs:
             **macOS**: Double-click the .pkg and follow the installer prompts. The app installs to /Applications automatically.
             **Windows**: Run `AspisFile-Setup.exe` — it installs for your user account only and needs no administrator rights. If SmartScreen appears, click "More info → Run anyway".
             **Windows, deployed by IT**: use `AspisFile.msi` (installs to Program Files for all users; requires elevation).
+            **Windows, can't install anything**: `AspisFile-Portable.exe` runs directly from your Downloads folder — no installer and nothing written outside your user profile. Needs the Microsoft WebView2 runtime, which is present by default on Windows 11 and current Windows 10.
           files: |
             artifacts/macos/AspisFile.pkg
             artifacts/windows/AspisFile.msi
             artifacts/windows/AspisFile-Setup.exe
+            artifacts/windows/AspisFile-Portable.exe
           draft: false
           prerelease: false
