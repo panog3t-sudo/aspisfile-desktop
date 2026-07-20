@@ -343,19 +343,41 @@ jobs:
         # Windows code-signing cert will be wired in once provisioned.
         run: npm run tauri build
 
-      - name: Rename msi to stable name
+      # Two Windows installers, for two different audiences:
+      #
+      #   AspisFile-Setup.exe (NSIS, per-user)  → the DEFAULT for recipients.
+      #     Installs to %LOCALAPPDATA%, so NO admin rights and NO UAC prompt.
+      #     An external counterparty who just needs to read one document can't
+      #     run a procurement cycle first.
+      #
+      #   AspisFile.msi (WiX, per-machine)      → for IT departments.
+      #     Tauri's WiX template is InstallScope="perMachine" into Program
+      #     Files, so it requires elevation — which is correct for central
+      #     deployment via Intune/SCCM/GPO, and is what a managed environment
+      #     wants. Keep BOTH: some enterprises explicitly block execution from
+      #     %LOCALAPPDATA%, so the per-user build is not a superset.
+      #
+      # `bundle.targets: "all"` already produced both; CI was discarding the
+      # NSIS output.
+      - name: Collect installers under stable names
         shell: pwsh
         run: |
-          $src = Get-ChildItem -Path src-tauri\target\release\bundle\msi\*.msi | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Copy-Item $src.FullName -Destination artifacts\AspisFile.msi
+          $msi = Get-ChildItem -Path src-tauri\target\release\bundle\msi\*.msi | Select-Object -First 1
+          if (-not $msi) { throw "MSI not found" }
+          Copy-Item $msi.FullName -Destination artifacts\AspisFile.msi
+          $exe = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
+          if (-not $exe) { throw "NSIS installer not found" }
+          Copy-Item $exe.FullName -Destination artifacts\AspisFile-Setup.exe
           Get-ChildItem artifacts
 
-      - name: Upload Windows artifact
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-msi
-          path: artifacts/AspisFile.msi
+          name: windows-installers
+          path: |
+            artifacts/AspisFile.msi
+            artifacts/AspisFile-Setup.exe
           retention-days: 1
 
   create-release:
@@ -370,10 +392,10 @@ jobs:
           name: macos-pkg
           path: artifacts/macos
 
-      - name: Download Windows artifact
+      - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-msi
+          name: windows-installers
           path: artifacts/windows
 
       - name: Create GitHub Release
@@ -386,7 +408,8 @@ jobs:
 
             ### Download
             - **macOS** — `AspisFile.pkg` (universal: Apple Silicon + Intel)
-            - **Windows** — `AspisFile.msi`
+            - **Windows** — `AspisFile-Setup.exe` (recommended — no admin rights needed)
+            - **Windows (IT-managed)** — `AspisFile.msi` (per-machine, for Intune/SCCM/GPO deployment)
 
             ### Requirements
             - macOS 12 or later
@@ -394,9 +417,11 @@ jobs:
 
             ### Installation
             **macOS**: Double-click the .pkg and follow the installer prompts. The app installs to /Applications automatically.
-            **Windows**: Run the .msi installer. If SmartScreen appears, click "More info → Run anyway".
+            **Windows**: Run `AspisFile-Setup.exe` — it installs for your user account only and needs no administrator rights. If SmartScreen appears, click "More info → Run anyway".
+            **Windows, deployed by IT**: use `AspisFile.msi` (installs to Program Files for all users; requires elevation).
           files: |
             artifacts/macos/AspisFile.pkg
             artifacts/windows/AspisFile.msi
+            artifacts/windows/AspisFile-Setup.exe
           draft: false
           prerelease: false

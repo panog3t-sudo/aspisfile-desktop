@@ -48,6 +48,11 @@
         "mimeType": "application/x-aspisfile"
       }
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "12.0",
       "entitlements": "AspisFile.entitlements",
