@@ -18,6 +18,7 @@ import { toggleAfsRender } from "./lib/afs-render";
 import "./App.css";
 import { DebugOverlay } from "./components/DebugOverlay";
 import { debugLog } from "./lib/debug-log";
+import UpdateBanner from "./components/UpdateBanner";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -849,6 +850,12 @@ function AppWithLockOverlay() {
   return (
     <>
       <AppContent />
+      {/* Update nag — app-level so it's seen regardless of how the viewer was
+          entered (a recipient who always double-clicks a .afs may never sit on
+          IdleScreen). Hidden while locked so it can't sit over the Touch ID /
+          Windows Hello prompt, and never blocking: a recipient opening a
+          document must always be able to dismiss it and carry on. */}
+      {!locked && <UpdateBanner />}
       {locked && <LockScreen onUnlock={unlock} />}
       {showDebug && <DebugOverlay />}
     </>
