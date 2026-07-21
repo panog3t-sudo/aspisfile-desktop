@@ -140,12 +140,29 @@ const CAPTURE_APPS: &[(&str, &str)] = &[
 /// Returns the deduped display names of any detected. The JS viewer polls
 /// this during an active session and, on detection, blacks out the tiles
 /// and reports a (soft, non-revoking) `screen_share_detected` violation.
+///
+/// SCOPE IS DELIBERATELY MINIMAL — reads process NAMES and nothing else.
+///
+/// Enumerating processes is a legitimate need here (we cannot block a
+/// recorder we can't see) but it also resembles reconnaissance, and EDR
+/// products score on behaviour as well as signature. `refresh_processes()`
+/// would additionally pull memory, CPU, disk usage and executable paths, and
+/// its siblings can pull command lines, environment variables, cwd and owning
+/// user — none of which we use, and command lines/environments in particular
+/// are where credential-harvesting malware looks. `ProcessRefreshKind::new()`
+/// starts with every field false, so we read the bare minimum to match a name
+/// against CAPTURE_APPS.
+///
+/// This narrows what we touch without weakening detection at all: the match is
+/// on the name either way. The caller already restricts WHEN this runs — the
+/// poll in SecureViewer is gated on an open document, so nothing scans at
+/// launch or while idle.
 #[tauri::command]
 pub fn detect_capture_processes() -> Vec<String> {
-    use sysinfo::System;
+    use sysinfo::{ProcessRefreshKind, System};
 
     let mut sys = System::new();
-    sys.refresh_processes();
+    sys.refresh_processes_specifics(ProcessRefreshKind::new());
 
     let mut found = std::collections::BTreeSet::new();
     for process in sys.processes().values() {
