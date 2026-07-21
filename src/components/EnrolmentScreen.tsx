@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { registerPasskey, PasskeyError } from "../lib/passkey";
+import { saveRecipientSession } from "../lib/recipient-session";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -43,6 +44,77 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
   // time we know the bridge failed.
   const [pendingRt, setPendingRt] = useState<string | null>(null);
   const [bridgeErrorDetail, setBridgeErrorDetail] = useState("");
+  // True once we have waited long enough that the protocol handoff is very
+  // unlikely to arrive — flips the waiting copy from "hang tight" to
+  // actionable rather than spinning forever.
+  const [handoffSlow, setHandoffSlow] = useState(false);
+
+  // ── Poll fallback for the browser handoff ────────────────────────────
+  // The browser is supposed to fire aspisfile://enrol-complete when the
+  // WebAuthn ceremony finishes. That protocol handoff was the ONLY way back
+  // into the app: no fallback, no timeout. Managed machines routinely block
+  // custom protocol handlers (same class of policy that blocks Windows Hello
+  // PIN setup), and when blocked the recipient completes enrolment, the
+  // server stores a valid passkey, and this screen spins forever.
+  //
+  // So while we wait, ask the server directly. Auth is the same registration
+  // token the browser is using, so this grants nothing extra — the token
+  // already authorises creating a credential, which is strictly more than
+  // being handed a session for one.
+  //
+  // Whichever arrives first wins; the deep link stays the fast path.
+  const pollingRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "waiting_browser" || !pendingRt) return;
+    let cancelled = false;
+    pollingRef.current = true;
+
+    const slowTimer = window.setTimeout(() => { if (!cancelled) setHandoffSlow(true); }, 25_000);
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(`${BASE}/api/v1/recipient-passkeys/enrol-status`, {
+          method:  "POST",
+          headers: { Authorization: `Bearer ${pendingRt}` },
+        });
+        if (res.status === 401) {
+          // Registration token expired — stop; retrying a dead token forever
+          // is exactly the failure this exists to remove.
+          if (!cancelled) {
+            setError("That took too long. Tap \u201cUse a different code\u201d to start again.");
+            setPhase("input");
+          }
+          return;
+        }
+        if (res.ok) {
+          const j = await res.json().catch(() => ({} as any));
+          if (j?.status === "complete" && j.session_token && j.email && j.passkey_id) {
+            if (cancelled) return;
+            saveRecipientSession({
+              email:     j.email,
+              token:     j.session_token,
+              passkeyId: j.passkey_id,
+              expiresIn: Number.isFinite(j.expires_in) && j.expires_in > 0 ? j.expires_in : 28800,
+            });
+            onComplete?.();
+            return;
+          }
+        }
+      } catch {
+        // Offline or transient — keep polling; the interval handles retry.
+      }
+      if (!cancelled) window.setTimeout(tick, 2_000);
+    };
+    window.setTimeout(tick, 2_000);
+
+    return () => {
+      cancelled = true;
+      pollingRef.current = false;
+      window.clearTimeout(slowTimer);
+      setHandoffSlow(false);
+    };
+  }, [phase, pendingRt, onComplete]);
 
   async function openBrowserWith(params: Record<string, string>) {
     const url = new URL(`${BASE}/enroll/desktop`);
@@ -290,7 +362,9 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               Complete in your browser
             </h2>
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
-              We&apos;ve opened a secure enrolment page in your default browser. Confirm with {/Mac/i.test(navigator.userAgent) ? "Touch ID" : "Windows Hello"} there — AspisFile will take over automatically when you&apos;re done.
+              {handoffSlow
+                ? "Still waiting. If you\u2019ve already confirmed in the browser, this will finish on its own in a few seconds \u2014 we\u2019re checking with the server directly. Your browser may also be asking permission to reopen AspisFile; allow it if so."
+                : <>We&apos;ve opened a secure enrolment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key \u2014 AspisFile will take over automatically when you&apos;re done.</>}
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
               <button onClick={handleRestart} style={btnSecondary}>Use a different code</button>
