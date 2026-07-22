@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getActiveSessionToken } from "../lib/recipient-session";
 
 // Phase 1 Day 9.7 — desktop lock state. Sibling to mobile's
@@ -75,6 +76,9 @@ const LockContext = createContext<LockContextType>({
 
 export function LockProvider({ children }: { children: ReactNode }) {
   const [locked,             setLockedState]        = useState(false);
+  // "Lock when idle" menu toggle. Source of truth is Rust (survives restart);
+  // default true (secure default) until the async read resolves.
+  const [autolockEnabled,    setAutolockEnabled]    = useState(true);
   const [setupComplete,      setSetupComplete]      = useState(true);   // pessimistic on init: skip modal until storage read
   const [biometricEnabled,   setBiometricEnabled]   = useState(false);
   const [pinSet,             setPinSet]             = useState(false);
@@ -118,10 +122,16 @@ export function LockProvider({ children }: { children: ReactNode }) {
       // before reaching IdleScreen / viewer. Matches the mobile
       // LockContext change. Configurable per-user is deferred (see
       // memory project_deferred_configurable_app_lock.md).
+      // Read the persisted "Lock when idle" setting (menu toggle). When off,
+      // skip the cold-start lock and never arm the idle/blur lock below.
+      let autolockOn = true;
+      try { autolockOn = await invoke<boolean>("get_autolock"); } catch { /* default on */ }
+      setAutolockEnabled(autolockOn);
+
       const recipientToken    = getActiveSessionToken();
       const recipientPresent  = !!recipientToken;
       const senderCanUnlock   = setupRaw === "1" && (bioRaw === "1" || pinRaw === "1");
-      const shouldColdStartLock = recipientPresent || senderCanUnlock;
+      const shouldColdStartLock = autolockOn && (recipientPresent || senderCanUnlock);
       setLockedState(shouldColdStartLock);
 
       setInitialised(true);
@@ -148,6 +158,8 @@ export function LockProvider({ children }: { children: ReactNode }) {
     // and is satisfied by the browser passkey unlock; that one deliberate
     // presence proof per session is the balance for these machines.
     if (!biometricAvailable && !pinSet) return;
+    // …and not when the user turned "Lock when idle" off in the menu.
+    if (!autolockEnabled) return;
 
     const BLUR_MS = 60 * 1000;
     const IDLE_MS = 2 * 60 * 1000;
@@ -175,7 +187,19 @@ export function LockProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("blur",  handleBlur);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [initialised, setupComplete, biometricEnabled, pinSet, biometricAvailable]);
+  }, [initialised, setupComplete, biometricEnabled, pinSet, biometricAvailable, autolockEnabled]);
+
+  // Live reaction to the menu "Lock when idle" toggle. Turning it OFF also
+  // clears any current lock (the user is choosing to trust this device);
+  // turning it ON just re-arms for the next idle — it won't lock immediately.
+  useEffect(() => {
+    const un = listen<boolean>("autolock-changed", (e) => {
+      const on = !!e.payload;
+      setAutolockEnabled(on);
+      if (!on) setLockedState(false);
+    });
+    return () => { un.then((f) => f()); };
+  }, []);
 
   const markSetupComplete = async (opts: { biometricEnabled: boolean; pinSet: boolean }) => {
     try {

@@ -2,9 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-always-on-top",
     "opener:default",
     "deep-link:default",
     "dialog:allow-save",
@@ -17,10 +22,18 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://aspisfile.com/*" },
-        { "url": "https://staging.aspisfile.com/*" },
-        { "url": "https://aspisfile-prod.s3.eu-north-1.amazonaws.com/*" },
-        { "url": "https://aspisfile-dev.s3.eu-north-1.amazonaws.com/*" }
+        {
+          "url": "https://aspisfile.com/*"
+        },
+        {
+          "url": "https://staging.aspisfile.com/*"
+        },
+        {
+          "url": "https://aspisfile-prod.s3.eu-north-1.amazonaws.com/*"
+        },
+        {
+          "url": "https://aspisfile-dev.s3.eu-north-1.amazonaws.com/*"
+        }
       ]
     }
   ]

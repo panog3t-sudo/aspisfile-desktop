@@ -3,10 +3,11 @@ mod commands;
 mod fileassoc;
 mod updater;
 mod passkey;
+mod autolock;
 
 use tauri::{
-    Manager,
-    menu::{Menu, MenuBuilder, SubmenuBuilder, PredefinedMenuItem, AboutMetadata},
+    Manager, Emitter,
+    menu::{Menu, MenuBuilder, SubmenuBuilder, PredefinedMenuItem, AboutMetadata, CheckMenuItem},
 };
 
 // Minimal macOS menu bar: App + Window only.
@@ -18,7 +19,11 @@ use tauri::{
 // capability we explicitly don't provide. App + Window are required by
 // the macOS Human Interface Guidelines (About, Quit, Hide, Minimize,
 // Zoom); everything else is stripped.
-fn build_minimal_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+// Returns the menu AND the "Lock when idle" check item, so the caller can keep
+// the handle to update its checkmark when toggled.
+fn build_minimal_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<(Menu<R>, CheckMenuItem<R>)> {
     // Explicit AboutMetadata — required on Windows. With `None`, the
     // predefined About item auto-populates from the bundle on macOS but shows
     // nothing on Windows (clicking About did nothing — reported 2026-07-22).
@@ -32,8 +37,22 @@ fn build_minimal_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Re
         version: Some(app.package_info().version.to_string()),
         ..Default::default()
     };
+    // Checkable "Lock when idle" — controls the app presence-lock. Checked
+    // reflects the persisted setting so it's right at launch. Its id is used
+    // by the menu-event handler in run() to toggle + persist + notify JS.
+    let lock_item = CheckMenuItem::with_id(
+        app,
+        "autolock_toggle",
+        "Lock when idle",
+        true,                       // enabled (clickable)
+        autolock::is_enabled(app),  // checked
+        None::<&str>,               // no accelerator
+    )?;
+
     let app_submenu = SubmenuBuilder::new(app, "AspisFile Viewer")
         .item(&PredefinedMenuItem::about(app, Some("About AspisFile Viewer"), Some(about))?)
+        .separator()
+        .item(&lock_item)
         .separator()
         .item(&PredefinedMenuItem::hide(app, None)?)
         .item(&PredefinedMenuItem::hide_others(app, None)?)
@@ -46,9 +65,10 @@ fn build_minimal_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Re
         .item(&PredefinedMenuItem::maximize(app, None)?)
         .build()?;
 
-    MenuBuilder::new(app)
+    let menu = MenuBuilder::new(app)
         .items(&[&app_submenu, &window_submenu])
-        .build()
+        .build()?;
+    Ok((menu, lock_item))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -96,8 +116,20 @@ pub fn run() {
             // structure. Strips Edit (Copy/Paste/Select All), File, View
             // (Find), and Help — none of which apply to a rasterised
             // secure document viewer.
-            if let Ok(menu) = build_minimal_menu(app.handle()) {
+            if let Ok((menu, lock_item)) = build_minimal_menu(app.handle()) {
                 let _ = app.set_menu(menu);
+                // Menu-event handler for the "Lock when idle" toggle: flip +
+                // persist the setting, update the checkmark, and tell the
+                // frontend so the lock arms/disarms live. Keeps the check item
+                // alive by moving its handle into the closure.
+                app.on_menu_event(move |app, event| {
+                    if event.id().as_ref() == "autolock_toggle" {
+                        let next = !autolock::is_enabled(app);
+                        autolock::set_enabled(app, next);
+                        let _ = lock_item.set_checked(next);
+                        let _ = app.emit("autolock-changed", next);
+                    }
+                });
             }
             // Deep-link delivery now handled directly in the frontend via
             // @tauri-apps/plugin-deep-link's getCurrent() + onOpenUrl() —
@@ -122,6 +154,7 @@ pub fn run() {
             commands::log_security_event,
             commands::authenticate_biometric,
             commands::biometric_available,
+            commands::get_autolock,
             commands::detect_capture_processes,
             fileassoc::read_afs,
             fileassoc::take_pending_afs,

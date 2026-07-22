@@ -40,6 +40,12 @@ pub async fn authenticate_biometric(app: AppHandle) -> Result<(), String> {
 ///   Hello PIN/biometric is actually enrolled and available.
 /// - macOS: always true — LAPolicyDeviceOwnerAuthentication includes a password
 ///   fallback, so a local authenticator always exists.
+/// Read the persisted "Lock when idle" setting for the LockContext to respect.
+#[tauri::command]
+pub fn get_autolock(app: AppHandle) -> bool {
+    crate::autolock::is_enabled(&app)
+}
+
 #[tauri::command]
 pub async fn biometric_available() -> bool {
     #[cfg(target_os = "windows")]
