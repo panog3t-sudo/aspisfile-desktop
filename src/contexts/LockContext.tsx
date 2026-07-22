@@ -35,6 +35,13 @@ type LockContextType = {
   unlock(): void;
   lock(): void;
 
+  // SecureViewer sets this true while a document is open. The app-level
+  // idle/blur lock then stands down, because the viewer runs its OWN per-file
+  // idle lock — without this, BOTH fired at the same idle timeout and stacked
+  // two LockScreens, the second bailing on the biometric mutex, so the user
+  // had to click a second unlock button after Touch ID (trace 2026-07-22).
+  setViewingActive(active: boolean): void;
+
   // Single-prompt biometric dedup. Any caller that successfully runs
   // a Touch ID / Windows Hello prompt calls recordBiometric();
   // sibling gates check lastBiometricAt and skip their own prompt if
@@ -68,6 +75,7 @@ const LockContext = createContext<LockContextType>({
   markSetupComplete:  async () => {},
   unlock:             () => {},
   lock:               () => {},
+  setViewingActive:   () => {},
   lastBiometricAt:    0,
   recordBiometric:    () => {},
   tryBeginBiometric:  () => true,
@@ -79,6 +87,8 @@ export function LockProvider({ children }: { children: ReactNode }) {
   // "Lock when idle" menu toggle. Source of truth is Rust (survives restart);
   // default true (secure default) until the async read resolves.
   const [autolockEnabled,    setAutolockEnabled]    = useState(true);
+  // True while SecureViewer has a document open (it owns the idle lock then).
+  const [viewingActive,      setViewingActiveState] = useState(false);
   const [setupComplete,      setSetupComplete]      = useState(true);   // pessimistic on init: skip modal until storage read
   const [biometricEnabled,   setBiometricEnabled]   = useState(false);
   const [pinSet,             setPinSet]             = useState(false);
@@ -160,6 +170,9 @@ export function LockProvider({ children }: { children: ReactNode }) {
     if (!biometricAvailable && !pinSet) return;
     // …and not when the user turned "Lock when idle" off in the menu.
     if (!autolockEnabled) return;
+    // …and not while a document is open — SecureViewer's per-file lock owns
+    // idle then; running both stacks two lock screens (see setViewingActive).
+    if (viewingActive) return;
 
     const BLUR_MS = 60 * 1000;
     const IDLE_MS = 2 * 60 * 1000;
@@ -187,7 +200,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("blur",  handleBlur);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [initialised, setupComplete, biometricEnabled, pinSet, biometricAvailable, autolockEnabled]);
+  }, [initialised, setupComplete, biometricEnabled, pinSet, biometricAvailable, autolockEnabled, viewingActive]);
 
   // Live reaction to the menu "Lock when idle" toggle. Turning it OFF also
   // clears any current lock (the user is choosing to trust this device);
@@ -226,6 +239,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
         markSetupComplete,
         unlock: () => setLockedState(false),
         lock:   () => setLockedState(true),
+        setViewingActive: (active: boolean) => setViewingActiveState(active),
         lastBiometricAt,
         recordBiometric: () => setLastBiometricAt(Date.now()),
         tryBeginBiometric: () => {

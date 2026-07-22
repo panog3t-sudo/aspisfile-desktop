@@ -21,6 +21,7 @@ import { translateAccessError, type FriendlyAccessError } from "../lib/access-er
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
 import { LockScreen } from "../components/LockScreen";
+import { useLock } from "../contexts/LockContext";
 import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
 import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaitingScreen";
 import { DelegationScreen } from "../components/DelegationScreen";
@@ -362,6 +363,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       .catch(() => setLocalAuthAvailable(true));
   }, []);
   useLockGuard(isViewing && localAuthAvailable, useCallback(() => setLocked(true), []));
+
+  // Tell the app-level lock to stand down while this viewer is mounted — the
+  // per-file useLockGuard above owns the idle lock here. Without this, both
+  // the app-level idle lock and this one fired at the same timeout, stacking
+  // two lock screens (the second bailed on the biometric mutex, forcing a
+  // second unlock click after Touch ID — trace 2026-07-22).
+  const { setViewingActive } = useLock();
+  useEffect(() => {
+    setViewingActive(true);
+    return () => setViewingActive(false);
+  }, [setViewingActive]);
 
   // ─── Sprint 2 — derive initial download state from recipient fields ─
   // recipient comes from authenticateDesktop. Stale in-progress lock
