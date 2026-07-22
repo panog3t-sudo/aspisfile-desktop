@@ -141,6 +141,13 @@ export function LockProvider({ children }: { children: ReactNode }) {
     const senderCanUnlock = setupComplete && (biometricEnabled || pinSet);
     const enabled = !!recipientToken || senderCanUnlock;
     if (!enabled) return;
+    // Do NOT arm the recurring idle/blur re-lock when there is no LOCAL
+    // authenticator (no Windows Hello / Touch ID) and no PIN. Re-locking would
+    // force a browser+phone QR round-trip on every idle timeout — unusable
+    // (reported 2026-07-22). The cold-start lock still fires once per launch
+    // and is satisfied by the browser passkey unlock; that one deliberate
+    // presence proof per session is the balance for these machines.
+    if (!biometricAvailable && !pinSet) return;
 
     const BLUR_MS = 60 * 1000;
     const IDLE_MS = 2 * 60 * 1000;
@@ -168,7 +175,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("blur",  handleBlur);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [initialised, setupComplete, biometricEnabled, pinSet]);
+  }, [initialised, setupComplete, biometricEnabled, pinSet, biometricAvailable]);
 
   const markSetupComplete = async (opts: { biometricEnabled: boolean; pinSet: boolean }) => {
     try {

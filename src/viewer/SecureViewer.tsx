@@ -644,7 +644,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       if (detected && !wasDetected) {
         fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/violation`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          // X-App-Platform so the server treats this as a native client and
+          // skips the browser IP/UA re-check (the native viewer uses two HTTP
+          // stacks with different UAs — see the violation route). Every other
+          // desktop call already sends this; this one was missing it.
+          headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
           body: JSON.stringify({
             session_id: sessionId,
             violation_type: 'screen_share_detected',
