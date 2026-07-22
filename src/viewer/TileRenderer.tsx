@@ -389,9 +389,21 @@ export function TileRenderer({
             >
               −
             </button>
-            <span style={{ fontSize: 12, color: "#94A3B8", fontFamily: "system-ui", minWidth: 38, textAlign: "center" }}>
+            <button
+              onClick={() => {
+                const RESET = ZOOM_STEPS.indexOf(100);   // 100% step
+                if (RESET >= 0 && RESET !== zoomIndex) { setZoomIndex(RESET); onCurrentZoomChange?.(RESET); }
+              }}
+              title="Reset to 100%"
+              style={{
+                fontSize: 12, color: "#94A3B8", fontFamily: "system-ui",
+                minWidth: 38, textAlign: "center", background: "transparent",
+                border: "none", padding: 0,
+                cursor: zoomIndex === ZOOM_STEPS.indexOf(100) ? "default" : "pointer",
+              }}
+            >
               {ZOOM_STEPS[zoomIndex]}%
-            </span>
+            </button>
             <button
               onClick={() => setZoomIndex((i) => {
                 const next = Math.min(ZOOM_STEPS.length - 1, i + 1);

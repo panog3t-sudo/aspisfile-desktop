@@ -349,7 +349,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const canPresent = file?.is_owner === true;
 
   const isViewing = !!(sessionId && totalPages > 0 && !locked);
-  useLockGuard(isViewing, useCallback(() => setLocked(true), []));
+  // Only arm the per-file idle/blur re-lock when the machine has a LOCAL
+  // authenticator to re-unlock with. On a Windows PC with no Windows Hello,
+  // re-locking would force a browser+phone QR round-trip on every idle timeout
+  // (reported 2026-07-22) — the same reason the app-level idle lock is disabled
+  // there (LockContext). Default true so macOS (which always has Touch ID /
+  // password) is unaffected while the async check resolves.
+  const [localAuthAvailable, setLocalAuthAvailable] = useState(true);
+  useEffect(() => {
+    invoke<boolean>("biometric_available")
+      .then(setLocalAuthAvailable)
+      .catch(() => setLocalAuthAvailable(true));
+  }, []);
+  useLockGuard(isViewing && localAuthAvailable, useCallback(() => setLocked(true), []));
 
   // ─── Sprint 2 — derive initial download state from recipient fields ─
   // recipient comes from authenticateDesktop. Stale in-progress lock

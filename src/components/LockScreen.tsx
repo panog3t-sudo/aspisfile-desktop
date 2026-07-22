@@ -118,11 +118,15 @@ export function LockScreen({ fileName, onUnlock }: Props) {
             pollRef.current = false;
             recordBiometric();
             // Pull the viewer window to the front — the user is looking at the
-            // browser "Verified" tab and needs to be brought back.
+            // browser "Verified" tab. On Windows, setFocus() alone loses to
+            // focus-stealing prevention (it just flashes the taskbar), so
+            // briefly toggle always-on-top, which reliably raises the window.
             try {
               const w = getCurrentWindow();
               await w.unminimize();
+              await w.setAlwaysOnTop(true);
               await w.setFocus();
+              await w.setAlwaysOnTop(false);
             } catch { /* best-effort */ }
             onUnlock();
             return;
