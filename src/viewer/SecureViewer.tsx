@@ -15,7 +15,7 @@ import {
 import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
-import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
+import { CaptureBlackoutScreen, ScreenshotPausedScreen } from "../components/CaptureBlackoutScreen";
 import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, type HeldStatus } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
@@ -113,6 +113,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // non-empty, the viewer blacks out + a soft screen_share_detected
   // violation is reported. Reversible — clears when the tool closes.
   const [captureApps, setCaptureApps] = useState<string[]>([]);
+  // Brief pause + sender alert when a Print Screen keypress is detected.
+  const [screenshotPaused, setScreenshotPaused] = useState(false);
   // Phase B (B5) — flagged + additive. When the flag is on, prime the
   // server's render cache from the recipient's .afs before showing tiles;
   // default OFF keeps the durable-S3 tile path unchanged.
@@ -687,6 +689,34 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [isViewing, sessionId, file]);
 
+  // Print Screen detection. The window's contentProtected flag already blanks
+  // the viewer in any capture, but a one-off PrtSc leaves no running process
+  // for the poll above to catch and sends no signal. Here we catch the key
+  // itself: clear the clipboard copy the OS just made, report a `screenshot`
+  // violation so the sender is notified, and show a brief pause so the user
+  // sees a clear message rather than the window appearing to blank silently.
+  // Reversible — resumes after a few seconds. (Win+Shift+S / Snip is an OS
+  // shortcut that doesn't reach the WebView; contentProtected still blanks it.)
+  useEffect(() => {
+    if (!isViewing || !sessionId || !file) return;
+    let cancelled = false;
+    let resumeTimer = 0;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'PrintScreen' && e.code !== 'PrintScreen') return;
+      try { navigator.clipboard.writeText(''); } catch { /* best-effort */ }
+      setScreenshotPaused(true);
+      window.clearTimeout(resumeTimer);
+      resumeTimer = window.setTimeout(() => { if (!cancelled) setScreenshotPaused(false); }, 4000);
+      fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/violation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
+        body: JSON.stringify({ session_id: sessionId, violation_type: 'screenshot', metadata: { key: 'PrintScreen' } }),
+      }).catch(() => {});
+    };
+    window.addEventListener('keyup', onKey);
+    return () => { cancelled = true; window.clearTimeout(resumeTimer); window.removeEventListener('keyup', onKey); };
+  }, [isViewing, sessionId, file]);
+
   // Phase B (B5) — prime the server-transient render from the recipient's
   // .afs when the flag is on. Fetch + re-supply once per session; on success
   // /tile renders from the primed cache, on failure we fall back to durable
@@ -1130,6 +1160,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Screen-capture tool running → black out (unmounts the TileRenderer so
   // tiles stop rendering). Reverses when the poll above clears captureApps.
   if (captureApps.length > 0) return <CaptureBlackoutScreen apps={captureApps} />;
+  if (screenshotPaused) return <ScreenshotPausedScreen />;
 
   return (
     <>

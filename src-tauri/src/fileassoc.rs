@@ -109,18 +109,9 @@ fn parse_and_stage_afs_v2(app: &AppHandle, path: &str) -> Option<AfsLink> {
 /// Events. Non-fatal — silently no-ops on parse failure to avoid
 /// spamming popups for malformed files.
 pub fn try_open_afs(app: &AppHandle, path: &str) {
-    // DIAGNOSTIC (v1.9.35): surface each step to the in-app debug overlay so we
-    // can see WHERE a Windows .afs double-click stops, instead of guessing.
-    let _ = app.emit("afs-debug", format!("try_open_afs path={}", path));
     // Try v2 (binary, ciphertext-bearing) first — it stages the held copy;
     // fall back to the v1 JSON link descriptor.
-    let v2 = parse_and_stage_afs_v2(app, path);
-    let _ = app.emit("afs-debug", format!("parse_v2={}", if v2.is_some() { "ok" } else { "none" }));
-    let link = match v2.or_else(|| parse_afs_path(path)) {
-        Some(l) => l,
-        None => { let _ = app.emit("afs-debug", "parse FAILED (v2+v1 both none) → no link".to_string()); return; }
-    };
-    let _ = app.emit("afs-debug", format!("link ok token={}… v={} type={}", &link.token.chars().take(8).collect::<String>(), link.v, link.type_));
+    let Some(link) = parse_and_stage_afs_v2(app, path).or_else(|| parse_afs_path(path)) else { return };
     // Buffer first, emit second. Cold-start: React is not yet listening,
     // the emit is lost, drain on mount picks it up via take_pending_afs.
     // Warm-start: React is listening, the emit fires immediately.
@@ -150,30 +141,13 @@ pub fn register_handler(app: AppHandle) {
     // arm via WindowEvent::DragDrop. Cold-start file-open arrives via
     // RunEvent::Opened, also in lib.rs.
     // Windows/Linux: cold-start file path arrives as argv[1].
-    let argv: Vec<String> = std::env::args().collect();
     if let Some(arg) = std::env::args().nth(1) {
         if arg.ends_with(".afs") {
             let app_cold = app.clone();
-            let arg2 = arg.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(800));
-                // DIAGNOSTIC: confirm the argv path reached try_open_afs.
-                let _ = app_cold.emit("afs-debug", format!("register_handler argv[1]={} → try_open_afs", arg2));
-                try_open_afs(&app_cold, &arg2);
-            });
-        } else {
-            // DIAGNOSTIC: argv[1] present but not a .afs (delayed so JS is listening).
-            let app_c = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(1200));
-                let _ = app_c.emit("afs-debug", format!("register_handler argv[1] not .afs: {:?}", argv.get(1)));
+                try_open_afs(&app_cold, &arg);
             });
         }
-    } else {
-        let app_c = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(1200));
-            let _ = app_c.emit("afs-debug", format!("register_handler NO argv[1] (argv len={})", argv.len()));
-        });
     }
 }
