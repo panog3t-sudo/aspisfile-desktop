@@ -4,7 +4,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
 import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
 import { getActiveSessionToken, getRecipientSession } from "../lib/recipient-session";
-import { authenticatePasskey } from "../lib/passkey";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 declare const __API_BASE__: string;
 
@@ -67,30 +67,63 @@ export function LockScreen({ fileName, onUnlock }: Props) {
   const [status, setStatus] = useState<"idle" | "verifying" | "error">("idle");
   const inProgressRef = useRef(false);
 
-  // Passkey re-auth fallback — used when no local authenticator exists.
-  // Proves presence by re-running the WebAuthn ceremony for the enrolled
-  // passkey (Windows: WebView2, which supports the phone/QR hybrid transport;
-  // macOS: the native AS bridge). On success it counts as a fresh presence
-  // proof exactly like a biometric.
+  // Passkey presence proof for machines with no local authenticator.
+  //
+  // WebAuthn CANNOT run inside the Tauri WebView on Windows — the WebView
+  // origin is tauri.localhost, the passkey RP is aspisfile.com, and they can't
+  // match ("relying party did not match"). So we open the SYSTEM browser
+  // (origin aspisfile.com, where phone/QR works) at /auth/desktop-verify, which
+  // runs the assertion and stamps the passkey server-side. We then POLL
+  // verify-presence-status — not the aspisfile:// callback, which managed
+  // machines can block — and unlock when the server confirms a fresh assertion.
+  const pollRef = useRef(false);
   const attemptPasskey = async () => {
-    if (inProgressRef.current) return;
+    if (pollRef.current) return;
     const sess = getRecipientSession();
-    if (!sess?.email) { setError("No enrolled identity on this device. Sign out and open your file link again."); return; }
-    if (!tryBeginBiometric()) return;
-    inProgressRef.current = true;
+    if (!sess?.email || !sess?.token) {
+      setError("No enrolled identity on this device. Sign out and open your file link again.");
+      return;
+    }
     setStatus("verifying");
     setError("");
+    pollRef.current = true;
+
     try {
-      await authenticatePasskey({ email: sess.email });
-      recordBiometric();
-      onUnlock();
-    } catch (e: any) {
+      await openUrl(`${__API_BASE__}/auth/desktop-verify?email=${encodeURIComponent(sess.email)}`);
+    } catch {
+      pollRef.current = false;
       setStatus("error");
-      setError(e?.message ? `Couldn't verify your passkey: ${e.message}` : "Passkey verification failed — try again.");
-    } finally {
-      inProgressRef.current = false;
-      endBiometric();
+      setError("Couldn't open your browser. Try again.");
+      return;
     }
+
+    const startedAt = Date.now();
+    const poll = async () => {
+      if (!pollRef.current) return;
+      if (Date.now() - startedAt > 3 * 60_000) {   // give up after 3 min
+        pollRef.current = false;
+        setStatus("error");
+        setError("Verification timed out. Tap Verify with your passkey to try again.");
+        return;
+      }
+      try {
+        const res = await fetch(`${__API_BASE__}/api/v1/recipient-passkeys/verify-presence-status`, {
+          method:  "POST",
+          headers: { Authorization: `Bearer ${sess.token}` },
+        });
+        if (res.ok) {
+          const j = await res.json().catch(() => ({} as any));
+          if (j?.verified) {
+            pollRef.current = false;
+            recordBiometric();
+            onUnlock();
+            return;
+          }
+        }
+      } catch { /* transient — keep polling */ }
+      if (pollRef.current) window.setTimeout(poll, 2_000);
+    };
+    window.setTimeout(poll, 2_000);
   };
 
   const attemptBiometric = async () => {
