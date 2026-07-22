@@ -6,6 +6,7 @@ import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
 import { getActiveSessionToken, getRecipientSession } from "../lib/recipient-session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { debugLog } from "../lib/debug-log";
 
 declare const __API_BASE__: string;
 
@@ -139,14 +140,16 @@ export function LockScreen({ fileName, onUnlock }: Props) {
   };
 
   const attemptBiometric = async () => {
-    if (inProgressRef.current) return;
-    if (!canUseBiometric) return;
+    debugLog('lock', `attemptBiometric: inProgress=${inProgressRef.current} canUseBio=${canUseBiometric} bioAvail=${biometricAvailable} bioEnabled=${biometricEnabled} hasSess=${hasRecipientSession} sinceLast=${Date.now()-lastBiometricAt}`);
+    if (inProgressRef.current) { debugLog('lock', 'attemptBiometric: bail inProgress'); return; }
+    if (!canUseBiometric) { debugLog('lock', 'attemptBiometric: bail !canUseBiometric'); return; }
     // Dedup: a sibling biometric (the app-level LockScreen, or
     // openLink's per-file gate, or this same screen's prior attempt
     // in another mount) was just confirmed. Pass through without
     // prompting again. Avoids the v1.7.11 "two Touch IDs on return
     // from background" UX issue.
     if (Date.now() - lastBiometricAt < BIOMETRIC_FRESH_MS) {
+      debugLog('lock', 'attemptBiometric: dedup pass → onUnlock');
       onUnlock();
       return;
     }
@@ -155,16 +158,20 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     // useEffect re-fires (deps include lastBiometricAt) and the
     // freshness check above passes through.
     if (!tryBeginBiometric()) {
+      debugLog('lock', 'attemptBiometric: bail mutex (tryBeginBiometric=false)');
       return;
     }
     inProgressRef.current = true;
     setStatus("verifying");
     setError("");
     try {
+      debugLog('lock', 'attemptBiometric: invoking authenticate_biometric');
       await invoke("authenticate_biometric");
+      debugLog('lock', 'attemptBiometric: OK → recordBiometric + onUnlock');
       recordBiometric();
       onUnlock();
-    } catch {
+    } catch (e) {
+      debugLog('lock', `attemptBiometric: ERR ${String(e)}`);
       setStatus("error");
     } finally {
       inProgressRef.current = false;
@@ -181,6 +188,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
   // auto-attempt once on mount; if the user cancels, the manual
   // "Use Touch ID" button (further down this screen) is the way back.
   useEffect(() => {
+    debugLog('lock', `auto-prompt effect fired: canUseBiometric=${canUseBiometric} fileName=${fileName ?? '(app-lock)'}`);
     attemptBiometric();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canUseBiometric]);
