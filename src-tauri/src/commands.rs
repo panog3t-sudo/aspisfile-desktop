@@ -145,10 +145,16 @@ pub async fn log_security_event(
     Ok(())
 }
 
-// Dedicated screen-capture / recording tools, matched case-insensitively
-// as a substring of the process name (so "OBS Studio", "obs64.exe" and
-// "obs" all hit "obs"). The second field is the display name shown to the
-// sender in the alert.
+// Dedicated screen-capture / recording tools. The first field is matched
+// against the process EXECUTABLE NAME (see process_matches); the second is the
+// display name shown to the sender.
+//
+// Matching is anchored, NOT a bare substring. A substring match on the 3-char
+// needle "kap" false-positived against a background Windows process (Kap is a
+// macOS-only recorder — it can't be running on Windows) and paused a legitimate
+// Windows view (2026-07-22). process_matches requires the needle to be the
+// executable name, optionally followed by a version/space (obs → obs64,
+// cleanshot → "cleanshot x"), so a needle buried mid-name no longer matches.
 //
 // We deliberately DO NOT list always-on conferencing apps (Zoom, Teams,
 // Webex, Discord): they launch at login and run in the background all day
@@ -193,6 +199,25 @@ const CAPTURE_APPS: &[(&str, &str)] = &[
 /// on the name either way. The caller already restricts WHEN this runs — the
 /// poll in SecureViewer is gated on an open document, so nothing scans at
 /// launch or while idle.
+/// Anchored match of a capture-tool needle against a process name.
+///
+/// True when the process's executable name (minus a trailing ".exe") IS the
+/// needle, or begins with the needle followed by a non-letter — so "obs"
+/// matches "obs" and "obs64.exe" (version digit) and "cleanshot" matches
+/// "cleanshot x.exe" (space), but a needle sitting mid-name (e.g. "kap" inside
+/// a "mpkslkap…" Defender driver) does NOT match. Kills the substring false
+/// positive without weakening real detection.
+fn process_matches(name_lower: &str, needle: &str) -> bool {
+    let stem = name_lower.strip_suffix(".exe").unwrap_or(name_lower);
+    if stem == needle {
+        return true;
+    }
+    match stem.strip_prefix(needle) {
+        Some(rest) => rest.chars().next().map_or(true, |c| !c.is_ascii_alphabetic()),
+        None => false,
+    }
+}
+
 #[tauri::command]
 pub fn detect_capture_processes() -> Vec<String> {
     use sysinfo::{ProcessRefreshKind, System};
@@ -204,10 +229,31 @@ pub fn detect_capture_processes() -> Vec<String> {
     for process in sys.processes().values() {
         let name = process.name().to_lowercase();
         for (needle, display) in CAPTURE_APPS {
-            if name.contains(needle) {
+            if process_matches(&name, needle) {
                 found.insert((*display).to_string());
             }
         }
     }
     found.into_iter().collect()
+}
+
+#[cfg(test)]
+mod capture_match_tests {
+    use super::process_matches;
+    #[test]
+    fn matches_real_recorders() {
+        assert!(process_matches("obs", "obs"));
+        assert!(process_matches("obs64.exe", "obs"));
+        assert!(process_matches("sharex.exe", "sharex"));
+        assert!(process_matches("cleanshot x.exe", "cleanshot"));
+        assert!(process_matches("screenstudio", "screenstudio"));
+    }
+    #[test]
+    fn rejects_substring_false_positives() {
+        // the "kap" incident: needle buried in an unrelated process name
+        assert!(!process_matches("mpkslkap9a2b.sys", "kap"));
+        assert!(!process_matches("backup.exe", "kap")); // 'kap' not even a prefix
+        assert!(!process_matches("obsidian.exe", "obs")); // obs + letter → no
+        assert!(!process_matches("loompanel.exe", "loom")); // loom + letter → no
+    }
 }

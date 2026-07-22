@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
 import { getActiveSessionToken, getRecipientSession } from "../lib/recipient-session";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 declare const __API_BASE__: string;
 
@@ -116,6 +117,13 @@ export function LockScreen({ fileName, onUnlock }: Props) {
           if (j?.verified) {
             pollRef.current = false;
             recordBiometric();
+            // Pull the viewer window to the front — the user is looking at the
+            // browser "Verified" tab and needs to be brought back.
+            try {
+              const w = getCurrentWindow();
+              await w.unminimize();
+              await w.setFocus();
+            } catch { /* best-effort */ }
             onUnlock();
             return;
           }
