@@ -6,7 +6,7 @@ mod passkey;
 
 use tauri::{
     Manager,
-    menu::{Menu, MenuBuilder, SubmenuBuilder, PredefinedMenuItem},
+    menu::{Menu, MenuBuilder, SubmenuBuilder, PredefinedMenuItem, AboutMetadata},
 };
 
 // Minimal macOS menu bar: App + Window only.
@@ -19,8 +19,17 @@ use tauri::{
 // the macOS Human Interface Guidelines (About, Quit, Hide, Minimize,
 // Zoom); everything else is stripped.
 fn build_minimal_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    // Explicit AboutMetadata — required on Windows. With `None`, the
+    // predefined About item auto-populates from the bundle on macOS but shows
+    // nothing on Windows (clicking About did nothing — reported 2026-07-22).
+    // Passing name + version makes the dialog appear on both platforms.
+    let about = AboutMetadata {
+        name:    Some("AspisFile Viewer".into()),
+        version: Some(env!("CARGO_PKG_VERSION").into()),
+        ..Default::default()
+    };
     let app_submenu = SubmenuBuilder::new(app, "AspisFile Viewer")
-        .item(&PredefinedMenuItem::about(app, None, None)?)
+        .item(&PredefinedMenuItem::about(app, Some("About AspisFile Viewer"), Some(about))?)
         .separator()
         .item(&PredefinedMenuItem::hide(app, None)?)
         .item(&PredefinedMenuItem::hide_others(app, None)?)

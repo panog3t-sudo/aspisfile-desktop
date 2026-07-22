@@ -128,8 +128,48 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
     }
   }
 
+  // Windows / non-macOS enrolment.
+  //
+  // The app redeems the code ITSELF to get a registration token, then hands
+  // the browser that `rt` (not the raw code). Two reasons this matters:
+  //
+  //  1. The poll fallback (above) is gated on `pendingRt`. If we open the
+  //     browser with the raw code, the token is minted inside the browser and
+  //     the app never has it — so polling silently never runs, and the ONLY
+  //     way back is the aspisfile:// deep link. On a machine that blocks
+  //     custom protocol handlers the viewer then hangs on "Complete in your
+  //     browser" forever (observed on a school-managed Windows PC 2026-07-22).
+  //     Redeeming here gives us the rt, so polling works even if the deep link
+  //     never fires.
+  //  2. /enroll/desktop accepts `rt` and skips redemption when present, so the
+  //     already-consumed one-time code is never re-submitted.
   async function fallbackToBrowser(cleanEmail: string, cleanCode: string) {
-    await openBrowserWith({ email: cleanEmail, code: cleanCode });
+    // If we already hold an rt (e.g. a macOS bridge failure fell through with
+    // pendingRt set), reuse it rather than burning a second code.
+    let rt = pendingRt;
+    if (!rt) {
+      try {
+        const redeemRes = await fetch(`${BASE}/api/v1/enrollment-codes/redeem`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ email: cleanEmail, code: cleanCode }),
+        });
+        const redeemJson = await redeemRes.json().catch(() => ({} as any));
+        if (!redeemRes.ok || !redeemJson.success) {
+          setError("That code didn't work. Check it or ask the sender to resend.");
+          setPhase("input");
+          return;
+        }
+        rt = redeemJson.registration_token;
+        setPendingRt(rt);
+      } catch {
+        setError("Network error. Try again.");
+        setPhase("input");
+        return;
+      }
+    }
+    // Hand the browser the rt (not the code) — it uses it directly.
+    await openBrowserWith({ email: cleanEmail, rt: rt! });
   }
 
   async function handleSubmit() {
@@ -364,7 +404,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
               {handoffSlow
                 ? "Still waiting. If you\u2019ve already confirmed in the browser, this will finish on its own in a few seconds \u2014 we\u2019re checking with the server directly. Your browser may also be asking permission to reopen AspisFile; allow it if so."
-                : <>We&apos;ve opened a secure enrolment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key \u2014 AspisFile will take over automatically when you&apos;re done.</>}
+                : <>We&apos;ve opened a secure enrolment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key &mdash; AspisFile will take over automatically when you&apos;re done.</>}
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
               <button onClick={handleRestart} style={btnSecondary}>Use a different code</button>
