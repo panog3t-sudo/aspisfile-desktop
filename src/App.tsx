@@ -735,12 +735,15 @@ function AppContent() {
   // guards against re-draining on subsequent lock cycles.
   useEffect(() => {
     if (drainedAfsRef.current) return;
-    if (!lockInitialised || appLocked) return;
+    if (!lockInitialised || appLocked) { debugLog('afs', `drain waiting: lockInit=${lockInitialised} appLocked=${appLocked}`); return; }
     drainedAfsRef.current = true;
     invoke<AfsLink | null>("take_pending_afs")
       .then(async (link) => {
-        if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) return;
+        // DIAGNOSTIC: what did the cold-start drain get?
+        debugLog('afs', `drain take_pending_afs → ${link ? `link v=${link.v} type=${link.type} token=${(link.token||'').slice(0,8)}…` : 'NULL'}`);
+        if (!link || link.v !== 1 || link.type !== "aspisfile-link" || !link.token) { debugLog('afs', 'drain: link rejected by guard → no open'); return; }
         await bringWindowToFront();
+        debugLog('afs', 'drain → openLink');
         openLinkRef.current?.({
           token:   link.token,
           sig:     link.sig ?? null,
@@ -750,8 +753,14 @@ function AppContent() {
           rt:      null,
         });
       })
-      .catch(() => {});
+      .catch((e) => debugLog('afs', `drain error: ${String(e)}`));
   }, [lockInitialised, appLocked]);
+
+  // DIAGNOSTIC (v1.9.35): surface the Rust .afs-open steps in the debug overlay.
+  useEffect(() => {
+    const un = listen<string>("afs-debug", (e) => debugLog('afs', `[rust] ${e.payload}`));
+    return () => { un.then((f) => f()).catch(() => {}); };
+  }, []);
 
   if (mode === "viewer" && viewerParams) {
     return (
@@ -843,9 +852,12 @@ function AppWithLockOverlay() {
   // To turn off again: localStorage.removeItem('aspisfile_debug_overlay').
   // Keep the import + debugLog call sites in source — no rebuild needed
   // to flip the flag during a live test session.
+  // DIAGNOSTIC (v1.9.35): overlay ON by default to trace the Windows .afs
+  // double-click stop point. Set localStorage aspisfile_debug_overlay='0' to
+  // hide. REVERT this default once the .afs bug is confirmed + fixed.
   const showDebug = (() => {
-    try { return localStorage.getItem('aspisfile_debug_overlay') === '1'; }
-    catch { return false; }
+    try { return localStorage.getItem('aspisfile_debug_overlay') !== '0'; }
+    catch { return true; }
   })();
   return (
     <>
