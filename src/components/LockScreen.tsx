@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
 import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
-import { getActiveSessionToken } from "../lib/recipient-session";
+import { getActiveSessionToken, getRecipientSession } from "../lib/recipient-session";
+import { authenticatePasskey } from "../lib/passkey";
 
 declare const __API_BASE__: string;
 
@@ -54,12 +55,43 @@ export function LockScreen({ fileName, onUnlock }: Props) {
   // inactivity gate; same biometric re-confirms presence.
   const hasRecipientSession = !!getActiveSessionToken();
   const canUseBiometric = biometricAvailable && (biometricEnabled || hasRecipientSession);
+  // When there is no local authenticator (no Windows Hello / Touch ID) but the
+  // recipient holds a passkey, re-authenticating with the passkey is a valid —
+  // arguably stronger — presence proof, and it works via phone/QR on machines
+  // with no Hello at all. This is the unlock path for locked-down Windows PCs.
+  const canUsePasskey = !canUseBiometric && hasRecipientSession;
 
   const [pin,    setPin]    = useState("");
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState("");
   const [status, setStatus] = useState<"idle" | "verifying" | "error">("idle");
   const inProgressRef = useRef(false);
+
+  // Passkey re-auth fallback — used when no local authenticator exists.
+  // Proves presence by re-running the WebAuthn ceremony for the enrolled
+  // passkey (Windows: WebView2, which supports the phone/QR hybrid transport;
+  // macOS: the native AS bridge). On success it counts as a fresh presence
+  // proof exactly like a biometric.
+  const attemptPasskey = async () => {
+    if (inProgressRef.current) return;
+    const sess = getRecipientSession();
+    if (!sess?.email) { setError("No enrolled identity on this device. Sign out and open your file link again."); return; }
+    if (!tryBeginBiometric()) return;
+    inProgressRef.current = true;
+    setStatus("verifying");
+    setError("");
+    try {
+      await authenticatePasskey({ email: sess.email });
+      recordBiometric();
+      onUnlock();
+    } catch (e: any) {
+      setStatus("error");
+      setError(e?.message ? `Couldn't verify your passkey: ${e.message}` : "Passkey verification failed — try again.");
+    } finally {
+      inProgressRef.current = false;
+      endBiometric();
+    }
+  };
 
   const attemptBiometric = async () => {
     if (inProgressRef.current) return;
@@ -270,7 +302,28 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         </div>
       )}
 
-      {!pinSet && !canUseBiometric && (
+      {canUsePasskey && (
+        <button
+          onClick={attemptPasskey}
+          disabled={status === "verifying"}
+          style={{
+            marginTop: 8,
+            padding: "8px 18px",
+            borderRadius: 8,
+            background: "transparent",
+            color: "#3B82F6",
+            border: "0.5px solid rgba(255,255,255,0.18)",
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: status === "verifying" ? "default" : "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          {status === "verifying" ? "Waiting for verification…" : "Verify with your passkey"}
+        </button>
+      )}
+
+      {!pinSet && !canUseBiometric && !canUsePasskey && (
         <p style={{ color: "#94A3B8", fontSize: 12, margin: "12px 0 0", maxWidth: 280, textAlign: "center", lineHeight: 1.5 }}>
           No unlock mechanism is configured. Sign out and sign in again to set one.
         </p>

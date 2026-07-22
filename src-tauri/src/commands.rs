@@ -27,6 +27,42 @@ pub async fn authenticate_biometric(app: AppHandle) -> Result<(), String> {
     Err("Biometric authentication not supported on this platform".to_string())
 }
 
+/// Whether a LOCAL device authenticator can actually verify the user right now.
+///
+/// The lock screen used to assume "platform is Windows" meant Windows Hello was
+/// usable, and offered a biometric button that then hard-failed on machines
+/// with no Hello configured — common on managed/corporate PCs, which is exactly
+/// our market (reported 2026-07-22: "Authentication failed — try again", no way
+/// past the lock). This lets the UI fall back to passkey re-auth instead of
+/// offering something that cannot work.
+///
+/// - Windows: UserConsentVerifier::CheckAvailabilityAsync — true only when a
+///   Hello PIN/biometric is actually enrolled and available.
+/// - macOS: always true — LAPolicyDeviceOwnerAuthentication includes a password
+///   fallback, so a local authenticator always exists.
+#[tauri::command]
+pub async fn biometric_available() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Security::Credentials::UI::{UserConsentVerifierAvailability, UserConsentVerifier};
+        match UserConsentVerifier::CheckAvailabilityAsync() {
+            Ok(op) => match op.get() {
+                Ok(a) => a == UserConsentVerifierAvailability::Available,
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
 #[cfg(target_os = "macos")]
 async fn macos_authenticate(app: AppHandle) -> Result<(), String> {
     use std::sync::mpsc;

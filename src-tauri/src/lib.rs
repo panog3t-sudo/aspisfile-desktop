@@ -23,9 +23,13 @@ fn build_minimal_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Re
     // predefined About item auto-populates from the bundle on macOS but shows
     // nothing on Windows (clicking About did nothing — reported 2026-07-22).
     // Passing name + version makes the dialog appear on both platforms.
+    // Version from the Tauri package info (tauri.conf.json), NOT
+    // CARGO_PKG_VERSION — the Rust crate is pinned at 0.1.0 while the app is
+    // versioned in tauri.conf.json, so CARGO_PKG_VERSION showed "0.1.0" in
+    // About (reported 2026-07-22).
     let about = AboutMetadata {
         name:    Some("AspisFile Viewer".into()),
-        version: Some(env!("CARGO_PKG_VERSION").into()),
+        version: Some(app.package_info().version.to_string()),
         ..Default::default()
     };
     let app_submenu = SubmenuBuilder::new(app, "AspisFile Viewer")
@@ -117,6 +121,7 @@ pub fn run() {
             commands::open_external,
             commands::log_security_event,
             commands::authenticate_biometric,
+            commands::biometric_available,
             commands::detect_capture_processes,
             fileassoc::read_afs,
             fileassoc::take_pending_afs,

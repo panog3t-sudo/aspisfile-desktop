@@ -100,9 +100,13 @@ export function LockProvider({ children }: { children: ReactNode }) {
       // Biometric capability via Tauri Rust command. macOS uses
       // LAContext (Touch ID + password fallback); Windows uses
       // UserConsentVerifier. Linux falls through to PIN-only.
+      // Real availability, not "is this Windows". The old check assumed any
+      // Windows machine had Hello and offered a biometric that then hard-failed
+      // on PCs with no Hello configured (managed/corporate — our market). The
+      // Rust command checks UserConsentVerifier::CheckAvailabilityAsync on
+      // Windows; macOS always has a password fallback so returns true.
       try {
-        const platform = await invoke<string>("get_platform");
-        setBiometricAvailable(platform === "macos" || platform === "windows");
+        setBiometricAvailable(await invoke<boolean>("biometric_available"));
       } catch {
         setBiometricAvailable(false);
       }
