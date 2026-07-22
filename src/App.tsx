@@ -289,7 +289,7 @@ function AppContent() {
   // Cold-start: counts per-file-biometric mutex retries so a deep link isn't
   // dropped while the LockScreen's unlock biometric is still settling.
   const bioRetryRef = useRef(0);
-  const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, initialised: lockInitialised, tryBeginBiometric, endBiometric } = useLock();
+  const { setupComplete, lastBiometricAt, recordBiometric, locked: appLocked, initialised: lockInitialised, tryBeginBiometric, endBiometric, biometricAvailable } = useLock();
   const [hasSession, setHasSession] = useState(false);
 
   // openLink as a ref so deferred callbacks (Tauri event listeners,
@@ -466,6 +466,22 @@ function AppContent() {
       dedupPass: sinceLast < BIOMETRIC_FRESH_MS,
     });
     if (sinceLast < BIOMETRIC_FRESH_MS) {
+      bioRetryRef.current = 0;
+      setViewerParams(params);
+      setMode("viewer");
+      return;
+    }
+
+    // No LOCAL authenticator (no Windows Hello / Touch ID) → skip this gate.
+    // It calls authenticate_biometric, which hard-FAILS on such machines
+    // ("Authentication failed or cancelled"), so openLink returned and the
+    // file never opened — confirmed by the v1.9.35 trace. It worked before
+    // ONLY when the app-lock unlock had just recorded a fresh biometric to
+    // dedup against; turning auto-lock off removed that, exposing this. The
+    // recipient's passkey session already proved identity, and the same
+    // reasoning already exempts the app-lock + idle-lock on these machines.
+    if (!biometricAvailable) {
+      debugLog('coview', 'per-file gate: no local authenticator → skip (session already proved identity)');
       bioRetryRef.current = 0;
       setViewerParams(params);
       setMode("viewer");
