@@ -26,6 +26,7 @@ import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
 import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaitingScreen";
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
+import { RespondControl } from "./RespondControl";
 import { downloadAfsLink, DownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
@@ -102,6 +103,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [file, setFile]               = useState<FileInfo | null>(null);
   const [recipient, setRecipient]     = useState<RecipientInfo | null>(null);
   const [sessionId, setSessionId]     = useState<string | null>(null);
+  // Recipient feedback (Phase 1) — server tells us whether to show "Respond".
+  // Additive + flag-gated server-side; false by default → viewer unchanged.
+  const [recipientFeedback, setRecipientFeedback] = useState(false);
   const [totalPages, setTotalPages]   = useState(0);
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [revoked, setRevoked]         = useState(false);
@@ -518,6 +522,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
       sessionStore.set(data.session_key, data.device_share ?? null);
       setSessionId(data.session_id);
+      setRecipientFeedback(data.recipient_feedback === true);
 
       // Fetch page count
       const pageHeaders: Record<string, string> = {
@@ -1446,6 +1451,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
           >×</button>
         </div>
+      )}
+
+      {/* Recipient feedback (Phase 1) — floating Respond control. Overlay only;
+          never touches the tile renderer. Flag-gated (recipientFeedback). */}
+      {recipientFeedback && sessionId && !locked && (
+        <RespondControl fileId={file.id} sessionId={sessionId} />
       )}
     </>
   );
