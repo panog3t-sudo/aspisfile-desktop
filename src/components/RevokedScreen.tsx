@@ -27,6 +27,10 @@ function endedCopy(reason?: string): { title: string; body: string } {
       return { title: "Session ended", body: "This viewing session ended. Open the file again to continue." };
     case "expired":
       return { title: "Session expired", body: "Your session has expired. Open the file again to continue." };
+    case "opened_elsewhere":
+      return { title: "Opened on another device", body: "This file is now open in another session. Only one viewing session can be active at a time — open it again here to continue viewing." };
+    case "session_terminated_or_revoked":
+      return { title: "Session ended", body: "This viewing session was ended. Open the file again to continue, or contact the sender if you didn't expect this." };
     default:
       return { title: "Access ended", body: "Your viewing session was closed. Contact the sender if you believe this is an error." };
   }
