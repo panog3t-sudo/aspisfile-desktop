@@ -537,8 +537,9 @@ export function TileRenderer({
               }}
             >‹</button>
           )}
-          <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui", minWidth: 42, textAlign: "center" }}>
-            {currentPage} / {totalPages}
+          <span style={{ fontSize: 12, fontFamily: "system-ui", minWidth: 46, textAlign: "center" }}>
+            <b style={{ color: "#F1F5F9", fontWeight: 700 }}>{currentPage}</b>
+            <span style={{ color: "#64748B" }}> / {totalPages}</span>
           </span>
           {totalPages > 1 && !followMode && (
             <button
