@@ -68,6 +68,13 @@ type Props = {
   comments?:       Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>;
   draftPin?:       { page: number; x: number; y: number } | null;
   onPlaceComment?: (page: number, x: number, y: number) => void;
+  // Phase 4 — freehand markup. drawMode captures a stroke on the page and
+  // reports it (page + page-fraction points) via onStrokeComplete. Existing
+  // markups render as overlaid vector strokes. Additive overlay only.
+  drawMode?:        boolean;
+  drawColor?:       string;
+  markups?:         Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }>;
+  onStrokeComplete?: (page: number, points: Array<{ x: number; y: number }>) => void;
 };
 
 // Stable per-recipient pin colour (owner review shows several recipients).
@@ -104,6 +111,7 @@ export function TileRenderer({
   onPublishCursor,
   onDownload, downloadState, onSend,
   commentMode, comments, draftPin, onPlaceComment,
+  drawMode, drawColor, markups, onStrokeComplete,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -210,6 +218,40 @@ export function TileRenderer({
     if (x < 0 || x > 1 || y < 0 || y > 1) return;
     onPlaceComment(currentPage, x, y);
   }, [commentMode, onPlaceComment, currentPage]);
+
+  // Phase 4 — freehand markup capture. Same page-fraction math per point.
+  const drawingRef = useRef(false);
+  const strokeRef  = useRef<Array<{ x: number; y: number }>>([]);
+  const [liveStroke, setLiveStroke] = useState<Array<{ x: number; y: number }>>([]);
+  const ptFrom = (e: React.MouseEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - r.top)  / r.height)),
+    };
+  };
+  const onDrawDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!drawMode) return;
+    drawingRef.current = true;
+    strokeRef.current = [ptFrom(e)];
+    setLiveStroke(strokeRef.current);
+  };
+  const onDrawMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    onCursorMove(e);   // keep the co-viewing cursor broadcast working
+    if (!drawMode || !drawingRef.current) return;
+    strokeRef.current = [...strokeRef.current, ptFrom(e)];
+    setLiveStroke(strokeRef.current);
+  };
+  const onDrawUp = () => {
+    if (!drawMode || !drawingRef.current) return;
+    drawingRef.current = false;
+    const pts = strokeRef.current;
+    strokeRef.current = [];
+    setLiveStroke([]);
+    if (pts.length >= 2 && onStrokeComplete) onStrokeComplete(currentPage, pts);
+  };
+  const toPolyline = (pts: Array<{ x: number; y: number }>) =>
+    pts.map((p) => `${p.x * 100},${p.y * 100}`).join(" ");
 
   const onScrollEvent = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (!onPublishScroll) return; // recipient side: no publish
@@ -648,15 +690,35 @@ export function TileRenderer({
                 style={{
                   position: "absolute",
                   inset: 0,
-                  cursor: commentMode ? "crosshair" : "default",
+                  cursor: (commentMode || drawMode) ? "crosshair" : "default",
                   userSelect: "none",
                   WebkitUserSelect: "none",
                 } as React.CSSProperties}
                 onContextMenu={(e) => e.preventDefault()}
-                onMouseMove={onCursorMove}
-                onMouseLeave={onCursorLeave}
+                onMouseDown={onDrawDown}
+                onMouseMove={onDrawMove}
+                onMouseUp={onDrawUp}
+                onMouseLeave={() => { onDrawUp(); onCursorLeave(); }}
                 onClick={onCommentClick}
               />
+
+              {/* Phase 4 — markup strokes (existing for this page + the live one).
+                  pointerEvents none so the overlay below still captures drawing. */}
+              {((markups ?? []).some((m) => m.page === currentPage) || liveStroke.length > 1) && (
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 4 }}>
+                  {(markups ?? []).filter((m) => m.page === currentPage).map((m) => (
+                    <polyline key={m.id} points={toPolyline(m.points)} fill="none"
+                      stroke={m.color || pinColor(m.recipient_email)} strokeWidth={2.5}
+                      strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity={0.92} />
+                  ))}
+                  {liveStroke.length > 1 && (
+                    <polyline points={toPolyline(liveStroke)} fill="none"
+                      stroke={drawColor || "#E0A54B"} strokeWidth={2.5}
+                      strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                  )}
+                </svg>
+              )}
 
               {/* Phase 2 comment pins — existing (this page) + the draft. Overlay
                   siblings of the tile; do not affect tile rendering. */}

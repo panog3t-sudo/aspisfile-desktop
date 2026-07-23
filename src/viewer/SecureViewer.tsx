@@ -114,6 +114,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [commentModeOn, setCommentModeOn] = useState(false);
   const [comments, setComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
   const [draftPin, setDraftPin] = useState<{ page: number; x: number; y: number } | null>(null);
+  // Phase 4 — freehand markup (strokes). Overlay only.
+  const [drawModeOn, setDrawModeOn] = useState(false);
+  const [markups, setMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }>>([]);
   const [totalPages, setTotalPages]   = useState(0);
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [revoked, setRevoked]         = useState(false);
@@ -233,9 +236,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         { headers: { "X-App-Platform": "desktop" } });
       if (res.ok) {
         const json = await res.json();
-        setComments((json.entries ?? [])
+        const entries = json.entries ?? [];
+        setComments(entries
           .filter((e: { kind: string }) => e.kind === "comment")
           .map((e: { id: string; page: number; x: number; y: number; body: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body, recipient_email: e.recipient_email })));
+        setMarkups(entries
+          .filter((e: { kind: string }) => e.kind === "markup")
+          .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
@@ -243,6 +250,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   useEffect(() => { if ((recipientFeedback || ownerReview) && sessionId) fetchComments(); }, [recipientFeedback, ownerReview, sessionId, fetchComments]);
 
   const onPlaceComment = useCallback((page: number, x: number, y: number) => setDraftPin({ page, x, y }), []);
+
+  // Phase 4 — a completed stroke → POST, then refetch so it renders as a saved
+  // markup. Best-effort; a failed post just drops the stroke.
+  const onStrokeComplete = useCallback(async (page: number, points: Array<{ x: number; y: number }>) => {
+    if (!sessionId || !file) return;
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/markup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
+        body: JSON.stringify({ session_id: sessionId, page, points, color: "#E0A54B" }),
+      });
+      if (res.ok) fetchComments();
+    } catch { /* drop */ }
+  }, [sessionId, file, fetchComments]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -1291,6 +1312,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             comments={comments}
             draftPin={draftPin}
             onPlaceComment={recipientFeedback ? onPlaceComment : undefined}
+            drawMode={drawModeOn}
+            drawColor="#E0A54B"
+            markups={markups}
+            onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
@@ -1494,10 +1519,26 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       {recipientFeedback && sessionId && !locked && (
         <CommentControl
           fileId={file.id} sessionId={sessionId}
-          on={commentModeOn} setOn={setCommentModeOn}
+          on={commentModeOn}
+          setOn={(v) => { setCommentModeOn(v); if (v) setDrawModeOn(false); }}
           draft={draftPin} setDraft={setDraftPin}
           onPosted={fetchComments}
         />
+      )}
+      {recipientFeedback && sessionId && !locked && !draftPin && (
+        <button
+          onClick={() => { const v = !drawModeOn; setDrawModeOn(v); if (v) setCommentModeOn(false); }}
+          style={{
+            position: "fixed", bottom: 62, left: 16, zIndex: 998,
+            display: "inline-flex", alignItems: "center", gap: 7, padding: "10px 15px", borderRadius: 999, cursor: "pointer",
+            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", fontSize: 12.5, fontWeight: 640,
+            border: drawModeOn ? "1px solid #E0A54B" : "1px solid #2E3760",
+            background: drawModeOn ? "#332510" : "#1A1F3A", color: drawModeOn ? "#E0A54B" : "#EAEFFB",
+            boxShadow: drawModeOn ? "0 0 0 1px #E0A54B inset, 0 8px 22px rgba(0,0,0,.45)" : "0 8px 22px rgba(0,0,0,.45)",
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 14 }}>✎</span>{drawModeOn ? "Draw · on" : "Draw"}
+        </button>
       )}
     </>
   );
