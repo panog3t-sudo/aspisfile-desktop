@@ -501,9 +501,39 @@ export function TileRenderer({
               Present
             </button>
           )}
-          <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui" }}>
+          {/* Page nav lives here in the TOP bar (moved up from a bottom bar so
+              the bottom is free for the recipient feedback controls). */}
+          {totalPages > 1 && !followMode && (
+            <button
+              onClick={() => setCurrentPage((p) => { const n = Math.max(1, p - 1); if (n !== p) onCurrentPageChange?.(n); return n; })}
+              disabled={currentPage <= 1}
+              title="Previous page"
+              style={{
+                width: 24, height: 24, borderRadius: 4, border: "0.5px solid #334155",
+                background: currentPage <= 1 ? "#0F172A" : "transparent",
+                color: currentPage <= 1 ? "#475569" : "#E2E8F0",
+                cursor: currentPage <= 1 ? "not-allowed" : "pointer",
+                fontSize: 14, lineHeight: 1, fontFamily: "system-ui", flexShrink: 0,
+              }}
+            >‹</button>
+          )}
+          <span style={{ fontSize: 12, color: "#64748B", fontFamily: "system-ui", minWidth: 42, textAlign: "center" }}>
             {currentPage} / {totalPages}
           </span>
+          {totalPages > 1 && !followMode && (
+            <button
+              onClick={() => setCurrentPage((p) => { const n = Math.min(totalPages, p + 1); if (n !== p) onCurrentPageChange?.(n); return n; })}
+              disabled={currentPage >= totalPages}
+              title="Next page"
+              style={{
+                width: 24, height: 24, borderRadius: 4, border: "0.5px solid #334155",
+                background: currentPage >= totalPages ? "#0F172A" : "transparent",
+                color: currentPage >= totalPages ? "#475569" : "#E2E8F0",
+                cursor: currentPage >= totalPages ? "not-allowed" : "pointer",
+                fontSize: 14, lineHeight: 1, fontFamily: "system-ui", flexShrink: 0,
+              }}
+            >›</button>
+          )}
         </div>
       </div>
 
@@ -606,63 +636,8 @@ export function TileRenderer({
         </div>
       </div>
 
-      {/* Pagination — hidden in follow mode (recipient mirrors the
-          presenter; their own page navigation is disabled). */}
-      {totalPages > 1 && !followMode && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: "12px 16px",
-            background: "#1E293B",
-            borderTop: "0.5px solid #334155",
-            flexShrink: 0,
-          }}
-        >
-          <button
-            onClick={() => setCurrentPage((p) => {
-              const next = Math.max(1, p - 1);
-              if (next !== p) onCurrentPageChange?.(next);
-              return next;
-            })}
-            disabled={currentPage <= 1}
-            style={{
-              padding: "6px 16px",
-              borderRadius: 6,
-              border: "0.5px solid #334155",
-              background: currentPage <= 1 ? "#0F172A" : "#1E293B",
-              color: currentPage <= 1 ? "#475569" : "#E2E8F0",
-              cursor: currentPage <= 1 ? "not-allowed" : "pointer",
-              fontSize: 13,
-              fontFamily: "system-ui",
-            }}
-          >
-            ‹ Prev
-          </button>
-          <button
-            onClick={() => setCurrentPage((p) => {
-              const next = Math.min(totalPages, p + 1);
-              if (next !== p) onCurrentPageChange?.(next);
-              return next;
-            })}
-            disabled={currentPage >= totalPages}
-            style={{
-              padding: "6px 16px",
-              borderRadius: 6,
-              border: "0.5px solid #334155",
-              background: currentPage >= totalPages ? "#0F172A" : "#1E293B",
-              color: currentPage >= totalPages ? "#475569" : "#E2E8F0",
-              cursor: currentPage >= totalPages ? "not-allowed" : "pointer",
-              fontSize: 13,
-              fontFamily: "system-ui",
-            }}
-          >
-            Next ›
-          </button>
-        </div>
-      )}
+      {/* Page nav moved to the top toolbar (see above) so the bottom is free
+          for the recipient feedback controls (Respond, and Phase 2 comments). */}
     </div>
   );
 }
