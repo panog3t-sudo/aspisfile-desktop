@@ -478,17 +478,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       let res: Response;
       try {
         res = await doStart(false);
-        // 409 ALREADY_OPEN — a recent session for this recipient is still
-        // live server-side (we reopened before the previous window's /close
-        // landed, or window-close never fired it). The recipient is
-        // reopening their OWN file, and only their own passkey-enrolled
-        // devices can start a session at all, so retry once asking the
-        // server to MOVE the session here (it terminates the stale one).
-        // Still exactly one active session → the concurrent-viewing guard
-        // holds; this just unblocks close→reopen.
-        if (res.status === 409) {
-          res = await doStart(true);
-        }
+        // 409 ALREADY_OPEN — first-opener-wins: a DIFFERENT device of this
+        // recipient is actively viewing. We do NOT force-move (that would
+        // steal the session); we surface the "close the other viewer first"
+        // message below. Same-device close→reopen never 409s — the server
+        // recognises the fingerprint and lets this device take over.
       } catch (err: any) {
         clearTimeout(timeoutId);
         if (err?.name === 'AbortError') {

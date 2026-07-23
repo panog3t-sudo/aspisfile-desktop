@@ -37,7 +37,8 @@ const MAP: Record<string, { title: string; body: string }> = {
   // Approval / coherence
   'coherence_blocked':              { title: "Couldn't verify this attempt", body: 'Something looked unusual about this access attempt. Please try again from your usual device and location.' },
   'APP_REQUIRED':                   { title: 'Open in the app',     body: 'This file can only be opened in the AspisFile viewer app, not a browser.' },
-  'already_open':                   { title: 'Already open',        body: 'This file is already open in another window. Close it before opening here.' },
+  'already_open':                   { title: 'Open in another viewer', body: 'This file is open in another viewer. Close it on your other device first, then try again.' },
+  'ALREADY_OPEN':                   { title: 'Open in another viewer', body: 'This file is open in another viewer. Close it on your other device first, then try again.' },
 
   // Integrity / internal
   'FILE_INTEGRITY_CHECK_FAILED':    { title: 'File withdrawn',      body: 'This file failed an integrity check and was withdrawn. Ask the sender to upload it again.' },
