@@ -27,6 +27,7 @@ import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaiting
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
 import { RespondControl } from "./RespondControl";
+import { CommentControl } from "./CommentControl";
 import { downloadAfsLink, DownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
@@ -106,6 +107,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Recipient feedback (Phase 1) — server tells us whether to show "Respond".
   // Additive + flag-gated server-side; false by default → viewer unchanged.
   const [recipientFeedback, setRecipientFeedback] = useState(false);
+  // Phase 2 — page-anchored comments (pins + compose). Overlay only.
+  const [commentModeOn, setCommentModeOn] = useState(false);
+  const [comments, setComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string }>>([]);
+  const [draftPin, setDraftPin] = useState<{ page: number; x: number; y: number } | null>(null);
   const [totalPages, setTotalPages]   = useState(0);
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [revoked, setRevoked]         = useState(false);
@@ -215,6 +220,26 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       if (trackPages) startPageTracking(creds.session_id, file.id, token);
     }
   }, [file, token, accessMethod, trackPages]);
+
+  // Phase 2 — load this recipient's own comments (for the tile pins) from the
+  // feedback thread. Refetched after posting a new one.
+  const fetchComments = useCallback(async () => {
+    if (!sessionId || !file) return;
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/feedback?session=${encodeURIComponent(sessionId)}`,
+        { headers: { "X-App-Platform": "desktop" } });
+      if (res.ok) {
+        const json = await res.json();
+        setComments((json.entries ?? [])
+          .filter((e: { kind: string }) => e.kind === "comment")
+          .map((e: { id: string; page: number; x: number; y: number; body: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body })));
+      }
+    } catch { /* keep last */ }
+  }, [sessionId, file]);
+
+  useEffect(() => { if (recipientFeedback && sessionId) fetchComments(); }, [recipientFeedback, sessionId, fetchComments]);
+
+  const onPlaceComment = useCallback((page: number, x: number, y: number) => setDraftPin({ page, x, y }), []);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -1258,6 +1283,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onCurrentPageChange={setCurrentPage}
             targetZoom={currentZoom}
             onCurrentZoomChange={setCurrentZoom}
+            commentMode={commentModeOn}
+            comments={comments}
+            draftPin={draftPin}
+            onPlaceComment={recipientFeedback ? onPlaceComment : undefined}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
@@ -1457,6 +1486,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           never touches the tile renderer. Flag-gated (recipientFeedback). */}
       {recipientFeedback && sessionId && !locked && (
         <RespondControl fileId={file.id} sessionId={sessionId} />
+      )}
+      {recipientFeedback && sessionId && !locked && (
+        <CommentControl
+          fileId={file.id} sessionId={sessionId}
+          on={commentModeOn} setOn={setCommentModeOn}
+          draft={draftPin} setDraft={setDraftPin}
+          onPosted={fetchComments}
+        />
       )}
     </>
   );

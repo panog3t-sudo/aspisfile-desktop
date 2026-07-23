@@ -60,6 +60,14 @@ type Props = {
   // B+ multi-device — "Send to another device" export of the held .afs.
   // SecureViewer passes onSend only once a local .afs copy exists to export.
   onSend?:        () => void;
+  // Recipient feedback Phase 2 — page-anchored comments. Additive overlay ONLY;
+  // does not change tile rendering. When commentMode is on, a click on the page
+  // reports (page, x, y as page-fractions) via onPlaceComment. Existing pins for
+  // the current page + an optional draft pin are rendered over the tile.
+  commentMode?:    boolean;
+  comments?:       Array<{ id: string; page: number; x: number; y: number; body: string }>;
+  draftPin?:       { page: number; x: number; y: number } | null;
+  onPlaceComment?: (page: number, x: number, y: number) => void;
 };
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
@@ -87,6 +95,7 @@ export function TileRenderer({
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
   onPublishCursor,
   onDownload, downloadState, onSend,
+  commentMode, comments, draftPin, onPlaceComment,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -182,6 +191,17 @@ export function TileRenderer({
     // presenter side treats anything outside [0, 1] as "hide".
     onPublishCursor({ page: currentPage, xRatio: -1, yRatio: -1 });
   }, [onPublishCursor, currentPage]);
+
+  // Phase 2 — comment placement. Same page-fraction math as the cursor.
+  const onCommentClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!commentMode || !onPlaceComment) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top)  / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+    onPlaceComment(currentPage, x, y);
+  }, [commentMode, onPlaceComment, currentPage]);
 
   const onScrollEvent = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (!onPublishScroll) return; // recipient side: no publish
@@ -619,14 +639,39 @@ export function TileRenderer({
                 style={{
                   position: "absolute",
                   inset: 0,
-                  cursor: "default",
+                  cursor: commentMode ? "crosshair" : "default",
                   userSelect: "none",
                   WebkitUserSelect: "none",
                 } as React.CSSProperties}
                 onContextMenu={(e) => e.preventDefault()}
                 onMouseMove={onCursorMove}
                 onMouseLeave={onCursorLeave}
+                onClick={onCommentClick}
               />
+
+              {/* Phase 2 comment pins — existing (this page) + the draft. Overlay
+                  siblings of the tile; do not affect tile rendering. */}
+              {(comments ?? []).filter((c) => c.page === currentPage).map((c, i) => (
+                <div key={c.id} title={c.body}
+                  style={{
+                    position: "absolute", left: `${c.x * 100}%`, top: `${c.y * 100}%`,
+                    transform: "translate(-50%,-100%)", zIndex: 5,
+                    width: 22, height: 22, borderRadius: "50% 50% 50% 2px",
+                    background: "#2E55D4", color: "#fff", border: "2px solid #fff",
+                    boxShadow: "0 3px 8px rgba(46,85,212,.5)", display: "grid", placeItems: "center",
+                    fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "default",
+                  }}>{i + 1}</div>
+              ))}
+              {draftPin && draftPin.page === currentPage && (
+                <div style={{
+                  position: "absolute", left: `${draftPin.x * 100}%`, top: `${draftPin.y * 100}%`,
+                  transform: "translate(-50%,-100%)", zIndex: 6,
+                  width: 22, height: 22, borderRadius: "50% 50% 50% 2px",
+                  background: "#E0A54B", color: "#fff", border: "2px solid #fff",
+                  boxShadow: "0 3px 8px rgba(224,165,75,.6)", display: "grid", placeItems: "center",
+                  fontSize: 12, fontWeight: 700,
+                }}>✎</div>
+              )}
             </div>
           ) : (
             <span style={{ color: "#EF4444", fontSize: 13, fontFamily: "system-ui" }}>
