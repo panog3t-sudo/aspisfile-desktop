@@ -693,28 +693,61 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // the viewer in any capture, but a one-off PrtSc leaves no running process
   // for the poll above to catch and sends no signal. Here we catch the key
   // itself: clear the clipboard copy the OS just made, report a `screenshot`
-  // violation so the sender is notified, and show a brief pause so the user
-  // sees a clear message rather than the window appearing to blank silently.
+  // violation so the sender is notified, and show a brief on-screen notice.
+  //
+  // Timing of the notice is the subtle part on Windows 11: PrtSc there opens
+  // the Snipping Tool region overlay, which sits ABOVE every app window (ours
+  // included) until the user dismisses it, so a notice shown at keypress time
+  // is hidden behind it and the 4s timer often elapses before they return.
+  // So we show it immediately (covers the silent-clipboard PrtSc case) AND
+  // re-show it once when the window next regains focus (i.e. after the snip
+  // overlay closes), so the confirmation is actually seen. Detection + sender
+  // notification always fire immediately, independent of the notice timing.
   // Reversible — resumes after a few seconds. (Win+Shift+S / Snip is an OS
   // shortcut that doesn't reach the WebView; contentProtected still blanks it.)
   useEffect(() => {
     if (!isViewing || !sessionId || !file) return;
     let cancelled = false;
     let resumeTimer = 0;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'PrintScreen' && e.code !== 'PrintScreen') return;
-      try { navigator.clipboard.writeText(''); } catch { /* best-effort */ }
+    let pendingReshow = false;   // a PrtSc fired that the OS overlay may be hiding
+    let reshowDeadline = 0;      // don't re-show for an unrelated later refocus
+    const showNotice = () => {
+      if (cancelled) return;
       setScreenshotPaused(true);
       window.clearTimeout(resumeTimer);
       resumeTimer = window.setTimeout(() => { if (!cancelled) setScreenshotPaused(false); }, 4000);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'PrintScreen' && e.code !== 'PrintScreen') return;
+      try { navigator.clipboard.writeText(''); } catch { /* best-effort */ }
       fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/violation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
         body: JSON.stringify({ session_id: sessionId, violation_type: 'screenshot', metadata: { key: 'PrintScreen' } }),
       }).catch(() => {});
+      showNotice();
+      pendingReshow = true;
+      reshowDeadline = Date.now() + 30000;
+    };
+    // First focus-return after a PrtSc → the snip overlay has closed; re-show
+    // the notice so it's visible now. Cleared after one re-show so an unrelated
+    // alt-tab back doesn't retrigger it.
+    const onFocusBack = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (!pendingReshow) return;
+      pendingReshow = false;
+      if (Date.now() <= reshowDeadline) showNotice();
     };
     window.addEventListener('keyup', onKey);
-    return () => { cancelled = true; window.clearTimeout(resumeTimer); window.removeEventListener('keyup', onKey); };
+    window.addEventListener('focus', onFocusBack);
+    document.addEventListener('visibilitychange', onFocusBack);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(resumeTimer);
+      window.removeEventListener('keyup', onKey);
+      window.removeEventListener('focus', onFocusBack);
+      document.removeEventListener('visibilitychange', onFocusBack);
+    };
   }, [isViewing, sessionId, file]);
 
   // Phase B (B5) — prime the server-transient render from the recipient's
