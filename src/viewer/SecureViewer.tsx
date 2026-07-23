@@ -107,9 +107,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Recipient feedback (Phase 1) — server tells us whether to show "Respond".
   // Additive + flag-gated server-side; false by default → viewer unchanged.
   const [recipientFeedback, setRecipientFeedback] = useState(false);
+  // Owner review — when the OWNER opens their own file, overlay ALL recipients'
+  // comment pins, read-only (no compose controls).
+  const [ownerReview, setOwnerReview] = useState(false);
   // Phase 2 — page-anchored comments (pins + compose). Overlay only.
   const [commentModeOn, setCommentModeOn] = useState(false);
-  const [comments, setComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string }>>([]);
+  const [comments, setComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
   const [draftPin, setDraftPin] = useState<{ page: number; x: number; y: number } | null>(null);
   const [totalPages, setTotalPages]   = useState(0);
   const [legalAccepted, setLegalAccepted] = useState(false);
@@ -232,12 +235,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         const json = await res.json();
         setComments((json.entries ?? [])
           .filter((e: { kind: string }) => e.kind === "comment")
-          .map((e: { id: string; page: number; x: number; y: number; body: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body })));
+          .map((e: { id: string; page: number; x: number; y: number; body: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body, recipient_email: e.recipient_email })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
 
-  useEffect(() => { if (recipientFeedback && sessionId) fetchComments(); }, [recipientFeedback, sessionId, fetchComments]);
+  useEffect(() => { if ((recipientFeedback || ownerReview) && sessionId) fetchComments(); }, [recipientFeedback, ownerReview, sessionId, fetchComments]);
 
   const onPlaceComment = useCallback((page: number, x: number, y: number) => setDraftPin({ page, x, y }), []);
 
@@ -548,6 +551,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       sessionStore.set(data.session_key, data.device_share ?? null);
       setSessionId(data.session_id);
       setRecipientFeedback(data.recipient_feedback === true);
+      setOwnerReview(data.owner_review === true);
 
       // Fetch page count
       const pageHeaders: Record<string, string> = {

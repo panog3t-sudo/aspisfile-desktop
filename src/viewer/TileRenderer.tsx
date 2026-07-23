@@ -65,10 +65,18 @@ type Props = {
   // reports (page, x, y as page-fractions) via onPlaceComment. Existing pins for
   // the current page + an optional draft pin are rendered over the tile.
   commentMode?:    boolean;
-  comments?:       Array<{ id: string; page: number; x: number; y: number; body: string }>;
+  comments?:       Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>;
   draftPin?:       { page: number; x: number; y: number } | null;
   onPlaceComment?: (page: number, x: number, y: number) => void;
 };
+
+// Stable per-recipient pin colour (owner review shows several recipients).
+function pinColor(email?: string): string {
+  if (!email) return "#2E55D4";
+  let h = 0;
+  for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) % 360;
+  return `hsl(${h}, 62%, 48%)`;
+}
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
 
@@ -653,13 +661,13 @@ export function TileRenderer({
               {/* Phase 2 comment pins — existing (this page) + the draft. Overlay
                   siblings of the tile; do not affect tile rendering. */}
               {(comments ?? []).filter((c) => c.page === currentPage).map((c, i) => (
-                <div key={c.id} title={c.body}
+                <div key={c.id} title={c.recipient_email ? `${c.recipient_email}: ${c.body}` : c.body}
                   style={{
                     position: "absolute", left: `${c.x * 100}%`, top: `${c.y * 100}%`,
                     transform: "translate(-50%,-100%)", zIndex: 5,
                     width: 22, height: 22, borderRadius: "50% 50% 50% 2px",
-                    background: "#2E55D4", color: "#fff", border: "2px solid #fff",
-                    boxShadow: "0 3px 8px rgba(46,85,212,.5)", display: "grid", placeItems: "center",
+                    background: pinColor(c.recipient_email), color: "#fff", border: "2px solid #fff",
+                    boxShadow: "0 3px 8px rgba(0,0,0,.4)", display: "grid", placeItems: "center",
                     fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "default",
                   }}>{i + 1}</div>
               ))}
