@@ -274,7 +274,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     if (drawTool === "highlight") {
       const a = points[0], b = points[points.length - 1];
       const pts = [{ x: a.x, y: a.y }, { x: b.x, y: a.y }];   // snap horizontal at start height
-      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points: pts, color: "#FDE047", kind: "highlight", at }]);
+      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points: pts, color: "#EEFF00", kind: "highlight", at }]);
     } else {
       setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B", kind: "pen", at }]);
     }
@@ -292,17 +292,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, []);
   // Pad returned a signature → add a LOCAL draft at the pending position.
   const addDraftSignature = useCallback((s: SignatureData) => {
-    setPendingSignature((ps) => {
-      if (!ps) return null;
-      const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y: ps.y, w: SIG_W, h: SIG_H, signer_name: s.signer_name, at: new Date().toISOString() };
-      const draft: DraftSignature = s.style === "drawn"
-        ? { ...base, style: "drawn", points: s.points }
-        : { ...base, style: "typed", typed_name: s.typed_name };
-      setDraftSignatures((d) => [...d, draft]);
-      return null;
-    });
+    const ps = pendingSignature;
+    if (!ps) return;
+    const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y: ps.y, w: SIG_W, h: SIG_H, signer_name: s.signer_name, at: new Date().toISOString() };
+    const draft: DraftSignature = s.style === "drawn"
+      ? { ...base, style: "drawn", points: s.points }
+      : { ...base, style: "typed", typed_name: s.typed_name };
+    setDraftSignatures((d) => [...d, draft]);
+    setPendingSignature(null);
     setFbMode("none");
-  }, []);
+  }, [pendingSignature]);
   const removeDraftSignature = useCallback((id: string) => setDraftSignatures((d) => d.filter((x) => x.tempId !== id)), []);
 
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
@@ -1600,6 +1599,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         <SignaturePad
           onCancel={() => { setPendingSignature(null); setFbMode("none"); }}
           onDone={addDraftSignature}
+          defaultName={recipient?.email ?? ""}
         />
       )}
 

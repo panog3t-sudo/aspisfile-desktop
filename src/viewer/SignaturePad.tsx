@@ -10,9 +10,8 @@ export type SignatureData =
 
 const PAD_W = 360, PAD_H = 150;   // ~2.4:1, matches the on-page signature box aspect
 
-export function SignaturePad({ onCancel, onDone }: { onCancel: () => void; onDone: (s: SignatureData) => void }) {
+export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () => void; onDone: (s: SignatureData) => void; defaultName?: string }) {
   const [tab, setTab] = useState<"draw" | "type">("draw");
-  const [name, setName] = useState("");
   const [typed, setTyped] = useState("");
   const [strokes, setStrokes] = useState<Array<Array<{ x: number; y: number }>>>([]);
   const drawingRef = useRef(false);
@@ -27,12 +26,14 @@ export function SignaturePad({ onCancel, onDone }: { onCancel: () => void; onDon
   const clear = () => { setStrokes([]); };
 
   const hasDrawing = strokes.some((st) => st.length > 1);
-  const canAdd = name.trim() && (tab === "draw" ? hasDrawing : typed.trim());
+  const canAdd = tab === "draw" ? hasDrawing : !!typed.trim();
+  // Signer identity is the authenticated recipient — no separate name field.
+  const drawnName = (defaultName ?? "").trim() || "Signature";
 
   const submit = () => {
     if (!canAdd) return;
-    if (tab === "draw") onDone({ style: "drawn", points: strokes.filter((st) => st.length > 1), signer_name: name.trim() });
-    else onDone({ style: "typed", typed_name: typed.trim(), signer_name: name.trim() });
+    if (tab === "draw") onDone({ style: "drawn", points: strokes.filter((st) => st.length > 1), signer_name: drawnName });
+    else onDone({ style: "typed", typed_name: typed.trim(), signer_name: typed.trim() });
   };
 
   return (
@@ -42,9 +43,6 @@ export function SignaturePad({ onCancel, onDone }: { onCancel: () => void; onDon
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 660 }}>Sign the document</h3>
           <button onClick={onCancel} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
         </div>
-
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="Your full name"
-          style={{ width: "100%", boxSizing: "border-box", border: "1px solid #2E3760", background: "#080A14", color: "#EAEFFB", borderRadius: 10, padding: "10px 12px", fontSize: 13, marginBottom: 12 }} />
 
         <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
           {(["draw", "type"] as const).map((t) => (
