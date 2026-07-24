@@ -255,7 +255,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const addDraftComment = useCallback(() => {
     setPendingComment((pc) => {
       setPendingText((t) => {
-        if (pc && t.trim()) setDraftComments((c) => [...c, { tempId: "d" + (++tempIdRef.current), page: pc.page, x: pc.x, y: pc.y, body: t.trim() }]);
+        if (pc && t.trim()) setDraftComments((c) => [...c, { tempId: "d" + (++tempIdRef.current), page: pc.page, x: pc.x, y: pc.y, body: t.trim(), at: new Date().toISOString() }]);
         return "";
       });
       return null;
@@ -263,7 +263,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, []);
   // A completed stroke → a LOCAL draft markup (not sent).
   const onStrokeComplete = useCallback((page: number, points: Array<{ x: number; y: number }>) => {
-    setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B" }]);
+    setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B", at: new Date().toISOString() }]);
   }, []);
   const removeDraftComment = useCallback((id: string) => setDraftComments((c) => c.filter((x) => x.tempId !== id)), []);
   const removeDraftMarkup  = useCallback((id: string) => setDraftMarkups((m) => m.filter((x) => x.tempId !== id)), []);

@@ -12,8 +12,8 @@ import { useState, useEffect, useCallback } from "react";
 declare const __API_BASE__: string;
 
 export type Decision = "approved" | "changes_requested" | "rejected";
-export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string };
-export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string };
+export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
+export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; at: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }
@@ -150,13 +150,15 @@ export function FeedbackMenu(props: {
                     {draftComments.map((c) => (
                       <div key={c.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #7A561D", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
                         <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>💬 P{c.page}</span>
-                        <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.body}</span>
+                        <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{c.body}</span>
+                        <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96", flexShrink: 0 }}>{fmtTime(c.at)}</span>
                         {del(() => removeDraftComment(c.tempId))}
                       </div>
                     ))}
                     {draftMarkups.map((m) => (
                       <div key={m.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #7A561D", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
                         <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}>✎ MARKUP · P{m.page}</span>
+                        <span style={{ marginLeft: "auto", fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96" }}>{fmtTime(m.at)}</span>
                         {del(() => removeDraftMarkup(m.tempId))}
                       </div>
                     ))}
