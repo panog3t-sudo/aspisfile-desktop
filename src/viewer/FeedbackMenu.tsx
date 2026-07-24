@@ -14,6 +14,7 @@ declare const __API_BASE__: string;
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
 export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; kind?: "pen" | "highlight"; at: string };
+export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; signer_name: string; at: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }
@@ -39,8 +40,8 @@ const del = (onClick: () => void) => (
 export function FeedbackMenu(props: {
   fileId: string;
   sessionId: string;
-  mode: "none" | "comment" | "draw";
-  setMode: (m: "none" | "comment" | "draw") => void;
+  mode: "none" | "comment" | "draw" | "sign";
+  setMode: (m: "none" | "comment" | "draw" | "sign") => void;
   drawTool: "pen" | "highlight";
   setDrawTool: (t: "pen" | "highlight") => void;
   draftDecision: { decision: Decision; note: string } | null;
@@ -49,10 +50,12 @@ export function FeedbackMenu(props: {
   removeDraftComment: (tempId: string) => void;
   draftMarkups: DraftMarkup[];
   removeDraftMarkup: (tempId: string) => void;
+  draftSignatures: DraftSignature[];
+  removeDraftSignature: (tempId: string) => void;
   onSend: () => Promise<boolean>;
   sending: boolean;
 }) {
-  const { mode, setMode, drawTool, setDrawTool, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, onSend, sending } = props;
+  const { mode, setMode, drawTool, setDrawTool, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending } = props;
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [sent, setSent] = useState<SentEntry[]>([]);
@@ -66,8 +69,8 @@ export function FeedbackMenu(props: {
   }, [props.fileId, props.sessionId]);
   useEffect(() => { load(); }, [load]);
 
-  const draftCount = (draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length;
-  const enterMode = (m: "comment" | "draw") => { setMode(m); setOpen(false); };
+  const draftCount = (draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length;
+  const enterMode = (m: "comment" | "draw" | "sign") => { setMode(m); setOpen(false); };
   const doSend = async () => { const ok = await onSend(); if (ok) { setConfirm(false); setNote(""); await load(); } };
 
   // Collapsed + in comment/draw mode → the "Done" hint bar.
@@ -77,7 +80,7 @@ export function FeedbackMenu(props: {
         display: "flex", alignItems: "center", gap: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 999,
         padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
         <span style={{ color: "#9098BC", fontSize: 12.5 }}>
-          {mode === "comment" ? "Tap a spot on the page to add a comment" : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
+          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? "Tap where you want to place your signature" : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
         </span>
         <button onClick={() => { setMode("none"); setOpen(true); }}
           style={{ background: "#2E55D4", color: "#fff", border: "none", borderRadius: 999, padding: "7px 15px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>Done</button>
@@ -138,6 +141,13 @@ export function FeedbackMenu(props: {
                 <button onClick={() => { setDrawTool("highlight"); enterMode("draw"); }} style={{ flex: 1, border: "1px solid #7A561D", background: "#332510", color: "#E0A54B", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>🖍 Highlight</button>
               </div>
 
+              {/* Sign — its own prominent row (an e-signature is a heavier action) */}
+              <button onClick={() => enterMode("sign")} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", border: "1px solid #2E55D4", background: "#141C3D", color: "#EAEFFB", borderRadius: 11, padding: "11px 13px", fontSize: 13, fontWeight: 640, cursor: "pointer", textAlign: "left" }}>
+                <span aria-hidden style={{ fontSize: 16 }}>✍️</span>
+                <span style={{ flex: 1 }}>Sign the document</span>
+                <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#7C9CF5", background: "#1C2347", padding: "2px 7px", borderRadius: 999 }}>PASSKEY-VERIFIED</span>
+              </button>
+
               {/* Drafts */}
               {draftCount > 0 && (
                 <div>
@@ -163,6 +173,14 @@ export function FeedbackMenu(props: {
                         <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}>✎ MARKUP · P{m.page}</span>
                         <span style={{ marginLeft: "auto", fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96" }}>{fmtTime(m.at)}</span>
                         {del(() => removeDraftMarkup(m.tempId))}
+                      </div>
+                    ))}
+                    {draftSignatures.map((s) => (
+                      <div key={s.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #2E55D4", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
+                        <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>✍️ SIGN · P{s.page}</span>
+                        <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{s.signer_name}{s.style === "typed" ? "" : " · drawn"}</span>
+                        <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96", flexShrink: 0 }}>{fmtTime(s.at)}</span>
+                        {del(() => removeDraftSignature(s.tempId))}
                       </div>
                     ))}
                   </div>
@@ -202,10 +220,15 @@ export function FeedbackMenu(props: {
       {confirm && (
         <div style={{ position: "fixed", inset: 0, zIndex: 10002, background: "rgba(4,6,14,.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div style={{ width: "100%", maxWidth: 360, background: "#141830", border: "1px solid #2E3760", borderRadius: 14, padding: 20, boxShadow: "0 24px 60px rgba(0,0,0,.7)", color: "#EAEFFB", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 660 }}>Send to the sender?</h3>
+            <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 660 }}>{draftSignatures.length ? "Sign & send?" : "Send to the sender?"}</h3>
             <p style={{ margin: "0 0 16px", fontSize: 13, color: "#9098BC", lineHeight: 1.5 }}>
               This sends {draftCount} item{draftCount !== 1 ? "s" : ""} to the sender. <b style={{ color: "#E0A54B" }}>You can’t change or delete them after sending.</b> (You can still add more later.)
             </p>
+            {draftSignatures.length > 0 && (
+              <p style={{ margin: "-8px 0 16px", fontSize: 12, color: "#7C9CF5", lineHeight: 1.5, background: "#141C3D", border: "1px solid #2E3760", borderRadius: 9, padding: "9px 11px" }}>
+                By sending, you adopt {draftSignatures.length > 1 ? "these signatures" : "this signature"} as your electronic signature on this document, verified with your passkey and timestamped.
+              </p>
+            )}
             <div style={{ display: "flex", gap: 10 }}>
               <button onClick={doSend} disabled={sending}
                 style={{ flex: 1, background: sending ? "#26305A" : "#2E55D4", color: "#fff", border: "none", borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 660, cursor: sending ? "default" : "pointer" }}>{sending ? "Sending…" : "Send"}</button>

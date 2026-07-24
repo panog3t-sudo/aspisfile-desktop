@@ -76,6 +76,10 @@ type Props = {
   drawTool?:        "pen" | "highlight";
   markups?:         Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; draft?: boolean; kind?: "pen" | "highlight" }>;
   onStrokeComplete?: (page: number, points: Array<{ x: number; y: number }>) => void;
+  // E-signature — tap to place, render drawn/typed signatures in a box.
+  signMode?:         boolean;
+  onPlaceSignature?: (page: number, x: number, y: number) => void;
+  signatures?:       Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; signer_name?: string; draft?: boolean }>;
 };
 
 // Stable per-recipient pin colour (owner review shows several recipients).
@@ -113,6 +117,7 @@ export function TileRenderer({
   onDownload, downloadState, onSend,
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawTool, markups, onStrokeComplete,
+  signMode, onPlaceSignature, signatures,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -219,6 +224,18 @@ export function TileRenderer({
     if (x < 0 || x > 1 || y < 0 || y > 1) return;
     onPlaceComment(currentPage, x, y);
   }, [commentMode, onPlaceComment, currentPage]);
+
+  const onOverlayClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (commentMode) return onCommentClick(e);
+    if (signMode && onPlaceSignature) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      onPlaceSignature(currentPage, x, y);
+    }
+  }, [commentMode, onCommentClick, signMode, onPlaceSignature, currentPage]);
 
   // Phase 4 — freehand markup capture. Same page-fraction math per point.
   const drawingRef = useRef(false);
@@ -693,7 +710,7 @@ export function TileRenderer({
                 style={{
                   position: "absolute",
                   inset: 0,
-                  cursor: (commentMode || drawMode) ? "crosshair" : "default",
+                  cursor: (commentMode || drawMode || signMode) ? "crosshair" : "default",
                   userSelect: "none",
                   WebkitUserSelect: "none",
                 } as React.CSSProperties}
@@ -702,7 +719,7 @@ export function TileRenderer({
                 onMouseMove={onDrawMove}
                 onMouseUp={onDrawUp}
                 onMouseLeave={() => { onDrawUp(); onCursorLeave(); }}
-                onClick={onCommentClick}
+                onClick={onOverlayClick}
               />
 
               {/* Phase 4 — markup strokes (existing for this page + the live one).
@@ -750,6 +767,24 @@ export function TileRenderer({
                     boxShadow: "0 3px 8px rgba(0,0,0,.4)", display: "grid", placeItems: "center",
                     fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "pointer",
                   }}>{c.draft ? "•" : i + 1}</div>
+              ))}
+              {(signatures ?? []).filter((s) => s.page === currentPage).map((s) => (
+                <div key={s.id} style={{
+                  position: "absolute", left: `${s.x * 100}%`, top: `${s.y * 100}%`,
+                  width: `${s.w * 100}%`, height: `${s.h * 100}%`, zIndex: 5,
+                  border: s.draft ? "1px dashed #E0A54B" : "none", borderRadius: 3,
+                  containerType: "size",
+                } as React.CSSProperties}>
+                  {s.style === "drawn" ? (
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: "100%", height: "100%" }}>
+                      {(s.points ?? []).map((st, i) => (
+                        <polyline key={i} points={st.map((p) => `${p.x * 100},${p.y * 100}`).join(" ")} fill="none" stroke="#0E1130" strokeWidth={1.7} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                      ))}
+                    </svg>
+                  ) : (
+                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", color: "#0E1130", fontSize: "58cqh", overflow: "hidden", whiteSpace: "nowrap", lineHeight: 1 }}>{s.typed_name}</div>
+                  )}
+                </div>
               ))}
               {openPin && openPin && (comments ?? []).some((c) => c.id === openPin.id && c.page === currentPage) && (
                 <div style={{

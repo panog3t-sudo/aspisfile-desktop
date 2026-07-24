@@ -26,7 +26,8 @@ import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
 import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaitingScreen";
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
-import { FeedbackMenu, type Decision, type DraftComment, type DraftMarkup } from "./FeedbackMenu";
+import { FeedbackMenu, type Decision, type DraftComment, type DraftMarkup, type DraftSignature } from "./FeedbackMenu";
+import { SignaturePad, type SignatureData } from "./SignaturePad";
 import { downloadAfsLink, DownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
@@ -111,13 +112,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [ownerReview, setOwnerReview] = useState(false);
   // Draft-then-send feedback. Sent items come from the server; drafts are local
   // (recipient-only, deletable) until "Send". Overlay only.
-  const [fbMode, setFbMode] = useState<"none" | "comment" | "draw">("none");
+  const [fbMode, setFbMode] = useState<"none" | "comment" | "draw" | "sign">("none");
   const [drawTool, setDrawTool] = useState<"pen" | "highlight">("pen");
   const [sentComments, setSentComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
   const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; kind?: "pen" | "highlight" }>>([]);
+  const [sentSignatures, setSentSignatures] = useState<Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; recipient_email?: string }>>([]);
   const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
   const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
   const [draftMarkups, setDraftMarkups] = useState<DraftMarkup[]>([]);
+  const [draftSignatures, setDraftSignatures] = useState<DraftSignature[]>([]);
+  const [pendingSignature, setPendingSignature] = useState<{ page: number; x: number; y: number } | null>(null);
   const [pendingComment, setPendingComment] = useState<{ page: number; x: number; y: number } | null>(null);
   const [pendingText, setPendingText] = useState("");
   const [sending, setSending] = useState(false);
@@ -245,6 +249,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           .map((e: { id: string; page: number; x: number; y: number; body: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body, recipient_email: e.recipient_email })));
         setSentMarkups(entries.filter((e: { kind: string }) => e.kind === "markup")
           .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; tool?: "pen" | "highlight" }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email, kind: e.tool })));
+        setSentSignatures(entries.filter((e: { kind: string }) => e.kind === "signature")
+          .map((e: { id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, w: e.w, h: e.h, style: e.style, points: e.points, typed_name: e.typed_name, recipient_email: e.recipient_email })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
@@ -276,6 +282,29 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const removeDraftComment = useCallback((id: string) => setDraftComments((c) => c.filter((x) => x.tempId !== id)), []);
   const removeDraftMarkup  = useCallback((id: string) => setDraftMarkups((m) => m.filter((x) => x.tempId !== id)), []);
 
+  // Sign mode: tap a spot → open the pad. The tap point becomes the CENTRE of
+  // the signature box; we clamp so the default 0.28×0.09 box stays on the page.
+  const SIG_W = 0.28, SIG_H = 0.09;
+  const onPlaceSignature = useCallback((page: number, x: number, y: number) => {
+    const px = Math.min(1 - SIG_W, Math.max(0, x - SIG_W / 2));
+    const py = Math.min(1 - SIG_H, Math.max(0, y - SIG_H / 2));
+    setPendingSignature({ page, x: px, y: py });
+  }, []);
+  // Pad returned a signature → add a LOCAL draft at the pending position.
+  const addDraftSignature = useCallback((s: SignatureData) => {
+    setPendingSignature((ps) => {
+      if (!ps) return null;
+      const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y: ps.y, w: SIG_W, h: SIG_H, signer_name: s.signer_name, at: new Date().toISOString() };
+      const draft: DraftSignature = s.style === "drawn"
+        ? { ...base, style: "drawn", points: s.points }
+        : { ...base, style: "typed", typed_name: s.typed_name };
+      setDraftSignatures((d) => [...d, draft]);
+      return null;
+    });
+    setFbMode("none");
+  }, []);
+  const removeDraftSignature = useCallback((id: string) => setDraftSignatures((d) => d.filter((x) => x.tempId !== id)), []);
+
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
   const sendBatch = useCallback(async (): Promise<boolean> => {
     if (!sessionId || !file) return false;
@@ -289,15 +318,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
           comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
           markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color })) : undefined,
+          signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, signer_name: s.signer_name })) : undefined,
         }),
       });
       setSending(false);
       if (!res.ok) return false;
-      setDraftDecision(null); setDraftComments([]); setDraftMarkups([]);
+      setDraftDecision(null); setDraftComments([]); setDraftMarkups([]); setDraftSignatures([]);
       await fetchFeedback();
       return true;
     } catch { setSending(false); return false; }
-  }, [sessionId, file, draftDecision, draftComments, draftMarkups, fetchFeedback]);
+  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignatures, fetchFeedback]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -1351,6 +1381,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             drawTool={drawTool}
             markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, draft: true, kind: d.kind }))]}
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
+            signMode={fbMode === "sign"}
+            onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}
+            signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, draft: true }))]}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
@@ -1557,7 +1590,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           draftDecision={draftDecision} setDraftDecision={setDraftDecision}
           draftComments={draftComments} removeDraftComment={removeDraftComment}
           draftMarkups={draftMarkups} removeDraftMarkup={removeDraftMarkup}
+          draftSignatures={draftSignatures} removeDraftSignature={removeDraftSignature}
           onSend={sendBatch} sending={sending}
+        />
+      )}
+
+      {/* E-signature capture — after tapping a spot in Sign mode. */}
+      {recipientFeedback && pendingSignature && !locked && (
+        <SignaturePad
+          onCancel={() => { setPendingSignature(null); setFbMode("none"); }}
+          onDone={addDraftSignature}
         />
       )}
 
