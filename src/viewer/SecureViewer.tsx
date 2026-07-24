@@ -112,8 +112,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Draft-then-send feedback. Sent items come from the server; drafts are local
   // (recipient-only, deletable) until "Send". Overlay only.
   const [fbMode, setFbMode] = useState<"none" | "comment" | "draw">("none");
+  const [drawTool, setDrawTool] = useState<"pen" | "highlight">("pen");
   const [sentComments, setSentComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
-  const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }>>([]);
+  const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; kind?: "pen" | "highlight" }>>([]);
   const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
   const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
   const [draftMarkups, setDraftMarkups] = useState<DraftMarkup[]>([]);
@@ -243,7 +244,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setSentComments(entries.filter((e: { kind: string }) => e.kind === "comment")
           .map((e: { id: string; page: number; x: number; y: number; body: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body, recipient_email: e.recipient_email })));
         setSentMarkups(entries.filter((e: { kind: string }) => e.kind === "markup")
-          .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email })));
+          .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; tool?: "pen" | "highlight" }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email, kind: e.tool })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
@@ -263,8 +264,15 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, []);
   // A completed stroke → a LOCAL draft markup (not sent).
   const onStrokeComplete = useCallback((page: number, points: Array<{ x: number; y: number }>) => {
-    setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B", at: new Date().toISOString() }]);
-  }, []);
+    const at = new Date().toISOString();
+    if (drawTool === "highlight") {
+      const a = points[0], b = points[points.length - 1];
+      const pts = [{ x: a.x, y: a.y }, { x: b.x, y: a.y }];   // snap horizontal at start height
+      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points: pts, color: "#FDE047", kind: "highlight", at }]);
+    } else {
+      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B", kind: "pen", at }]);
+    }
+  }, [drawTool]);
   const removeDraftComment = useCallback((id: string) => setDraftComments((c) => c.filter((x) => x.tempId !== id)), []);
   const removeDraftMarkup  = useCallback((id: string) => setDraftMarkups((m) => m.filter((x) => x.tempId !== id)), []);
 
@@ -1340,7 +1348,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onPlaceComment={recipientFeedback ? onPlaceComment : undefined}
             drawMode={fbMode === "draw"}
             drawColor="#E0A54B"
-            markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, draft: true }))]}
+            drawTool={drawTool}
+            markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, draft: true, kind: d.kind }))]}
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
@@ -1544,6 +1553,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         <FeedbackMenu
           fileId={file.id} sessionId={sessionId}
           mode={fbMode} setMode={setFbMode}
+          drawTool={drawTool} setDrawTool={setDrawTool}
           draftDecision={draftDecision} setDraftDecision={setDraftDecision}
           draftComments={draftComments} removeDraftComment={removeDraftComment}
           draftMarkups={draftMarkups} removeDraftMarkup={removeDraftMarkup}

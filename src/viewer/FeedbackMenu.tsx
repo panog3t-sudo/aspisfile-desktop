@@ -13,7 +13,7 @@ declare const __API_BASE__: string;
 
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
-export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; at: string };
+export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; kind?: "pen" | "highlight"; at: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }
@@ -41,6 +41,8 @@ export function FeedbackMenu(props: {
   sessionId: string;
   mode: "none" | "comment" | "draw";
   setMode: (m: "none" | "comment" | "draw") => void;
+  drawTool: "pen" | "highlight";
+  setDrawTool: (t: "pen" | "highlight") => void;
   draftDecision: { decision: Decision; note: string } | null;
   setDraftDecision: (d: { decision: Decision; note: string } | null) => void;
   draftComments: DraftComment[];
@@ -50,7 +52,7 @@ export function FeedbackMenu(props: {
   onSend: () => Promise<boolean>;
   sending: boolean;
 }) {
-  const { mode, setMode, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, onSend, sending } = props;
+  const { mode, setMode, drawTool, setDrawTool, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, onSend, sending } = props;
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [sent, setSent] = useState<SentEntry[]>([]);
@@ -75,7 +77,7 @@ export function FeedbackMenu(props: {
         display: "flex", alignItems: "center", gap: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 999,
         padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
         <span style={{ color: "#9098BC", fontSize: 12.5 }}>
-          {mode === "comment" ? "Tap a spot on the page to add a comment" : "Draw on the page to mark it up"}
+          {mode === "comment" ? "Tap a spot on the page to add a comment" : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
         </span>
         <button onClick={() => { setMode("none"); setOpen(true); }}
           style={{ background: "#2E55D4", color: "#fff", border: "none", borderRadius: 999, padding: "7px 15px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>Done</button>
@@ -131,8 +133,9 @@ export function FeedbackMenu(props: {
 
               {/* Annotate */}
               <div style={{ display: "flex", gap: 9 }}>
-                <button onClick={() => enterMode("comment")} style={{ flex: 1, border: "1px solid #2E3760", background: "#1A1F3A", color: "#EAEFFB", borderRadius: 10, padding: "10px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>💬 Comment on the page</button>
-                <button onClick={() => enterMode("draw")} style={{ flex: 1, border: "1px solid #2E3760", background: "#1A1F3A", color: "#EAEFFB", borderRadius: 10, padding: "10px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>✎ Draw on the page</button>
+                <button onClick={() => enterMode("comment")} style={{ flex: 1, border: "1px solid #2E3760", background: "#1A1F3A", color: "#EAEFFB", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>💬 Comment</button>
+                <button onClick={() => { setDrawTool("pen"); enterMode("draw"); }} style={{ flex: 1, border: "1px solid #2E3760", background: "#1A1F3A", color: "#EAEFFB", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>✎ Draw</button>
+                <button onClick={() => { setDrawTool("highlight"); enterMode("draw"); }} style={{ flex: 1, border: "1px solid #7A561D", background: "#332510", color: "#E0A54B", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>🖍 Highlight</button>
               </div>
 
               {/* Drafts */}

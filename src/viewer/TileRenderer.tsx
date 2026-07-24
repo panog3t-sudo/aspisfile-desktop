@@ -73,7 +73,8 @@ type Props = {
   // markups render as overlaid vector strokes. Additive overlay only.
   drawMode?:        boolean;
   drawColor?:       string;
-  markups?:         Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; draft?: boolean }>;
+  drawTool?:        "pen" | "highlight";
+  markups?:         Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; draft?: boolean; kind?: "pen" | "highlight" }>;
   onStrokeComplete?: (page: number, points: Array<{ x: number; y: number }>) => void;
 };
 
@@ -111,7 +112,7 @@ export function TileRenderer({
   onPublishCursor,
   onDownload, downloadState, onSend,
   commentMode, comments, draftPin, onPlaceComment,
-  drawMode, drawColor, markups, onStrokeComplete,
+  drawMode, drawColor, drawTool, markups, onStrokeComplete,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -709,17 +710,29 @@ export function TileRenderer({
               {((markups ?? []).some((m) => m.page === currentPage) || liveStroke.length > 1) && (
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none"
                   style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 4 }}>
-                  {(markups ?? []).filter((m) => m.page === currentPage).map((m) => (
+                  {(markups ?? []).filter((m) => m.page === currentPage).map((m) => m.kind === "highlight" ? (
+                    <rect key={m.id}
+                      x={Math.min(m.points[0].x, m.points[m.points.length - 1].x) * 100}
+                      y={m.points[0].y * 100 - 1.4}
+                      width={Math.abs(m.points[m.points.length - 1].x - m.points[0].x) * 100}
+                      height={2.8} fill={m.draft ? "#E0A54B" : "#FDE047"} opacity={m.draft ? 0.4 : 0.5} />
+                  ) : (
                     <polyline key={m.id} points={toPolyline(m.points)} fill="none"
                       stroke={m.draft ? "#E0A54B" : (m.color || pinColor(m.recipient_email))} strokeWidth={2.5}
                       strokeDasharray={m.draft ? "4 3" : undefined}
                       strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity={0.92} />
                   ))}
-                  {liveStroke.length > 1 && (
+                  {liveStroke.length > 1 && (drawTool === "highlight" ? (
+                    <rect
+                      x={Math.min(liveStroke[0].x, liveStroke[liveStroke.length - 1].x) * 100}
+                      y={liveStroke[0].y * 100 - 1.4}
+                      width={Math.abs(liveStroke[liveStroke.length - 1].x - liveStroke[0].x) * 100}
+                      height={2.8} fill="#FDE047" opacity={0.4} />
+                  ) : (
                     <polyline points={toPolyline(liveStroke)} fill="none"
                       stroke={drawColor || "#E0A54B"} strokeWidth={2.5}
                       strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-                  )}
+                  ))}
                 </svg>
               )}
 
