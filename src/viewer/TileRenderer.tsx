@@ -65,7 +65,7 @@ type Props = {
   // reports (page, x, y as page-fractions) via onPlaceComment. Existing pins for
   // the current page + an optional draft pin are rendered over the tile.
   commentMode?:    boolean;
-  comments?:       Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>;
+  comments?:       Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string; draft?: boolean }>;
   draftPin?:       { page: number; x: number; y: number } | null;
   onPlaceComment?: (page: number, x: number, y: number) => void;
   // Phase 4 — freehand markup. drawMode captures a stroke on the page and
@@ -73,7 +73,7 @@ type Props = {
   // markups render as overlaid vector strokes. Additive overlay only.
   drawMode?:        boolean;
   drawColor?:       string;
-  markups?:         Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }>;
+  markups?:         Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; draft?: boolean }>;
   onStrokeComplete?: (page: number, points: Array<{ x: number; y: number }>) => void;
 };
 
@@ -223,6 +223,8 @@ export function TileRenderer({
   const drawingRef = useRef(false);
   const strokeRef  = useRef<Array<{ x: number; y: number }>>([]);
   const [liveStroke, setLiveStroke] = useState<Array<{ x: number; y: number }>>([]);
+  // Phase 2 — click a pin to pop up its comment.
+  const [openPin, setOpenPin] = useState<{ id: string; x: number; y: number; body: string; recipient_email?: string } | null>(null);
   const ptFrom = (e: React.MouseEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     return {
@@ -709,7 +711,8 @@ export function TileRenderer({
                   style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 4 }}>
                   {(markups ?? []).filter((m) => m.page === currentPage).map((m) => (
                     <polyline key={m.id} points={toPolyline(m.points)} fill="none"
-                      stroke={m.color || pinColor(m.recipient_email)} strokeWidth={2.5}
+                      stroke={m.draft ? "#E0A54B" : (m.color || pinColor(m.recipient_email))} strokeWidth={2.5}
+                      strokeDasharray={m.draft ? "4 3" : undefined}
                       strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity={0.92} />
                   ))}
                   {liveStroke.length > 1 && (
@@ -723,16 +726,35 @@ export function TileRenderer({
               {/* Phase 2 comment pins — existing (this page) + the draft. Overlay
                   siblings of the tile; do not affect tile rendering. */}
               {(comments ?? []).filter((c) => c.page === currentPage).map((c, i) => (
-                <div key={c.id} title={c.recipient_email ? `${c.recipient_email}: ${c.body}` : c.body}
+                <div key={c.id}
+                  onClick={(e) => { e.stopPropagation(); setOpenPin(openPin?.id === c.id ? null : c); }}
                   style={{
                     position: "absolute", left: `${c.x * 100}%`, top: `${c.y * 100}%`,
                     transform: "translate(-50%,-100%)", zIndex: 5,
                     width: 22, height: 22, borderRadius: "50% 50% 50% 2px",
-                    background: pinColor(c.recipient_email), color: "#fff", border: "2px solid #fff",
+                    background: c.draft ? "#E0A54B" : pinColor(c.recipient_email), color: "#fff",
+                    border: c.draft ? "2px dashed #fff" : "2px solid #fff",
                     boxShadow: "0 3px 8px rgba(0,0,0,.4)", display: "grid", placeItems: "center",
-                    fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "default",
-                  }}>{i + 1}</div>
+                    fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "pointer",
+                  }}>{c.draft ? "•" : i + 1}</div>
               ))}
+              {openPin && openPin && (comments ?? []).some((c) => c.id === openPin.id && c.page === currentPage) && (
+                <div style={{
+                  position: "absolute", left: `${openPin.x * 100}%`, top: `${openPin.y * 100}%`,
+                  transform: "translate(-50%, 8px)", zIndex: 7, width: 210, maxWidth: "70vw",
+                  background: "#141830", border: "1px solid #2E3760", borderRadius: 10, padding: "10px 11px",
+                  boxShadow: "0 14px 34px rgba(0,0,0,.55)", color: "#EAEFFB",
+                  fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    {openPin.recipient_email && (
+                      <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, color: pinColor(openPin.recipient_email) }}>{openPin.recipient_email}</span>
+                    )}
+                    <button onClick={() => setOpenPin(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>
+                  </div>
+                  <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "#C9CFEA", whiteSpace: "pre-wrap" }}>{openPin.body}</div>
+                </div>
+              )}
               {draftPin && draftPin.page === currentPage && (
                 <div style={{
                   position: "absolute", left: `${draftPin.x * 100}%`, top: `${draftPin.y * 100}%`,

@@ -26,8 +26,7 @@ import { StepUpScreen, type StepUpCreds } from "../components/StepUpScreen";
 import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaitingScreen";
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
-import { RespondControl } from "./RespondControl";
-import { CommentControl } from "./CommentControl";
+import { FeedbackMenu, type Decision, type DraftComment, type DraftMarkup } from "./FeedbackMenu";
 import { downloadAfsLink, DownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
@@ -108,15 +107,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Additive + flag-gated server-side; false by default → viewer unchanged.
   const [recipientFeedback, setRecipientFeedback] = useState(false);
   // Owner review — when the OWNER opens their own file, overlay ALL recipients'
-  // comment pins, read-only (no compose controls).
+  // pins/strokes, read-only (no menu).
   const [ownerReview, setOwnerReview] = useState(false);
-  // Phase 2 — page-anchored comments (pins + compose). Overlay only.
-  const [commentModeOn, setCommentModeOn] = useState(false);
-  const [comments, setComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
-  const [draftPin, setDraftPin] = useState<{ page: number; x: number; y: number } | null>(null);
-  // Phase 4 — freehand markup (strokes). Overlay only.
-  const [drawModeOn, setDrawModeOn] = useState(false);
-  const [markups, setMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }>>([]);
+  // Draft-then-send feedback. Sent items come from the server; drafts are local
+  // (recipient-only, deletable) until "Send". Overlay only.
+  const [fbMode, setFbMode] = useState<"none" | "comment" | "draw">("none");
+  const [sentComments, setSentComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
+  const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }>>([]);
+  const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
+  const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
+  const [draftMarkups, setDraftMarkups] = useState<DraftMarkup[]>([]);
+  const [pendingComment, setPendingComment] = useState<{ page: number; x: number; y: number } | null>(null);
+  const [pendingText, setPendingText] = useState("");
+  const [sending, setSending] = useState(false);
+  const tempIdRef = useRef(0);
   const [totalPages, setTotalPages]   = useState(0);
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [revoked, setRevoked]         = useState(false);
@@ -229,41 +233,63 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
   // Phase 2 — load this recipient's own comments (for the tile pins) from the
   // feedback thread. Refetched after posting a new one.
-  const fetchComments = useCallback(async () => {
+  const fetchFeedback = useCallback(async () => {
     if (!sessionId || !file) return;
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/feedback?session=${encodeURIComponent(sessionId)}`,
         { headers: { "X-App-Platform": "desktop" } });
       if (res.ok) {
-        const json = await res.json();
-        const entries = json.entries ?? [];
-        setComments(entries
-          .filter((e: { kind: string }) => e.kind === "comment")
+        const entries = (await res.json()).entries ?? [];
+        setSentComments(entries.filter((e: { kind: string }) => e.kind === "comment")
           .map((e: { id: string; page: number; x: number; y: number; body: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body, recipient_email: e.recipient_email })));
-        setMarkups(entries
-          .filter((e: { kind: string }) => e.kind === "markup")
+        setSentMarkups(entries.filter((e: { kind: string }) => e.kind === "markup")
           .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
 
-  useEffect(() => { if ((recipientFeedback || ownerReview) && sessionId) fetchComments(); }, [recipientFeedback, ownerReview, sessionId, fetchComments]);
+  useEffect(() => { if ((recipientFeedback || ownerReview) && sessionId) fetchFeedback(); }, [recipientFeedback, ownerReview, sessionId, fetchFeedback]);
 
-  const onPlaceComment = useCallback((page: number, x: number, y: number) => setDraftPin({ page, x, y }), []);
+  // Tap a spot → open the draft-comment compose (adds a LOCAL draft, not sent).
+  const onPlaceComment = useCallback((page: number, x: number, y: number) => { setPendingComment({ page, x, y }); setPendingText(""); }, []);
+  const addDraftComment = useCallback(() => {
+    setPendingComment((pc) => {
+      setPendingText((t) => {
+        if (pc && t.trim()) setDraftComments((c) => [...c, { tempId: "d" + (++tempIdRef.current), page: pc.page, x: pc.x, y: pc.y, body: t.trim() }]);
+        return "";
+      });
+      return null;
+    });
+  }, []);
+  // A completed stroke → a LOCAL draft markup (not sent).
+  const onStrokeComplete = useCallback((page: number, points: Array<{ x: number; y: number }>) => {
+    setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B" }]);
+  }, []);
+  const removeDraftComment = useCallback((id: string) => setDraftComments((c) => c.filter((x) => x.tempId !== id)), []);
+  const removeDraftMarkup  = useCallback((id: string) => setDraftMarkups((m) => m.filter((x) => x.tempId !== id)), []);
 
-  // Phase 4 — a completed stroke → POST, then refetch so it renders as a saved
-  // markup. Best-effort; a failed post just drops the stroke.
-  const onStrokeComplete = useCallback(async (page: number, points: Array<{ x: number; y: number }>) => {
-    if (!sessionId || !file) return;
+  // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
+  const sendBatch = useCallback(async (): Promise<boolean> => {
+    if (!sessionId || !file) return false;
+    setSending(true);
     try {
-      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/markup`, {
+      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
-        body: JSON.stringify({ session_id: sessionId, page, points, color: "#E0A54B" }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
+          comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
+          markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color })) : undefined,
+        }),
       });
-      if (res.ok) fetchComments();
-    } catch { /* drop */ }
-  }, [sessionId, file, fetchComments]);
+      setSending(false);
+      if (!res.ok) return false;
+      setDraftDecision(null); setDraftComments([]); setDraftMarkups([]);
+      await fetchFeedback();
+      return true;
+    } catch { setSending(false); return false; }
+  }, [sessionId, file, draftDecision, draftComments, draftMarkups, fetchFeedback]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -1308,13 +1334,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onCurrentPageChange={setCurrentPage}
             targetZoom={currentZoom}
             onCurrentZoomChange={setCurrentZoom}
-            commentMode={commentModeOn}
-            comments={comments}
-            draftPin={draftPin}
+            commentMode={fbMode === "comment"}
+            comments={[...sentComments, ...draftComments.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, body: d.body, draft: true }))]}
+            draftPin={pendingComment}
             onPlaceComment={recipientFeedback ? onPlaceComment : undefined}
-            drawMode={drawModeOn}
+            drawMode={fbMode === "draw"}
             drawColor="#E0A54B"
-            markups={markups}
+            markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, draft: true }))]}
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
@@ -1511,34 +1537,41 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         </div>
       )}
 
-      {/* Recipient feedback (Phase 1) — floating Respond control. Overlay only;
-          never touches the tile renderer. Flag-gated (recipientFeedback). */}
+      {/* Recipient feedback — unified draft-then-send menu. Overlay only; never
+          touches the tile renderer. Flag-gated (recipientFeedback). Owner review
+          shows pins/strokes without any menu. */}
       {recipientFeedback && sessionId && !locked && (
-        <RespondControl fileId={file.id} sessionId={sessionId} />
-      )}
-      {recipientFeedback && sessionId && !locked && (
-        <CommentControl
+        <FeedbackMenu
           fileId={file.id} sessionId={sessionId}
-          on={commentModeOn}
-          setOn={(v) => { setCommentModeOn(v); if (v) setDrawModeOn(false); }}
-          draft={draftPin} setDraft={setDraftPin}
-          onPosted={fetchComments}
+          mode={fbMode} setMode={setFbMode}
+          draftDecision={draftDecision} setDraftDecision={setDraftDecision}
+          draftComments={draftComments} removeDraftComment={removeDraftComment}
+          draftMarkups={draftMarkups} removeDraftMarkup={removeDraftMarkup}
+          onSend={sendBatch} sending={sending}
         />
       )}
-      {recipientFeedback && sessionId && !locked && !draftPin && (
-        <button
-          onClick={() => { const v = !drawModeOn; setDrawModeOn(v); if (v) setCommentModeOn(false); }}
-          style={{
-            position: "fixed", bottom: 62, left: 16, zIndex: 998,
-            display: "inline-flex", alignItems: "center", gap: 7, padding: "10px 15px", borderRadius: 999, cursor: "pointer",
-            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", fontSize: 12.5, fontWeight: 640,
-            border: drawModeOn ? "1px solid #E0A54B" : "1px solid #2E3760",
-            background: drawModeOn ? "#332510" : "#1A1F3A", color: drawModeOn ? "#E0A54B" : "#EAEFFB",
-            boxShadow: drawModeOn ? "0 0 0 1px #E0A54B inset, 0 8px 22px rgba(0,0,0,.45)" : "0 8px 22px rgba(0,0,0,.45)",
-          }}
-        >
-          <span aria-hidden style={{ fontSize: 14 }}>✎</span>{drawModeOn ? "Draw · on" : "Draw"}
-        </button>
+
+      {/* Draft-comment compose — after tapping a spot in Comment mode. */}
+      {recipientFeedback && pendingComment && !locked && (
+        <div onClick={() => { setPendingComment(null); setPendingText(""); }}
+          style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(4,6,14,.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 440, margin: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 16, padding: "15px 15px 17px",
+              boxShadow: "0 24px 60px rgba(0,0,0,.6)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", color: "#EAEFFB" }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 11 }}>
+              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 11, fontWeight: 700, color: "#7C9CF5", background: "#1C2347", padding: "3px 9px", borderRadius: 999 }}>💬 COMMENT · PAGE {pendingComment.page}</span>
+              <button onClick={() => { setPendingComment(null); setPendingText(""); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+            </div>
+            <textarea value={pendingText} onChange={(e) => setPendingText(e.target.value)} maxLength={1000} autoFocus placeholder="Your comment on this spot…"
+              style={{ width: "100%", minHeight: 60, resize: "vertical", boxSizing: "border-box", border: "1px solid #2E3760", background: "#080A14", color: "#EAEFFB", borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: "inherit" }} />
+            <div style={{ display: "flex", gap: 9, marginTop: 11 }}>
+              <button onClick={addDraftComment} disabled={!pendingText.trim()}
+                style={{ flex: 1, background: pendingText.trim() ? "#2E55D4" : "#26305A", color: "#fff", border: "none", borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 660, cursor: pendingText.trim() ? "pointer" : "default" }}>Add to drafts</button>
+              <button onClick={() => { setPendingComment(null); setPendingText(""); }} style={{ padding: "11px 14px", borderRadius: 10, border: "1px solid #2E3760", background: "transparent", color: "#9098BC", cursor: "pointer", fontSize: 13 }}>Cancel</button>
+            </div>
+            <div style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, color: "#666E96", marginTop: 9, textAlign: "center" }}>Draft only — nothing is sent until you press Send.</div>
+          </div>
+        </div>
       )}
     </>
   );
