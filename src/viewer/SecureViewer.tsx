@@ -16,7 +16,7 @@ import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen, ScreenshotPausedScreen } from "../components/CaptureBlackoutScreen";
-import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, type HeldStatus } from "../lib/afs-render";
+import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, generateSignedOutput, type HeldStatus } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
@@ -307,6 +307,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
   const sendBatch = useCallback(async (): Promise<boolean> => {
     if (!sessionId || !file) return false;
+    const hadAnnotations = draftSignatures.length > 0 || draftMarkups.length > 0;
     setSending(true);
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/feedback`, {
@@ -324,9 +325,15 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       if (!res.ok) return false;
       setDraftDecision(null); setDraftComments([]); setDraftMarkups([]); setDraftSignatures([]);
       await fetchFeedback();
+      // Post-cutover: regenerate the owner's stored signed PDF from our local
+      // .afs so the download still works after the original ciphertext is
+      // purged. Fire-and-forget; no-ops server-side if there are no signatures.
+      if (hadAnnotations && afsRenderEnabled) {
+        generateSignedOutput({ fileId: file.id, sessionId, fingerprint: fpRef.current }).catch(() => {});
+      }
       return true;
     } catch { setSending(false); return false; }
-  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignatures, fetchFeedback]);
+  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignatures, fetchFeedback, afsRenderEnabled]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{

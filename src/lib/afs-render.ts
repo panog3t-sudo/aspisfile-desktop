@@ -127,6 +127,51 @@ async function resupply(
   }
 }
 
+// Re-supply the .afs to /render-signed so the server composites the signed PDF
+// (signatures + markups + certificate) and stores it re-encrypted for the owner
+// to download after the original ciphertext is purged (Phase B cutover). Same
+// two transports as resupply(). Fire-and-forget from the caller.
+async function supplySigned(
+  fileId: string, sessionId: string, h: Record<string, string>, afs: Uint8Array,
+): Promise<{ ok: boolean }> {
+  try {
+    if (afs.length <= MAX_INLINE) {
+      const res = await fetch(`${BASE}/api/v1/viewer/${fileId}/render-signed?session=${sessionId}`, {
+        method: 'POST', headers: { ...h, 'Content-Type': 'application/octet-stream' }, body: afs,
+      });
+      return { ok: res.ok };
+    }
+    const pres = await fetch(`${BASE}/api/v1/viewer/${fileId}/supply/presign?session=${sessionId}`, {
+      method: 'POST', headers: h,
+    });
+    if (!pres.ok) return { ok: false };
+    const { uploadUrl } = (await pres.json()) as { uploadUrl: string };
+    const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'x-amz-server-side-encryption': 'AES256' }, body: afs });
+    if (!put.ok) return { ok: false };
+    const fin = await fetch(`${BASE}/api/v1/viewer/${fileId}/render-signed?session=${sessionId}`, {
+      method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ fromRelay: true }),
+    });
+    return { ok: fin.ok };
+  } catch { return { ok: false }; }
+}
+
+// After a recipient sends signatures/markups, regenerate the owner's stored
+// signed PDF from the recipient's local .afs (held copy, else a fresh fetch).
+// Best-effort: on any failure the owner download falls back to the live path
+// while the original ciphertext survives.
+export async function generateSignedOutput(opts: {
+  fileId: string; sessionId: string; fingerprint: string;
+}): Promise<boolean> {
+  const h = authHeaders(opts.fingerprint);
+  let afs = await loadStoredAfs(opts.fileId);
+  if (!afs) {
+    const fresh = await fetchAfs(opts.fileId, opts.sessionId, h);
+    if (fresh.kind !== 'ok') return false;
+    afs = fresh.bytes;
+  }
+  return (await supplySigned(opts.fileId, opts.sessionId, h, afs)).ok;
+}
+
 // Prime the server-transient render. Prefer the locally-held .afs (no server
 // fetch); if it's stale (token rotated / revoked → re-supply rejected) we
 // re-fetch, re-store, and retry once. On any failure the caller falls back to
