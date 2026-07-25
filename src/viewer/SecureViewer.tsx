@@ -316,7 +316,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           session_id: sessionId,
           decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
           comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
-          markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color })) : undefined,
+          markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color, kind: m.kind })) : undefined,
           signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, signer_name: s.signer_name })) : undefined,
         }),
       });
