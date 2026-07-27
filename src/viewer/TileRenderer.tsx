@@ -80,6 +80,8 @@ type Props = {
   signMode?:         boolean;
   onPlaceSignature?: (page: number, x: number, y: number) => void;
   signatures?:       Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; signer_name?: string; draft?: boolean }>;
+  // Reposition/resize a DRAFT signature box before send (page-fraction patch).
+  onUpdateSignature?: (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void;
 };
 
 // Stable per-recipient pin colour (owner review shows several recipients).
@@ -117,7 +119,7 @@ export function TileRenderer({
   onDownload, downloadState, onSend,
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawTool, markups, onStrokeComplete,
-  signMode, onPlaceSignature, signatures,
+  signMode, onPlaceSignature, signatures, onUpdateSignature,
 }: Props) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -272,6 +274,40 @@ export function TileRenderer({
   };
   const toPolyline = (pts: Array<{ x: number; y: number }>) =>
     pts.map((p) => `${p.x * 100},${p.y * 100}`).join(" ");
+
+  // Draft-signature move/resize. Drag the box to reposition, the corner handle
+  // to resize (proportional, so the signature doesn't distort). Page-fraction
+  // math off the tile container so it maps at any zoom.
+  const onUpdateSigRef = useRef(onUpdateSignature);
+  onUpdateSigRef.current = onUpdateSignature;
+  const sigDragRef = useRef<null | { id: string; mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number; ow: number; oh: number; cw: number; ch: number }>(null);
+  const onSigMove = useCallback((e: MouseEvent) => {
+    const d = sigDragRef.current; const upd = onUpdateSigRef.current;
+    if (!d || !upd) return;
+    const dx = (e.clientX - d.sx) / d.cw, dy = (e.clientY - d.sy) / d.ch;
+    if (d.mode === "move") {
+      upd(d.id, { x: Math.min(1 - d.ow, Math.max(0, d.ox + dx)), y: Math.min(1 - d.oh, Math.max(0, d.oy + dy)) });
+    } else {
+      const nw = Math.min(1 - d.ox, Math.max(0.06, d.ow + dx));
+      const nh = Math.min(1 - d.oy, Math.max(0.02, d.oh * (nw / d.ow)));   // keep aspect
+      upd(d.id, { w: nw, h: nh });
+    }
+  }, []);
+  const onSigUp = useCallback(() => {
+    sigDragRef.current = null;
+    window.removeEventListener("mousemove", onSigMove);
+    window.removeEventListener("mouseup", onSigUp);
+  }, [onSigMove]);
+  const beginSigDrag = useCallback((e: React.MouseEvent<HTMLDivElement>, s: { id: string; x: number; y: number; w: number; h: number; draft?: boolean }, mode: "move" | "resize") => {
+    if (!onUpdateSigRef.current || !s.draft) return;
+    e.stopPropagation(); e.preventDefault();
+    const container = (e.currentTarget as HTMLElement).offsetParent as HTMLElement | null;
+    const rect = container?.getBoundingClientRect();
+    if (!rect) return;
+    sigDragRef.current = { id: s.id, mode, sx: e.clientX, sy: e.clientY, ox: s.x, oy: s.y, ow: s.w, oh: s.h, cw: rect.width, ch: rect.height };
+    window.addEventListener("mousemove", onSigMove);
+    window.addEventListener("mouseup", onSigUp);
+  }, [onSigMove, onSigUp]);
 
   const onScrollEvent = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (!onPublishScroll) return; // recipient side: no publish
@@ -768,24 +804,34 @@ export function TileRenderer({
                     fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "pointer",
                   }}>{c.draft ? "•" : i + 1}</div>
               ))}
-              {(signatures ?? []).filter((s) => s.page === currentPage).map((s) => (
-                <div key={s.id} style={{
-                  position: "absolute", left: `${s.x * 100}%`, top: `${s.y * 100}%`,
-                  width: `${s.w * 100}%`, height: `${s.h * 100}%`, zIndex: 5,
-                  border: s.draft ? "1px dashed #E0A54B" : "none", borderRadius: 3,
-                  containerType: "size",
-                } as React.CSSProperties}>
+              {(signatures ?? []).filter((s) => s.page === currentPage).map((s) => {
+                const editable = !!s.draft && !!onUpdateSignature;
+                return (
+                <div key={s.id}
+                  onMouseDown={editable ? (e) => beginSigDrag(e, s, "move") : undefined}
+                  title={editable ? "Drag to move · drag the corner to resize" : undefined}
+                  style={{
+                    position: "absolute", left: `${s.x * 100}%`, top: `${s.y * 100}%`,
+                    width: `${s.w * 100}%`, height: `${s.h * 100}%`, zIndex: editable ? 6 : 5,
+                    border: s.draft ? "1px dashed #E0A54B" : "none", borderRadius: 3,
+                    containerType: "size", cursor: editable ? "move" : "default",
+                  } as React.CSSProperties}>
                   {s.style === "drawn" ? (
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: "100%", height: "100%" }}>
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: "100%", height: "100%", pointerEvents: "none" }}>
                       {(s.points ?? []).map((st, i) => (
                         <polyline key={i} points={st.map((p) => `${p.x * 100},${p.y * 100}`).join(" ")} fill="none" stroke="#0E1130" strokeWidth={1.7} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
                       ))}
                     </svg>
                   ) : (
-                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", color: "#0E1130", fontSize: "58cqh", overflow: "hidden", whiteSpace: "nowrap", lineHeight: 1 }}>{s.typed_name}</div>
+                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", color: "#0E1130", fontSize: "58cqh", overflow: "hidden", whiteSpace: "nowrap", lineHeight: 1, pointerEvents: "none" }}>{s.typed_name}</div>
+                  )}
+                  {editable && (
+                    <div onMouseDown={(e) => beginSigDrag(e, s, "resize")}
+                      style={{ position: "absolute", right: -7, bottom: -7, width: 14, height: 14, background: "#2E55D4", border: "2px solid #fff", borderRadius: 3, boxShadow: "0 1px 4px rgba(0,0,0,.4)", cursor: "nwse-resize" }} />
                   )}
                 </div>
-              ))}
+                );
+              })}
               {openPin && openPin && (comments ?? []).some((c) => c.id === openPin.id && c.page === currentPage) && (
                 <div style={{
                   position: "absolute", left: `${openPin.x * 100}%`, top: `${openPin.y * 100}%`,

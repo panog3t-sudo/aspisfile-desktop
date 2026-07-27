@@ -198,6 +198,7 @@ export function FeedbackMenu(props: {
                           : e.kind === "comment" ? <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>💬 P{e.page}</span>
                           : <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}>✎ P{e.page}</span>}
                         {e.kind === "decision" && e.is_current && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7C9CF5" }}>◀ CURRENT</span>}
+                        {e.kind === "decision" && e.note && <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.note}</span>}
                         {e.kind === "comment" && <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.body}</span>}
                         <span style={{ marginLeft: "auto", fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, color: "#666E96" }}>{fmtTime(e.created_at)}</span>
                       </div>

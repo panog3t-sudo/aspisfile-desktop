@@ -303,6 +303,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     setFbMode("none");
   }, [pendingSignature]);
   const removeDraftSignature = useCallback((id: string) => setDraftSignatures((d) => d.filter((x) => x.tempId !== id)), []);
+  // Reposition/resize a draft signature box (before send).
+  const updateDraftSignature = useCallback((id: string, patch: { x?: number; y?: number; w?: number; h?: number }) =>
+    setDraftSignatures((d) => d.map((s) => (s.tempId === id ? { ...s, ...patch } : s))), []);
 
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
   const sendBatch = useCallback(async (): Promise<boolean> => {
@@ -1390,6 +1393,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             signMode={fbMode === "sign"}
             onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}
             signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, draft: true }))]}
+            onUpdateSignature={recipientFeedback ? updateDraftSignature : undefined}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).

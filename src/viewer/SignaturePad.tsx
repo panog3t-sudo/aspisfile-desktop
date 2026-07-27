@@ -3,6 +3,11 @@ import { useRef, useState } from "react";
 // Recipient e-signature capture — draw or type. Returns box-relative strokes
 // (0..1) for drawn, or the typed name. Purely a capture UI; the signature is
 // placed on the page + sent as a draft by the caller. Overlay only.
+//
+// A DRAWN signature can be saved on THIS device for reuse (keyed to the bound
+// recipient email). Local-only + cosmetic: the legal attribution is always the
+// passkey-verified session, never the pixels, so a reused drawing is exactly as
+// trustworthy as a fresh one.
 
 export type SignatureData =
   | { style: "drawn"; points: Array<Array<{ x: number; y: number }>>; signer_name: string }
@@ -10,10 +15,25 @@ export type SignatureData =
 
 const PAD_W = 360, PAD_H = 150;   // ~2.4:1, matches the on-page signature box aspect
 
+type Strokes = Array<Array<{ x: number; y: number }>>;
+const SIG_KEY = (email: string) => `aspis_saved_sig_v1:${email}`;
+function loadSavedSig(email: string): Strokes | null {
+  if (!email) return null;
+  try { const s = localStorage.getItem(SIG_KEY(email)); const p = s ? JSON.parse(s) : null; return Array.isArray(p) && p.length ? p : null; } catch { return null; }
+}
+function saveSavedSig(email: string, strokes: Strokes) {
+  if (!email || !strokes.length) return;
+  try { localStorage.setItem(SIG_KEY(email), JSON.stringify(strokes)); } catch { /* quota / unavailable */ }
+}
+function clearSavedSig(email: string) { try { localStorage.removeItem(SIG_KEY(email)); } catch { /* */ } }
+
 export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () => void; onDone: (s: SignatureData) => void; defaultName?: string }) {
+  const emailKey = (defaultName ?? "").trim().toLowerCase();
   const [tab, setTab] = useState<"draw" | "type">("draw");
   const [typed, setTyped] = useState("");
-  const [strokes, setStrokes] = useState<Array<Array<{ x: number; y: number }>>>([]);
+  const [strokes, setStrokes] = useState<Strokes>(() => loadSavedSig(emailKey) ?? []);
+  const [hasSaved, setHasSaved] = useState(() => !!loadSavedSig(emailKey));
+  const [save, setSave] = useState(true);   // remember this drawing on this device
   const drawingRef = useRef(false);
 
   const pt = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -24,6 +44,7 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
   const move = (e: React.MouseEvent<HTMLDivElement>) => { if (!drawingRef.current) return; const p = pt(e); setStrokes((s) => { if (!s.length) return s; const c = s.slice(); c[c.length - 1] = [...c[c.length - 1], p]; return c; }); };
   const up = () => { drawingRef.current = false; };
   const clear = () => { setStrokes([]); };
+  const forget = () => { clearSavedSig(emailKey); setHasSaved(false); setSave(false); };
 
   const hasDrawing = strokes.some((st) => st.length > 1);
   const canAdd = tab === "draw" ? hasDrawing : !!typed.trim();
@@ -32,8 +53,13 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
 
   const submit = () => {
     if (!canAdd) return;
-    if (tab === "draw") onDone({ style: "drawn", points: strokes.filter((st) => st.length > 1), signer_name: drawnName });
-    else onDone({ style: "typed", typed_name: typed.trim(), signer_name: typed.trim() });
+    if (tab === "draw") {
+      const pts = strokes.filter((st) => st.length > 1);
+      if (save) saveSavedSig(emailKey, pts);
+      onDone({ style: "drawn", points: pts, signer_name: drawnName });
+    } else {
+      onDone({ style: "typed", typed_name: typed.trim(), signer_name: typed.trim() });
+    }
   };
 
   return (
@@ -61,9 +87,14 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
                 <line x1="6" y1="78" x2="94" y2="78" stroke="#C7D3F5" strokeWidth={0.6} vectorEffect="non-scaling-stroke" />
               </svg>
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
-              <button onClick={clear} style={{ background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 12 }}>Clear</button>
+            <div style={{ display: "flex", alignItems: "center", marginTop: 6 }}>
+              {hasSaved ? <button onClick={forget} style={{ background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 12 }}>Forget saved signature</button> : <span />}
+              <button onClick={clear} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 12 }}>Clear</button>
             </div>
+            <button onClick={() => setSave((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", cursor: "pointer", padding: "8px 0 0", textAlign: "left" }}>
+              <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${save ? "#5C82EE" : "#3A426B"}`, background: save ? "#2E55D4" : "transparent", color: "#fff", display: "grid", placeItems: "center", fontSize: 11, flexShrink: 0 }}>{save ? "✓" : ""}</span>
+              <span style={{ fontSize: 12, color: "#9098BC" }}>{hasSaved ? "Update the signature saved on this device" : "Save this signature on this device for reuse"}</span>
+            </button>
           </>
         ) : (
           <div style={{ width: "100%", aspectRatio: `${PAD_W} / ${PAD_H}`, background: "#FBFBF7", borderRadius: 10, border: "1px solid #2E3760", display: "grid", placeItems: "center", padding: 12 }}>
