@@ -28,7 +28,7 @@ function endedCopy(reason?: string): { title: string; body: string } {
     case "expired":
       return { title: "Session expired", body: "Your session has expired. Open the file again to continue." };
     case "opened_elsewhere":
-      return { title: "Opened on another device", body: "This file is now open in another session. Only one viewing session can be active at a time — open it again here to continue viewing." };
+      return { title: "Open in another viewer", body: "This file is open in another AspisFile viewer, or was just reopened elsewhere. Only one viewing session can be active at a time — close any other viewer, then open it again here to continue." };
     case "session_terminated_or_revoked":
       return { title: "Session ended", body: "This viewing session was ended. Open the file again to continue, or contact the sender if you didn't expect this." };
     default:
