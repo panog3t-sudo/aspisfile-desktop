@@ -383,6 +383,33 @@ jobs:
           Copy-Item $portable.FullName -Destination artifacts\AspisFile-Portable.exe
           Get-ChildItem artifacts
 
+      # Authenticode-sign all three installers with Azure Trusted Signing so
+      # Windows recognises the publisher (no more SmartScreen "unknown
+      # publisher"). Signs the collected artifacts in-place before upload.
+      - name: Sign Windows installers (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\artifacts
+          files-folder-filter: exe,msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signatures
+        shell: pwsh
+        run: |
+          $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like '*\x64\*' } | Select-Object -First 1
+          foreach ($f in Get-ChildItem artifacts\*.exe, artifacts\*.msi) {
+            & $tool.FullName verify /pa /v $f.FullName
+          }
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -449,7 +476,7 @@ jobs:
 
             ### Installation
             **macOS**: Double-click the .pkg and follow the installer prompts. The app installs to /Applications automatically.
-            **Windows**: Run `AspisFile-Setup.exe` — it installs for your user account only and needs no administrator rights. If SmartScreen appears, click "More info → Run anyway".
+            **Windows**: Run `AspisFile-Setup.exe` — it's signed by AspisFile and installs for your user account only, no administrator rights needed. (Brand-new releases may briefly show a "not commonly downloaded" note while SmartScreen reputation builds; that clears on its own.)
             **Windows, deployed by IT**: use `AspisFile.msi` (installs to Program Files for all users; requires elevation).
             **Windows, can't install anything**: `AspisFile-Portable.exe` runs directly from your Downloads folder — no installer and nothing written outside your user profile. Needs the Microsoft WebView2 runtime, which is present by default on Windows 11 and current Windows 10.
           files: |
