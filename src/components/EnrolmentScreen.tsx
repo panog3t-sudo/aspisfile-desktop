@@ -12,7 +12,7 @@ const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://a
 //
 // macOS happy path:
 //   1. User enters email + enrolment code, clicks Continue.
-//   2. POST /api/v1/enrollment-codes/redeem → registration_token (JWT, 5min).
+//   2. POST /api/v1/enrollment-codes/redeem → registration_token (JWT, 10min).
 //   3. lib/passkey.ts registerPasskey() → native AS bridge fires
 //      ASAuthorizationController with the AspisFile window as anchor →
 //      Touch ID prompt appears INSIDE the AspisFile window.
@@ -237,7 +237,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
       }
       // Bridge failed for any other reason. Show the underlying error
       // and offer the browser fallback using the same registration
-      // token (the code is consumed but the rt is still valid for 5min).
+      // token (the code is consumed but the rt is still valid for 10min).
       const detail = err instanceof PasskeyError
         ? `${err.kind}: ${err.message}`
         : String(err?.message ?? err ?? "unknown error");

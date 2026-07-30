@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getRecipientSession, RecipientSession } from "../lib/recipient-session";
+import { getActiveSessionToken, getRecipientSession, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
 
 type Props = {
@@ -7,9 +7,13 @@ type Props = {
   // Phase A+ Stage 4 — invoked when the user taps "I have an
   // enrollment code". App.tsx switches to the EnrolmentScreen.
   onEnrol?: () => void;
+  // Phase 3 — invoked when an enrolled recipient whose session has
+  // expired taps "Sign back in". Resolves { ok } on success (App opens
+  // any pending file), or { ok:false, message } to show inline.
+  onSignIn?: () => Promise<{ ok: boolean; message?: string }>;
 };
 
-export function IdleScreen({ onLink, onEnrol }: Props) {
+export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
   const [input, setInput] = useState("");
   // Phase A+ UX polish — surface enrolment state on the idle screen so
   // a recipient who already installed the app can either see they're
@@ -17,14 +21,25 @@ export function IdleScreen({ onLink, onEnrol }: Props) {
   // without needing a fresh deep-link to arrive first. Mirrors the
   // mobile account.tsx "Recipient identity" card.
   const [session, setSession] = useState<RecipientSession | null>(null);
+  // Enrolled on this device but the session token has expired → offer a
+  // "Sign back in" affordance instead of a dead "Enrolled" card.
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInMsg, setSignInMsg] = useState("");
   // Phase B test toggle — visible in release builds (no devtools to set the
   // localStorage flag from a console). Flipping it takes effect on the next
   // file open (the viewer reads the flag at mount), so no reload needed.
   const [afsOn, setAfsOn] = useState(isAfsRenderEnabled());
 
+  const refresh = () => {
+    const s = getRecipientSession();
+    setSession(s);
+    setNeedsSignIn(!!s && !getActiveSessionToken());
+  };
+
   useEffect(() => {
-    setSession(getRecipientSession());
-    const onVisible = () => setSession(getRecipientSession());
+    refresh();
+    const onVisible = () => refresh();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     return () => {
@@ -32,6 +47,22 @@ export function IdleScreen({ onLink, onEnrol }: Props) {
       window.removeEventListener("focus", onVisible);
     };
   }, []);
+
+  async function doSignIn() {
+    if (!onSignIn || signingIn) return;
+    setSignInMsg("");
+    setSigningIn(true);
+    try {
+      const res = await onSignIn();
+      if (!res.ok) {
+        setSignInMsg(res.message || "Couldn't sign you in on this device. Open your file link from your email.");
+      } else {
+        refresh(); // App opens any pending file; otherwise the card updates to active.
+      }
+    } finally {
+      setSigningIn(false);
+    }
+  }
 
   function handleOpen() {
     const val = input.trim();
@@ -88,6 +119,39 @@ export function IdleScreen({ onLink, onEnrol }: Props) {
           <span style={{ fontSize: 13, color: "#E2E8F0", fontWeight: 500, wordBreak: "break-all" }}>
             {session.email}
           </span>
+
+          {needsSignIn && onSignIn && (
+            <>
+              <p style={{ fontSize: 11, color: "#94A3B8", margin: "6px 0 2px", lineHeight: 1.5, textAlign: "center" }}>
+                Your secure session expired.
+              </p>
+              <button
+                onClick={doSignIn}
+                disabled={signingIn}
+                style={{
+                  marginTop: 2,
+                  background: "#185FA5",
+                  border: "none",
+                  color: "#fff",
+                  padding: "8px 18px",
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: signingIn ? "default" : "pointer",
+                  fontFamily: "inherit",
+                  opacity: signingIn ? 0.7 : 1,
+                }}
+              >
+                {signingIn ? "Signing you in…" : "Sign back in"}
+              </button>
+              {signInMsg && (
+                <p style={{ fontSize: 11, color: "#FCA5A5", margin: "6px 0 0", lineHeight: 1.5, textAlign: "center", maxWidth: 300 }}>
+                  {signInMsg}
+                </p>
+              )}
+            </>
+          )}
+
           {onEnrol && (
             <button
               onClick={onEnrol}
@@ -181,27 +245,29 @@ export function IdleScreen({ onLink, onEnrol }: Props) {
         </div>
       )}
 
-      {/* Phase B (B5) test toggle — exercises the .afs re-supply render path.
-          ON → the next file you open fetches + re-supplies its .afs so the
-          server renders transiently from it; OFF → durable-S3 tile stream
-          (current behaviour). Takes effect on the next open. */}
-      <button
-        onClick={() => setAfsOn(toggleAfsRender())}
-        style={{
-          marginTop: 28,
-          background: afsOn ? "rgba(37,99,235,0.18)" : "transparent",
-          border: `0.5px solid ${afsOn ? "#2563EB" : "rgba(255,255,255,0.14)"}`,
-          color: afsOn ? "#93C5FD" : "#475569",
-          padding: "6px 12px",
-          borderRadius: 6,
-          fontSize: 11,
-          cursor: "pointer",
-          fontFamily: "monospace",
-          letterSpacing: 0.4,
-        }}
-      >
-        .afs render: {afsOn ? "ON" : "OFF"} · tap to toggle
-      </button>
+      {/* .afs render toggle — DEV builds only. A real recipient must never see
+          this: tapping it could disable the relay render path. Release builds
+          keep the hidden Cmd/Ctrl+Shift+A shortcut (App.tsx) as the safety
+          switch. Post-cutover .afs render is always ON by default anyway. */}
+      {import.meta.env.DEV && (
+        <button
+          onClick={() => setAfsOn(toggleAfsRender())}
+          style={{
+            marginTop: 28,
+            background: afsOn ? "rgba(37,99,235,0.18)" : "transparent",
+            border: `0.5px solid ${afsOn ? "#2563EB" : "rgba(255,255,255,0.14)"}`,
+            color: afsOn ? "#93C5FD" : "#475569",
+            padding: "6px 12px",
+            borderRadius: 6,
+            fontSize: 11,
+            cursor: "pointer",
+            fontFamily: "monospace",
+            letterSpacing: 0.4,
+          }}
+        >
+          .afs render: {afsOn ? "ON" : "OFF"} · tap to toggle
+        </button>
+      )}
     </div>
   );
 }

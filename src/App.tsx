@@ -9,6 +9,8 @@ import { IdleScreen } from "./components/IdleScreen";
 import { LockScreen } from "./components/LockScreen";
 import { SetupModal } from "./components/SetupModal";
 import { EnrolmentScreen } from "./components/EnrolmentScreen";
+import { EnrolmentWaitingScreen } from "./components/EnrolmentWaitingScreen";
+import { ReauthWaitingScreen } from "./components/ReauthWaitingScreen";
 import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, saveRecipientSession } from "./lib/recipient-session";
@@ -23,7 +25,7 @@ import UpdateBanner from "./components/UpdateBanner";
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
 
-type Mode = "idle" | "viewer" | "enrol" | "wrong_account";
+type Mode = "idle" | "viewer" | "enrol" | "enrol_wait" | "reauth_wait" | "wrong_account";
 
 type ViewerParams = {
   token:   string;
@@ -174,33 +176,11 @@ function tryHandleEnrolComplete(url: string): { email: string } | null {
   }
 }
 
-// First-time bootstrap: deep link carries a registration token (rt)
-// from /access/<token>'s server-rendered bootstrap page. We fetch the
-// recipient's email from /access/<token>/meta (the token+rt pair was
-// already verified by the bootstrap page that issued rt) and open the
-// default browser to /enroll/desktop?email=…&rt=… which runs the
-// WebAuthn ceremony and returns a session token via
-// aspisfile://enrol-complete. Recipient sees one Touch ID prompt and
-// a brief browser-tab bounce — no code entry, no email entry, no
-// EnrolmentScreen.
-async function startAutoEnrolment(token: string, rt: string): Promise<void> {
-  try {
-    const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
-    if (!metaRes.ok) {
-      console.warn('[auto-enrolment] /meta failed:', metaRes.status);
-      return;
-    }
-    const meta = await metaRes.json() as { recipient_email?: string };
-    if (!meta.recipient_email) return;
-
-    const url = new URL(`${BASE}/enroll/desktop`);
-    url.searchParams.set('email', meta.recipient_email);
-    url.searchParams.set('rt',    rt);
-    await openUrl(url.toString());
-  } catch (err) {
-    console.warn('[auto-enrolment] failed:', err);
-  }
-}
+// The rt auto-enrolment flow now lives inside AppContent as
+// beginAutoEnrolment (below). It moved in-component so it can drive the
+// visible EnrolmentWaitingScreen + the enrol-status poll — the recipient
+// no longer sits on a blank IdleScreen, and a blocked aspisfile:// deep
+// link can no longer strand them. Mac + Windows: pure fetch + UI.
 
 // Sign in with a passkey ALREADY on this device. The common case the
 // viewer previously mishandled: the recipient is enrolled (e.g. an
@@ -275,6 +255,16 @@ function AppContent() {
   // Set when a deep-link's file recipient doesn't match the viewer's bound
   // identity — drives the WrongAccountScreen (deliberate switch, never silent).
   const [wrongAccount, setWrongAccount] = useState<{ fileRecipient: string; boundEmail: string; params: ViewerParams } | null>(null);
+  // Drives EnrolmentWaitingScreen — the visible, self-completing state for
+  // the rt auto-enrolment path (replaces sitting on a blank IdleScreen).
+  const [enrolWait, setEnrolWait] = useState<
+    { rt: string; email: string | null; url: string | null; openFailed: boolean; startError: string | null } | null
+  >(null);
+  // Drives ReauthWaitingScreen — the visible, self-completing cross-vault
+  // re-auth path (session expired + passkey not usable by the native bridge).
+  const [reauth, setReauth] = useState<
+    { token: string; email: string | null; url: string | null; openFailed: boolean } | null
+  >(null);
   // pendingLink: a deep-link arrived while the recipient wasn't enrolled.
   // Buffer it, route to EnrolmentScreen, replay it once enrolment completes.
   // Without this gate the server returns BINDING_REQUIRED 403 from
@@ -286,6 +276,10 @@ function AppContent() {
   // and completeEnrolment() read it. State here would trip TS6133
   // because nothing references the reactive value.
   const pendingLinkRef = useRef<ViewerParams | null>(null);
+  // Guards against the enrol session completing twice — the aspisfile://
+  // deep link and the enrol-status poll can both report success; only the
+  // first should replay the buffered file link.
+  const enrolCompletedRef = useRef(false);
   // Cold-start: counts per-file-biometric mutex retries so a deep link isn't
   // dropped while the LockScreen's unlock biometric is still settling.
   const bioRetryRef = useRef(0);
@@ -386,7 +380,7 @@ function AppContent() {
       // token (rt) from /access/<token>'s server-rendered bootstrap
       // page. Skip EnrolmentScreen entirely.
       if (params.rt) {
-        startAutoEnrolment(params.token, params.rt);
+        beginAutoEnrolment(params.token, params.rt);
         return;
       }
       // First-time bootstrap path B — Universal Link bypassed the
@@ -405,7 +399,7 @@ function AppContent() {
         .then(async (j: { registration_token?: string } | null) => {
           const rt = j?.registration_token;
           if (rt) {
-            startAutoEnrolment(params.token, rt);
+            beginAutoEnrolment(params.token, rt);
             return;
           }
           // Already enrolled, but no local session. Before forcing a
@@ -425,15 +419,15 @@ function AppContent() {
             openLinkRef.current?.(params);
             return;
           }
-          // No usable passkey on this device — auto-request a fresh code
-          // and drop into EnrolmentScreen. Best-effort: even if the
-          // fresh-code call fails, the EnrolmentScreen still works (user
-          // can ask the sender for a code or use an old one if valid).
-          fetch(`${BASE}/api/v1/access/${params.token}/request-fresh-code`, { method: 'POST' })
-            .catch(() => {});
-          setMode("enrol");
+          // Passkey exists but the native bridge can't reach its vault (the
+          // Phase 2 cross-vault case, e.g. a Google-synced passkey on a Mac).
+          // Re-auth through the browser sign-in page instead of dead-ending on
+          // a fresh code: a real assertion (any vault, phone-QR) mints a
+          // session via the reauth-status poll. beginBrowserReauth itself falls
+          // back to the code path if it can't resolve the recipient.
+          beginBrowserReauth(params.token);
         })
-        .catch(() => setMode("enrol"));
+        .catch(() => enterManualEnrol());
       return;
     }
     // Per-file biometric gate (2026-05-30): every file open requires a
@@ -523,6 +517,135 @@ function AppContent() {
     setViewerParams(params);
     setMode("viewer");
   }
+
+  // Kick off the rt auto-enrolment flow AND show a visible, self-
+  // completing waiting screen. Opens the browser for the WebAuthn
+  // ceremony, then EnrolmentWaitingScreen polls enrol-status so a
+  // blocked deep link can't strand the recipient. Mac + Windows: this
+  // is pure fetch + UI, no native/platform-specific code.
+  async function beginAutoEnrolment(token: string, rt: string): Promise<void> {
+    enrolCompletedRef.current = false;
+    let email: string | null = null;
+    try {
+      const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
+      if (metaRes.ok) {
+        const meta = await metaRes.json() as { recipient_email?: string };
+        email = meta.recipient_email ?? null;
+      }
+    } catch { /* fall through — handled below */ }
+
+    if (!email) {
+      // Can't build the enrol URL without the recipient email. Show a
+      // clear, actionable screen instead of silently sitting on idle.
+      setEnrolWait({
+        rt, email: null, url: null, openFailed: false,
+        startError: "We couldn't start secure setup. Reopen the file link from your email to try again.",
+      });
+      setMode("enrol_wait");
+      return;
+    }
+
+    const url = new URL(`${BASE}/enroll/desktop`);
+    url.searchParams.set('email', email);
+    url.searchParams.set('rt',    rt);
+
+    let openFailed = false;
+    try {
+      await openUrl(url.toString());
+    } catch (err) {
+      console.warn('[auto-enrolment] openUrl failed:', err);
+      openFailed = true;
+    }
+
+    setEnrolWait({ rt, email, url: url.toString(), openFailed, startError: null });
+    setMode("enrol_wait");
+  }
+
+  // Cross-vault re-auth (Phase 2). The recipient is enrolled but their passkey
+  // isn't usable by the native bridge on this device (e.g. a Google/Windows-
+  // vault passkey). Open the browser sign-in page — a real WebAuthn assertion,
+  // any vault, phone-QR capable — and show a waiting screen that polls
+  // reauth-status until a session is minted. Native bridge stays the fast path
+  // (tried first, above). Mac + Windows: pure fetch + UI, no deep-link needed.
+  async function beginBrowserReauth(token: string): Promise<void> {
+    enrolCompletedRef.current = false;
+    let email: string | null = null;
+    try {
+      const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
+      if (metaRes.ok) {
+        const meta = await metaRes.json() as { recipient_email?: string };
+        email = meta.recipient_email ?? null;
+      }
+    } catch { /* handled below */ }
+
+    if (!email) {
+      // Can't resolve the recipient — fall back to the code path, which is
+      // still actionable (and itself ends in a browser assertion).
+      fetch(`${BASE}/api/v1/access/${token}/request-fresh-code`, { method: 'POST' }).catch(() => {});
+      enterManualEnrol();
+      return;
+    }
+
+    const url = new URL(`${BASE}/auth/desktop-verify`);
+    url.searchParams.set('email', email);
+
+    let openFailed = false;
+    try {
+      await openUrl(url.toString());
+    } catch (err) {
+      console.warn('[reauth] openUrl failed:', err);
+      openFailed = true;
+    }
+
+    setReauth({ token, email, url: url.toString(), openFailed });
+    setMode("reauth_wait");
+  }
+
+  // Enter the manual enrolment-code screen. Resets the completion guard so
+  // a fresh enrolment isn't blocked by a previous one in the same session.
+  function enterManualEnrol() {
+    enrolCompletedRef.current = false;
+    setMode("enrol");
+  }
+
+  // Phase 3 — idle-screen "Sign back in" for an enrolled recipient whose
+  // session expired. Native passkey assertion (fast path for iCloud/Hello);
+  // on success we open any pending file. Cross-vault passkeys can't sign in
+  // natively AND there's no access token on the bare idle screen to drive the
+  // browser reauth-status poll, so we return a clear message pointing them to
+  // their email link (which does have the token → full Phase 2 browser reauth).
+  async function handleIdleSignIn(): Promise<{ ok: boolean; message?: string }> {
+    const s = getRecipientSession();
+    if (!s?.email) return { ok: false, message: "No enrolled identity on this device." };
+    try {
+      await authenticatePasskey({ email: s.email }); // saves the session on success
+    } catch {
+      return {
+        ok: false,
+        message: "We couldn't sign you in on this device. Open your file link from your email to finish.",
+      };
+    }
+    recordBiometric();
+    // Open a pending file if the recipient has one; otherwise stay on idle
+    // (the card re-renders as an active session).
+    const token = getActiveSessionToken();
+    if (token) {
+      try {
+        const r = await fetch(`${BASE}/api/v1/recipient/pending-opens`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = r.ok ? await r.json() : null;
+        const first = data?.pending?.[0] as { access_token: string } | undefined;
+        if (first?.access_token) {
+          openLinkRef.current?.({
+            token: first.access_token, sig: null, env: null, present: false, coview: null, rt: null,
+          });
+        }
+      } catch { /* best-effort — signed in either way */ }
+    }
+    return { ok: true };
+  }
+
   // Update the ref every render so deferred callbacks call the
   // latest openLink (with current appLocked / lastBiometricAt).
   openLinkRef.current = openLink;
@@ -615,6 +738,10 @@ function AppContent() {
   // closure staleness in the once-only deep-link useEffect doesn't
   // matter.
   function completeEnrolment() {
+    // Dedup — the aspisfile:// deep link and the enrol-status poll can
+    // both report completion; only the first should replay the link.
+    if (enrolCompletedRef.current) return;
+    enrolCompletedRef.current = true;
     const replay = pendingLinkRef.current;
     pendingLinkRef.current = null;
     debugLog('coview', 'completeEnrolment', {
@@ -816,6 +943,33 @@ function AppContent() {
     );
   }
 
+  if (mode === "reauth_wait" && reauth) {
+    return (
+      <ReauthWaitingScreen
+        token={reauth.token}
+        email={reauth.email}
+        verifyUrl={reauth.url}
+        openFailed={reauth.openFailed}
+        onComplete={completeEnrolment}
+        onCancel={() => { pendingLinkRef.current = null; setReauth(null); setMode("idle"); }}
+      />
+    );
+  }
+
+  if (mode === "enrol_wait" && enrolWait) {
+    return (
+      <EnrolmentWaitingScreen
+        rt={enrolWait.rt}
+        email={enrolWait.email}
+        enrolUrl={enrolWait.url}
+        openFailed={enrolWait.openFailed}
+        startError={enrolWait.startError}
+        onComplete={completeEnrolment}
+        onCancel={() => { pendingLinkRef.current = null; setEnrolWait(null); setMode("idle"); }}
+      />
+    );
+  }
+
   if (mode === "enrol") {
     return (
       <EnrolmentScreen
@@ -836,7 +990,8 @@ function AppContent() {
   return (
     <IdleScreen
       onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
-      onEnrol={() => setMode("enrol")}
+      onEnrol={enterManualEnrol}
+      onSignIn={handleIdleSignIn}
     />
   );
 }
