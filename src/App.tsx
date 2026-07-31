@@ -622,7 +622,7 @@ function AppContent() {
     } catch {
       return {
         ok: false,
-        message: "We couldn't sign you in on this device. Open your file link from your email to finish.",
+        message: "This device can't sign you in from here. Open a file from your email or the web Inbox — it'll sign you in as it opens.",
       };
     }
     recordBiometric();
