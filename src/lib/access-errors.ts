@@ -27,6 +27,10 @@ const MAP: Record<string, { title: string; body: string }> = {
 
   // Wrong recipient
   'RECIPIENT_MISMATCH':             { title: 'Different email',     body: 'This file was shared with a different email address. Sign in with the email the sender used (check the original email).' },
+  // This device's own enrolment is stale (passkey revoked/removed) — the viewer
+  // self-heals by clearing + re-enrolling, so this fallback text only shows on
+  // builds that don't yet self-heal.
+  'ENROLMENT_INVALID':              { title: 'Set up again',        body: 'Your access on this device needs to be set up again. Reopen the file to continue.' },
 
   // Auth / binding
   'BINDING_REQUIRED':               { title: 'Session timed out',   body: 'Sign in again with Touch ID to continue.' },

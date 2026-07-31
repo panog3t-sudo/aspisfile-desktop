@@ -13,7 +13,7 @@ import { EnrolmentWaitingScreen } from "./components/EnrolmentWaitingScreen";
 import { ReauthWaitingScreen } from "./components/ReauthWaitingScreen";
 import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContext";
 import { supabase } from "./lib/supabase";
-import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, saveRecipientSession } from "./lib/recipient-session";
+import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, clearSessionTokenOnly, saveRecipientSession } from "./lib/recipient-session";
 import { WrongAccountScreen } from "./components/WrongAccountScreen";
 import { authenticatePasskey } from "./lib/passkey";
 import { toggleAfsRender } from "./lib/afs-render";
@@ -280,6 +280,8 @@ function AppContent() {
   // deep link and the enrol-status poll can both report success; only the
   // first should replay the buffered file link.
   const enrolCompletedRef = useRef(false);
+  // Loop guard for the stale-session self-heal (handleSessionInvalid).
+  const sessionHealRef = useRef<{ token: string; count: number }>({ token: "", count: 0 });
   // Cold-start: counts per-file-biometric mutex retries so a deep link isn't
   // dropped while the LockScreen's unlock biometric is still settling.
   const bioRetryRef = useRef(0);
@@ -608,6 +610,32 @@ function AppContent() {
     setMode("enrol");
   }
 
+  // Self-heal for a stale session (2026-07-31). The server rejected our session
+  // because THIS device's enrolment is gone — the passkey behind it was revoked
+  // or removed (ENROLMENT_INVALID), or the token is no longer valid. Instead of
+  // dead-ending on an error, drop the dead session and replay the open, which
+  // routes to fresh enrolment (no session → registration-token → rt). Bounded so
+  // a persistent rejection can't loop. NOTE: genuine wrong-account
+  // (RECIPIENT_MISMATCH) never reaches here — it stays on the WrongAccount path.
+  function handleSessionInvalid() {
+    const params = viewerParams;
+    if (!params) { setMode("idle"); return; }
+    const same  = sessionHealRef.current.token === params.token;
+    const count = (same ? sessionHealRef.current.count : 0) + 1;
+    sessionHealRef.current = { token: params.token, count };
+    setViewerParams(null);
+    setMode("idle");
+    if (count > 1) {
+      // Already re-enrolled once for this file and it STILL failed — stop, don't
+      // loop. Full clear so the next manual open starts clean.
+      clearAllRecipientState();
+      return;
+    }
+    // Keep the bound email so re-enrol stays the same recipient; drop the session.
+    clearSessionTokenOnly();
+    openLinkRef.current?.(params);
+  }
+
   // Phase 3 — idle-screen "Sign back in" for an enrolled recipient whose
   // session expired. Native passkey assertion (fast path for iCloud/Hello);
   // on success we open any pending file. Cross-vault passkeys can't sign in
@@ -912,6 +940,7 @@ function AppContent() {
           onClose={() => { setMode("idle"); setViewerParams(null); }}
           present={viewerParams.present}
           coviewSessionId={viewerParams.coview}
+          onSessionInvalid={handleSessionInvalid}
         />
         {/* Phase 1 Day 9 — setup modal blocks the viewer until the
             recipient picks a lock mechanism (or skips). Mounts only

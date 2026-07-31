@@ -98,9 +98,13 @@ type Props = {
   onClose: () => void;
   present?: boolean;                  // deep link wants presenter modal
   coviewSessionId?: string | null;    // deep link wants auto-join
+  // The server rejected our session because THIS device's enrolment is stale
+  // (passkey revoked/removed) — App clears the dead session and re-enrols
+  // instead of showing a dead-end error. Recipient (non-present) tokens only.
+  onSessionInvalid?: () => void;
 };
 
-export function SecureViewer({ token, sig, env, onClose, present, coviewSessionId }: Props) {
+export function SecureViewer({ token, sig, env, onClose, present, coviewSessionId, onSessionInvalid }: Props) {
   const [file, setFile]               = useState<FileInfo | null>(null);
   const [recipient, setRecipient]     = useState<RecipientInfo | null>(null);
   const [sessionId, setSessionId]     = useState<string | null>(null);
@@ -622,6 +626,18 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        // Self-heal (2026-07-31): if the server says this device's enrolment is
+        // stale — the passkey behind our session was revoked/removed
+        // (ENROLMENT_INVALID) or the session token is no longer valid
+        // (INVALID_SESSION_TOKEN) — don't dead-end on an error screen. Hand back
+        // to App to clear the stale session and re-enrol. Recipient tokens only:
+        // owner/present tokens skip binding, and RECIPIENT_MISMATCH (a genuine
+        // wrong account) deliberately stays on the error/switch path.
+        const code = body.error;
+        if (!present && onSessionInvalid && (code === 'ENROLMENT_INVALID' || code === 'INVALID_SESSION_TOKEN')) {
+          onSessionInvalid();
+          return;
+        }
         // Translate the raw server code into a friendly title + body
         // here so RevokedScreen just renders the pre-built shape.
         setError(translateAccessError(body.error || `Session start failed (${res.status})`));
