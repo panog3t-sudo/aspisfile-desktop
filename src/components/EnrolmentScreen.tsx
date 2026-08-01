@@ -43,7 +43,6 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
   // — the original code is single-use and already consumed by the
   // time we know the bridge failed.
   const [pendingRt, setPendingRt] = useState<string | null>(null);
-  const [bridgeErrorDetail, setBridgeErrorDetail] = useState("");
   // True once we have waited long enough that the protocol handoff is very
   // unlikely to arrive — flips the waiting copy from "hang tight" to
   // actionable rather than spinning forever.
@@ -82,7 +81,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
           // Registration token expired — stop; retrying a dead token forever
           // is exactly the failure this exists to remove.
           if (!cancelled) {
-            setError("That took too long. Tap \u201cUse a different code\u201d to start again.");
+            setError("That took too long. Enter your email and a new code to start again.");
             setPhase("input");
           }
           return;
@@ -181,7 +180,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
       return;
     }
     if (cleanCode.length < 4) {
-      setError("Enter the enrolment code.");
+      setError("Enter the enrollment code.");
       return;
     }
 
@@ -241,8 +240,8 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
       const detail = err instanceof PasskeyError
         ? `${err.kind}: ${err.message}`
         : String(err?.message ?? err ?? "unknown error");
-      console.error("[enrolment] native bridge failed:", err);
-      setBridgeErrorDetail(detail);
+      // Log for support; the recipient sees only the friendly fallback copy.
+      console.error("[enrolment] native bridge failed:", detail);
       setPhase("bridge_failed");
       return;
     }
@@ -286,7 +285,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
         {phase === "input" && (
           <>
             <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
-              I have an enrolment code
+              I have an enrollment code
             </h1>
             <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 24px" }}>
               Enter your email and the code the sender shared with you. We&apos;ll ask for Touch ID to finish setup.
@@ -305,7 +304,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               autoFocus
             />
 
-            <Label>Enrolment code</Label>
+            <Label>Enrollment code</Label>
             <input
               type="text"
               value={code}
@@ -348,7 +347,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
               Confirm with Touch ID
             </h2>
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
-              Approve the system prompt to finish enrolment.
+              Approve the system prompt to finish enrollment.
             </p>
           </div>
         )}
@@ -358,19 +357,11 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
             <h2 style={{ fontSize: 17, fontWeight: 600, color: "#F1F5F9", margin: "0 0 8px" }}>
               In-window Touch ID didn&apos;t work
             </h2>
-            <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 14px" }}>
+            <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 18px" }}>
               We&apos;ll finish in your browser instead — your code is still valid.
             </p>
-            <pre style={{
-              fontSize: 11, color: "#FCA5A5",
-              background: "rgba(255,255,255,0.04)",
-              padding: 10, borderRadius: 6,
-              border: "0.5px solid rgba(255,255,255,0.10)",
-              overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
-              margin: "0 0 18px",
-            }}>{bridgeErrorDetail || "(no detail)"}</pre>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={handleRestart} style={btnSecondary}>Try a different code</button>
+              <button onClick={handleRestart} style={btnSecondary}>Use a different code</button>
               <button
                 onClick={async () => {
                   if (pendingRt) {
@@ -404,7 +395,7 @@ export function EnrolmentScreen({ onComplete, onCancel }: Props) {
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
               {handoffSlow
                 ? "Still waiting. If you\u2019ve already confirmed in the browser, this will finish on its own in a few seconds \u2014 we\u2019re checking with the server directly. Your browser may also be asking permission to reopen AspisFile; allow it if so."
-                : <>We&apos;ve opened a secure enrolment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key &mdash; AspisFile will take over automatically when you&apos;re done.</>}
+                : <>We&apos;ve opened a secure enrollment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key &mdash; AspisFile will take over automatically when you&apos;re done.</>}
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
               <button onClick={handleRestart} style={btnSecondary}>Use a different code</button>

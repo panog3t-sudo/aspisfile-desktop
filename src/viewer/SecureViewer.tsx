@@ -28,7 +28,7 @@ import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
 import { FeedbackMenu, type Decision, type DraftComment, type DraftMarkup, type DraftSignature } from "./FeedbackMenu";
 import { SignaturePad, type SignatureData } from "./SignaturePad";
-import { downloadAfsLink, DownloadError } from "../lib/download";
+import { downloadAfsLink, DownloadError, friendlyDownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
 import { PresenterToolbar }           from "../coviewing/PresenterToolbar";
@@ -552,7 +552,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const err = e instanceof DownloadError ? e : new DownloadError('UNKNOWN', String(e));
       setDownloadState('available');
       if (err.code === 'USER_CANCELLED') { /* silent — user closed dialog */ }
-      else                                 setDownloadError(err.message);
+      else                                 setDownloadError(friendlyDownloadError(err.code));
     }
   }
 

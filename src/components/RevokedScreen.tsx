@@ -20,9 +20,9 @@ type Props = {
 function endedCopy(reason?: string): { title: string; body: string } {
   switch (reason) {
     case "file_revoked":
-      return { title: "File revoked", body: "The sender just revoked this file. Close to exit." };
+      return { title: "File revoked", body: "The sender just revoked this file. You can close this window." };
     case "recipient_revoked":
-      return { title: "Access revoked", body: "The sender just revoked your access to this file. Close to exit." };
+      return { title: "Access revoked", body: "The sender just revoked your access to this file. You can close this window." };
     case "session_ended":
       return { title: "Session ended", body: "This viewing session ended. Open the file again to continue." };
     case "expired":

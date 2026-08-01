@@ -57,7 +57,7 @@ export function WrongAccountScreen({ fileRecipient, boundEmail, onSwitch, onCanc
 
         <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
           Switching signs this viewer out of {boundEmail} and asks you to sign in as{" "}
-          {fileRecipient} (Touch ID / your enrolment).
+          {fileRecipient} (Touch ID / your enrollment).
         </p>
       </div>
     </div>

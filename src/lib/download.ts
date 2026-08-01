@@ -103,6 +103,26 @@ export class DownloadError extends Error {
   }
 }
 
+// Plain, recipient-facing sentence for each failure code. DownloadError.message
+// keeps the technical detail (HTTP status) for logs; the viewer banner shows
+// this instead of "Download initiation failed (403)".
+export function friendlyDownloadError(code: DownloadErrorCode): string {
+  switch (code) {
+    case 'DOWNLOAD_DISABLED':
+    case 'DOWNLOAD_DISABLED_FOR_RECIPIENT': return 'The sender turned off downloads for this file.';
+    case 'RECIPIENT_REVOKED':               return 'Your access to this file was revoked.';
+    case 'FILE_NOT_AVAILABLE':              return 'This file is no longer available to download.';
+    case 'ALREADY_DOWNLOADED':              return 'This file has already been downloaded.';
+    case 'DOWNLOAD_IN_PROGRESS':            return 'A download is already in progress.';
+    case 'NETWORK_FAILED':                  return 'Download interrupted. Check your connection and try again.';
+    case 'WRITE_FAILED':                    return "Couldn't save the file. Check you can write to that folder and try again.";
+    case 'CONFIRM_FAILED':                  return "The download didn't finish. Try again.";
+    case 'FORBIDDEN':                       return "You don't have permission to download this file.";
+    case 'INVALID_TOKEN':                   return 'Your session expired. Reopen the file from your email and try again.';
+    default:                                return 'Something went wrong downloading the file. Try again, or contact the sender.';
+  }
+}
+
 type InitiateResponse = {
   download_url:    string;
   file_name:       string;
