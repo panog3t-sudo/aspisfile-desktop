@@ -27,9 +27,13 @@ type Props = {
   startError?: string | null;   // setup couldn't start at all (e.g. couldn't resolve the recipient)
   onComplete:  () => void;      // a session was saved; caller replays the pending file link
   onCancel:    () => void;      // recipient backed out
+  onEnterCode?: () => void;     // last-resort: open the manual setup-code screen. Only
+                                // surfaced once automatic setup has FAILED (expired /
+                                // couldn't start), so the code is a fallback, not a
+                                // co-equal first option.
 };
 
-export function EnrolmentWaitingScreen({ rt, email, enrolUrl, openFailed, startError, onComplete, onCancel }: Props) {
+export function EnrolmentWaitingScreen({ rt, email, enrolUrl, openFailed, startError, onComplete, onCancel, onEnterCode }: Props) {
   const [slow, setSlow]       = useState(false);
   const [expired, setExpired] = useState(false);
 
@@ -151,6 +155,12 @@ export function EnrolmentWaitingScreen({ rt, email, enrolUrl, openFailed, startE
           <button onClick={onCancel} style={btnSecondary}>
             {mode === "waiting" || mode === "open_failed" ? "Cancel" : "Back"}
           </button>
+          {/* Last-resort manual path — only when automatic setup has failed. */}
+          {(mode === "expired" || mode === "start_failed") && onEnterCode && (
+            <button onClick={onEnterCode} style={btnSecondary}>
+              I have an enrollment code
+            </button>
+          )}
         </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

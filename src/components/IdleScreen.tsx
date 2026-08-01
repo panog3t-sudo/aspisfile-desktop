@@ -172,18 +172,22 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
         </div>
       ) : (
         onEnrol && (
+          // Last-resort fallback — a quiet link, not a prominent button. The
+          // primary path is to open the file link (which enrols automatically);
+          // this is here for the recipient who was emailed a setup code. Same
+          // label as the code email's "tap 'I have an enrollment code'".
           <button
             onClick={onEnrol}
             style={{
-              marginTop: 18,
+              marginTop: 16,
               background: "transparent",
-              border: "0.5px solid rgba(255,255,255,0.18)",
-              color: "#94A3B8",
-              padding: "8px 16px",
-              borderRadius: 6,
-              fontSize: 12,
+              border: "none",
+              color: "#64748B",
+              padding: "6px 8px",
+              fontSize: 11,
               cursor: "pointer",
               fontFamily: "inherit",
+              textDecoration: "underline",
             }}
           >
             I have an enrollment code

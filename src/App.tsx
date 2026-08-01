@@ -995,6 +995,7 @@ function AppContent() {
         startError={enrolWait.startError}
         onComplete={completeEnrolment}
         onCancel={() => { pendingLinkRef.current = null; setEnrolWait(null); setMode("idle"); }}
+        onEnterCode={enterManualEnrol}
       />
     );
   }
