@@ -255,6 +255,9 @@ function AppContent() {
   // Set when a deep-link's file recipient doesn't match the viewer's bound
   // identity — drives the WrongAccountScreen (deliberate switch, never silent).
   const [wrongAccount, setWrongAccount] = useState<{ fileRecipient: string; boundEmail: string; params: ViewerParams } | null>(null);
+  // Pre-fills the enrolment-code screen's email field (set from a CODE_REQUIRED
+  // response on a "Verified first open" file) so it can't be mistyped.
+  const [enrolPrefill, setEnrolPrefill] = useState<string | null>(null);
   // Drives EnrolmentWaitingScreen — the visible, self-completing state for
   // the rt auto-enrolment path (replaces sitting on a blank IdleScreen).
   const [enrolWait, setEnrolWait] = useState<
@@ -397,9 +400,26 @@ function AppContent() {
       //     drop them into EnrolmentScreen with the email pre-filled
       //     so they can enter the code without typing the email.
       fetch(`${BASE}/api/v1/access/${params.token}/registration-token`)
-        .then(r => r.ok ? r.json() : null)
-        .then(async (j: { registration_token?: string } | null) => {
-          const rt = j?.registration_token;
+        .then(async (r) => {
+          // "Verified first open" flagged file — the server refuses to mint a
+          // codeless registration token (CODE_REQUIRED, 403). The recipient's
+          // mailbox code is their proof of control, so route straight to the
+          // enrolment-code screen with the email pre-filled instead of falling
+          // through to the passkey-signin / browser-reauth recovery (which
+          // dead-ends for a first-time recipient who has no passkey yet).
+          if (r.status === 403) {
+            const body = await r.json().catch(() => null);
+            if (body?.error === 'CODE_REQUIRED') {
+              enterManualEnrol(body.recipient_email ?? undefined);
+              return { handled: true, rt: undefined };
+            }
+          }
+          const j = r.ok ? await r.json() : null;
+          return { handled: false, rt: (j as { registration_token?: string } | null)?.registration_token };
+        })
+        .then(async (res: { handled: boolean; rt?: string }) => {
+          if (res.handled) return;
+          const rt = res.rt;
           if (rt) {
             beginAutoEnrolment(params.token, rt);
             return;
@@ -605,8 +625,11 @@ function AppContent() {
 
   // Enter the manual enrolment-code screen. Resets the completion guard so
   // a fresh enrolment isn't blocked by a previous one in the same session.
-  function enterManualEnrol() {
+  // An optional prefillEmail (from a CODE_REQUIRED response) pre-fills the
+  // email field so the recipient can't fat-finger a mismatching address.
+  function enterManualEnrol(prefillEmail?: string) {
     enrolCompletedRef.current = false;
+    setEnrolPrefill(typeof prefillEmail === "string" ? prefillEmail : null);
     setMode("enrol");
   }
 
@@ -1003,6 +1026,9 @@ function AppContent() {
   if (mode === "enrol") {
     return (
       <EnrolmentScreen
+        // Pre-fill the email when we arrived here from a CODE_REQUIRED file so
+        // the recipient can't enter an address that won't match the code.
+        initialEmail={enrolPrefill ?? undefined}
         // Path B: onComplete is only fired if a future inline-enrolment
         // implementation triggers it. With the browser-redirect path
         // currently active, the aspisfile://enrol-complete deep-link
@@ -1020,7 +1046,7 @@ function AppContent() {
   return (
     <IdleScreen
       onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
-      onEnrol={enterManualEnrol}
+      onEnrol={() => enterManualEnrol()}
       onSignIn={handleIdleSignIn}
     />
   );

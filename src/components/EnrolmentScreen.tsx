@@ -29,13 +29,16 @@ const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://a
 type Phase = "input" | "running" | "waiting_browser" | "bridge_failed";
 
 type Props = {
-  onComplete?: () => void;
-  onCancel?:   () => void;
+  onComplete?:  () => void;
+  onCancel?:    () => void;
+  // Pre-fills the email field — passed when the viewer routed here from a
+  // CODE_REQUIRED ("Verified first open") file so the address can't be mistyped.
+  initialEmail?: string;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel }: Props) {
+export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
   const [phase, setPhase] = useState<Phase>("input");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail ?? "");
   const [code,  setCode]  = useState("");
   const [error, setError] = useState("");
   // Stash the registration token after a successful redeem so that
