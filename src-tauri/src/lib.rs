@@ -73,7 +73,27 @@ fn build_minimal_menu<R: tauri::Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // The single-instance plugin MUST be registered first, and is desktop-only.
+    // Without it, on Windows/Linux every aspisfile:// deep link launches a NEW
+    // app instance — stacking viewer windows and, critically, losing the
+    // in-memory enrolment state (enrolWait) the WS5 setup-code handoff relies on
+    // (the recipient landed on a code screen with no gate + no "Email me a code").
+    // The "deep-link" feature routes the OS-forwarded URL to the RUNNING
+    // instance's onOpenUrl handler automatically; here we just surface the window.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
