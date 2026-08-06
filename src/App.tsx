@@ -145,6 +145,25 @@ async function bringWindowToFront(): Promise<void> {
 // true so the caller can dismiss EnrolmentScreen and replay any
 // pending share-link. Returns false for any other URL shape so
 // the caller falls through to OAuth / access-token handling.
+// WS5 handoff — the browser enrolment page (/enroll/desktop), after a
+// confirmed failure (a retry ALSO failed), fires aspisfile://setup-code?email=…
+// so a stuck recipient can finish in-app with an emailed code + native Touch ID
+// instead of fighting a broken browser. It carries ONLY the email; the access
+// token stays in the viewer (enrolWaitRef) and never travels over the URL.
+function tryParseSetupCodeHandoff(url: string): { email: string | null } | null {
+  try {
+    const u = new URL(url);
+    const isHandoff =
+      u.host === 'setup-code' ||
+      u.pathname === '/setup-code' ||
+      u.pathname.endsWith('/setup-code');
+    if (u.protocol !== 'aspisfile:' || !isHandoff) return null;
+    return { email: u.searchParams.get('email') };
+  } catch {
+    return null;
+  }
+}
+
 function tryHandleEnrolComplete(url: string): { email: string } | null {
   try {
     const u = new URL(url);
@@ -258,11 +277,20 @@ function AppContent() {
   // Pre-fills the enrolment-code screen's email field (set from a CODE_REQUIRED
   // response on a "Verified first open" file) so it can't be mistyped.
   const [enrolPrefill, setEnrolPrefill] = useState<string | null>(null);
+  // Access token for the file that routed us to the manual code screen, so the
+  // screen's "Email me a code" action can call request-fresh-code. Null when the
+  // screen is reached from idle (no file context) — the resend button is hidden.
+  const [enrolToken, setEnrolToken] = useState<string | null>(null);
   // Drives EnrolmentWaitingScreen — the visible, self-completing state for
   // the rt auto-enrolment path (replaces sitting on a blank IdleScreen).
   const [enrolWait, setEnrolWait] = useState<
-    { rt: string; email: string | null; url: string | null; openFailed: boolean; startError: string | null } | null
+    { rt: string; token: string; email: string | null; url: string | null; openFailed: boolean; startError: string | null } | null
   >(null);
+  // Mirror of enrolWait for the deep-link dispatch closures (set up once at
+  // mount) — lets the WS5 setup-code handoff read the CURRENT access token +
+  // email without the token ever travelling over the aspisfile:// URL.
+  const enrolWaitRef = useRef(enrolWait);
+  useEffect(() => { enrolWaitRef.current = enrolWait; }, [enrolWait]);
   // Drives ReauthWaitingScreen — the visible, self-completing cross-vault
   // re-auth path (session expired + passkey not usable by the native bridge).
   const [reauth, setReauth] = useState<
@@ -410,7 +438,7 @@ function AppContent() {
           if (r.status === 403) {
             const body = await r.json().catch(() => null);
             if (body?.error === 'CODE_REQUIRED') {
-              enterManualEnrol(body.recipient_email ?? undefined);
+              enterManualEnrol(body.recipient_email ?? undefined, params.token);
               return { handled: true, rt: undefined };
             }
           }
@@ -449,7 +477,7 @@ function AppContent() {
           // back to the code path if it can't resolve the recipient.
           beginBrowserReauth(params.token);
         })
-        .catch(() => enterManualEnrol());
+        .catch(() => enterManualEnrol(undefined, params.token));
       return;
     }
     // Per-file biometric gate (2026-05-30): every file open requires a
@@ -560,7 +588,7 @@ function AppContent() {
       // Can't build the enrol URL without the recipient email. Show a
       // clear, actionable screen instead of silently sitting on idle.
       setEnrolWait({
-        rt, email: null, url: null, openFailed: false,
+        rt, token, email: null, url: null, openFailed: false,
         startError: "We couldn't start secure setup. Reopen the file link from your email to try again.",
       });
       setMode("enrol_wait");
@@ -579,7 +607,7 @@ function AppContent() {
       openFailed = true;
     }
 
-    setEnrolWait({ rt, email, url: url.toString(), openFailed, startError: null });
+    setEnrolWait({ rt, token, email, url: url.toString(), openFailed, startError: null });
     setMode("enrol_wait");
   }
 
@@ -604,7 +632,7 @@ function AppContent() {
       // Can't resolve the recipient — fall back to the code path, which is
       // still actionable (and itself ends in a browser assertion).
       fetch(`${BASE}/api/v1/access/${token}/request-fresh-code`, { method: 'POST' }).catch(() => {});
-      enterManualEnrol();
+      enterManualEnrol(undefined, token);
       return;
     }
 
@@ -627,9 +655,10 @@ function AppContent() {
   // a fresh enrolment isn't blocked by a previous one in the same session.
   // An optional prefillEmail (from a CODE_REQUIRED response) pre-fills the
   // email field so the recipient can't fat-finger a mismatching address.
-  function enterManualEnrol(prefillEmail?: string) {
+  function enterManualEnrol(prefillEmail?: string, token?: string) {
     enrolCompletedRef.current = false;
     setEnrolPrefill(typeof prefillEmail === "string" ? prefillEmail : null);
+    setEnrolToken(typeof token === "string" ? token : null);
     setMode("enrol");
   }
 
@@ -866,6 +895,7 @@ function AppContent() {
         // a fresh session token. Save + complete enrolment + replay
         // any buffered share-link.
         if (tryHandleEnrolComplete(urls[0])) { debugLog('coview', 'getCurrent: matched enrol-complete'); completeEnrolment(); return; }
+        { const sc = tryParseSetupCodeHandoff(urls[0]); if (sc) { debugLog('coview', 'getCurrent: matched setup-code'); const ew = enrolWaitRef.current; enterManualEnrol(sc.email ?? ew?.email ?? undefined, ew?.token); return; } }
         if (await tryHandleOAuthCallback(urls[0])) return;
         const params = extractFromUrl(urls[0]);
         if (params) { debugLog('coview', 'getCurrent → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLinkRef.current?.(params); }
@@ -884,6 +914,7 @@ function AppContent() {
       if (cancelled || urls.length === 0) return;
       await bringWindowToFront();
       if (tryHandleEnrolComplete(urls[0])) { debugLog('coview', 'onOpenUrl: matched enrol-complete'); completeEnrolment(); return; }
+      { const sc = tryParseSetupCodeHandoff(urls[0]); if (sc) { debugLog('coview', 'onOpenUrl: matched setup-code'); const ew = enrolWaitRef.current; enterManualEnrol(sc.email ?? ew?.email ?? undefined, ew?.token); return; } }
       if (await tryHandleOAuthCallback(urls[0])) return;
       const params = extractFromUrl(urls[0]);
       if (params) { debugLog('coview', 'onOpenUrl → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLinkRef.current?.(params); }
@@ -1018,7 +1049,7 @@ function AppContent() {
         startError={enrolWait.startError}
         onComplete={completeEnrolment}
         onCancel={() => { pendingLinkRef.current = null; setEnrolWait(null); setMode("idle"); }}
-        onEnterCode={enterManualEnrol}
+        onEnterCode={() => enterManualEnrol(enrolWait.email ?? undefined, enrolWait.token)}
       />
     );
   }
@@ -1026,9 +1057,11 @@ function AppContent() {
   if (mode === "enrol") {
     return (
       <EnrolmentScreen
-        // Pre-fill the email when we arrived here from a CODE_REQUIRED file so
-        // the recipient can't enter an address that won't match the code.
+        // Pre-fill the email when we arrived here from a file (CODE_REQUIRED, or
+        // the browser-enrolment fallback) so the recipient can't enter an address
+        // that won't match the code; the token powers the "Email me a code" action.
         initialEmail={enrolPrefill ?? undefined}
+        token={enrolToken ?? undefined}
         // Path B: onComplete is only fired if a future inline-enrolment
         // implementation triggers it. With the browser-redirect path
         // currently active, the aspisfile://enrol-complete deep-link

@@ -97,7 +97,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
                       (still routes to EnrolmentScreen, which lets the
                       user enrol an additional code if a sender issues
                       one to a different address on the same device).
-          Unenrolled → the original "I have an enrollment code" button. */}
+          Unenrolled → the original "I have a setup code" button. */}
       {session ? (
         <div
           style={{
@@ -166,7 +166,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
                 textDecoration: "underline",
               }}
             >
-              Use a different enrollment code
+              Use a different setup code
             </button>
           )}
         </div>
@@ -175,7 +175,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
           // Last-resort fallback — a quiet link, not a prominent button. The
           // primary path is to open the file link (which enrols automatically);
           // this is here for the recipient who was emailed a setup code. Same
-          // label as the code email's "tap 'I have an enrollment code'".
+          // label as the code email's "tap 'I have a setup code'".
           <button
             onClick={onEnrol}
             style={{
@@ -190,7 +190,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
               textDecoration: "underline",
             }}
           >
-            I have an enrollment code
+            I have a setup code
           </button>
         )
       )}

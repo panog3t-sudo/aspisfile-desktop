@@ -155,10 +155,14 @@ export function EnrolmentWaitingScreen({ rt, email, enrolUrl, openFailed, startE
           <button onClick={onCancel} style={btnSecondary}>
             {mode === "waiting" || mode === "open_failed" ? "Cancel" : "Back"}
           </button>
-          {/* Last-resort manual path — only when automatic setup has failed. */}
-          {(mode === "expired" || mode === "start_failed") && onEnterCode && (
+          {/* Last-resort manual path — only on a CONFIRMED/certain failure
+              (link expired, setup couldn't start, or the browser wouldn't
+              open), never while setup is still in progress. Leads to the
+              enrolment-code screen, which finishes with native Touch ID and
+              needs no browser. */}
+          {(mode === "expired" || mode === "start_failed" || mode === "open_failed") && onEnterCode && (
             <button onClick={onEnterCode} style={btnSecondary}>
-              I have an enrollment code
+              I have a setup code
             </button>
           )}
         </div>

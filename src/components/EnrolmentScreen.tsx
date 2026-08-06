@@ -31,16 +31,34 @@ type Phase = "input" | "running" | "waiting_browser" | "bridge_failed";
 type Props = {
   onComplete?:  () => void;
   onCancel?:    () => void;
-  // Pre-fills the email field — passed when the viewer routed here from a
-  // CODE_REQUIRED ("Verified first open") file so the address can't be mistyped.
+  // Pre-fills + LOCKS the email field — passed when the viewer routed here from
+  // a file (CODE_REQUIRED, or the browser-enrolment fallback) so the address
+  // can't be mistyped. Absent for the idle "I have a code" path (editable).
   initialEmail?: string;
+  // Access token for the file, if we came from one. Enables the "Email me a
+  // code" self-service action (request-fresh-code). Absent from the idle path.
+  token?: string;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
+export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: Props) {
+  // Locked when we know the recipient from the file — the code is bound to this
+  // exact address, so editing it could only ever produce a mismatch.
+  const emailLocked = !!initialEmail;
   const [phase, setPhase] = useState<Phase>("input");
   const [email, setEmail] = useState(initialEmail ?? "");
   const [code,  setCode]  = useState("");
   const [error, setError] = useState("");
+  // "Email me a code" (request-fresh-code) state + a 60s cooldown so a stuck
+  // recipient can self-serve a code without hammering the endpoint.
+  const [resendState,   setResendState]   = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [resendMsg,     setResendMsg]     = useState("");
+  const [cooldown,      setCooldown]      = useState(0);
+  const [showWrongAddr, setShowWrongAddr] = useState(false);
+  // Gate: "Do you have a setup code?" — null = ask; non-null = show the entry
+  // form. Only asked when we can actually send one (token present); the idle
+  // path (a recipient who already has a code from their email) skips straight
+  // to entry so a code-holder isn't slowed by an extra question.
+  const [hasCode, setHasCode] = useState<boolean | null>(token ? null : true);
   // Stash the registration token after a successful redeem so that
   // a bridge failure can fall back to the browser using the SAME rt
   // — the original code is single-use and already consumed by the
@@ -118,6 +136,54 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
     };
   }, [phase, pendingRt, onComplete]);
 
+  // Cooldown ticker for the "Email me a code" button.
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const id = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(id);
+  }, [cooldown]);
+
+  // Self-service: email a fresh one-time code to the file's BOUND recipient.
+  // request-fresh-code always sends to the token's recipient_email (never an
+  // address typed here), so this can't be used to redirect a code to a
+  // forwarder — it only ever helps the real invitee.
+  async function handleResend() {
+    if (!token || resendState === "sending" || cooldown > 0) return;
+    setResendState("sending");
+    setError("");
+    try {
+      const res = await fetch(`${BASE}/api/v1/access/${token}/request-fresh-code`, { method: "POST" });
+      if (res.ok) {
+        setResendState("sent");
+        setResendMsg(
+          email.trim()
+            ? `Sent to ${email.trim().toLowerCase()} — check your inbox (and spam).`
+            : "Sent — check your inbox (and spam).",
+        );
+        setCooldown(60);
+      } else if (res.status === 429) {
+        setResendState("error");
+        setResendMsg("You've asked for a few codes already. Check your inbox, or wait a minute and try again.");
+        setCooldown(60);
+      } else {
+        setResendState("error");
+        setResendMsg("Couldn't send a code right now. Please try again in a moment.");
+      }
+    } catch {
+      setResendState("error");
+      setResendMsg("Network error — check your connection and try again.");
+    }
+  }
+
+  // "No — email me a code": send one, then drop straight onto the entry form
+  // (the "✓ Sent" banner shows there) so the recipient never faces an empty
+  // code field with no way to get a code.
+  async function handleNoCode() {
+    if (resendState === "sending") return;
+    await handleResend();
+    setHasCode(true);
+  }
+
   async function openBrowserWith(params: Record<string, string>) {
     const url = new URL(`${BASE}/enroll/desktop`);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -183,7 +249,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
       return;
     }
     if (cleanCode.length < 4) {
-      setError("Enter the enrollment code.");
+      setError("Enter the setup code.");
       return;
     }
 
@@ -285,29 +351,102 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
       >
         <div style={{ fontSize: 22, marginBottom: 8 }}>🔒</div>
 
-        {phase === "input" && (
+        {/* Gate — "Do you have a setup code?" Only shown with a token (file
+            context); the idle path skips straight to entry. */}
+        {phase === "input" && hasCode === null && (
           <>
             <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
-              I have an enrollment code
+              Do you have a setup code?
             </h1>
-            <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 24px" }}>
-              Enter your email and the code the sender shared with you. We&apos;ll ask for Touch ID to finish setup.
+            <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 16px" }}>
+              To finish setting up on this Mac you&apos;ll enter a one-time code that we email to you.
             </p>
 
-            <Label>Email</Label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => { setEmail(e.target.value.toLowerCase()); setError(""); }}
-              placeholder="you@example.com"
-              style={inputStyle}
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              autoFocus
-            />
+            {emailLocked && (
+              <>
+                <div style={lockedEmailRow}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</span>
+                  <span aria-hidden style={{ fontSize: 12, color: "#64748B", flexShrink: 0 }}>🔒</span>
+                </div>
+                <button onClick={() => setShowWrongAddr((v) => !v)} style={linkBtn}>Wrong address?</button>
+                {showWrongAddr && (
+                  <p style={{ fontSize: 11.5, color: "#94A3B8", lineHeight: 1.5, margin: "6px 0 0" }}>
+                    This file was shared with {email}. If that isn&apos;t you, ask the sender to resend it to your
+                    correct address — the code only works for the invited email.
+                  </p>
+                )}
+              </>
+            )}
 
-            <Label>Enrollment code</Label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 20 }}>
+              <button onClick={() => { setError(""); setHasCode(true); }} style={btnPrimary}>
+                Yes, I have a code
+              </button>
+              <button onClick={handleNoCode} disabled={resendState === "sending"} style={btnSecondary}>
+                {resendState === "sending" ? "Sending…" : "No — email me a code"}
+              </button>
+            </div>
+
+            {onCancel && (
+              <button onClick={onCancel} style={{ ...linkBtn, marginTop: 16 }}>Cancel</button>
+            )}
+
+            <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
+              The code is emailed to you and finishes with Touch ID — no browser, no password.
+            </p>
+          </>
+        )}
+
+        {/* Entry — enter the code + confirm with Touch ID. */}
+        {phase === "input" && hasCode !== null && (
+          <>
+            <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
+              Enter your setup code
+            </h1>
+
+            {emailLocked ? (
+              <>
+                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 8px" }}>
+                  Your setup code is emailed to:
+                </p>
+                <div style={lockedEmailRow}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</span>
+                  <span aria-hidden style={{ fontSize: 12, color: "#64748B", flexShrink: 0 }}>🔒</span>
+                </div>
+                <button onClick={() => setShowWrongAddr((v) => !v)} style={linkBtn}>Wrong address?</button>
+                {showWrongAddr && (
+                  <p style={{ fontSize: 11.5, color: "#94A3B8", lineHeight: 1.5, margin: "6px 0 0" }}>
+                    This file was shared with {email}. If that isn&apos;t you, ask the sender to resend it to your
+                    correct address — the code only works for the invited email.
+                  </p>
+                )}
+                <p style={{ fontSize: 13, color: resendState === "sent" ? "#86EFAC" : "#94A3B8", lineHeight: 1.6, margin: "16px 0 0" }}>
+                  {resendState === "sent"
+                    ? `✓ ${resendMsg} Enter it below — we'll ask for Touch ID to finish.`
+                    : <>Check your inbox (and spam) for your code, then enter it below. We&apos;ll ask for Touch ID to finish — no browser, no password.</>}
+                </p>
+              </>
+            ) : (
+              <>
+                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
+                  Enter your email and the setup code from your inbox. We&apos;ll ask for Touch ID to finish.
+                </p>
+                <Label>Email</Label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => { setEmail(e.target.value.toLowerCase()); setError(""); }}
+                  placeholder="you@example.com"
+                  style={inputStyle}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoFocus
+                />
+              </>
+            )}
+
+            <Label>Setup code</Label>
             <input
               type="text"
               value={code}
@@ -317,6 +456,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
+              autoFocus={emailLocked}
               onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
             />
 
@@ -328,6 +468,29 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail }: Props) {
               )}
               <button onClick={handleSubmit} style={btnPrimary}>Continue</button>
             </div>
+
+            {/* Re-request — only when we have a token to scope it. The gate
+                already asked; this covers "the code never arrived". */}
+            {token && (
+              <div style={{ marginTop: 18, paddingTop: 16, borderTop: "0.5px solid rgba(255,255,255,0.08)" }}>
+                {resendState === "error" && (
+                  <p style={{ fontSize: 12, color: "#FCA5A5", lineHeight: 1.5, margin: "0 0 6px" }}>{resendMsg}</p>
+                )}
+                {resendState === "idle" && (
+                  <p style={{ fontSize: 12, color: "#94A3B8", margin: "0 0 6px" }}>Didn&apos;t get the code?</p>
+                )}
+                <button
+                  onClick={handleResend}
+                  disabled={resendState === "sending" || cooldown > 0}
+                  style={{ ...linkBtn, opacity: (resendState === "sending" || cooldown > 0) ? 0.5 : 1 }}
+                >
+                  {resendState === "sending" ? "Sending…"
+                    : cooldown > 0 ? `Resend in ${cooldown}s`
+                    : resendState === "sent" ? "Send another code"
+                    : "Email me a code"}
+                </button>
+              </div>
+            )}
 
             <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
               Codes expire 60 minutes after they&apos;re emailed, or 24 hours after the sender shows them. Single-use.
@@ -447,6 +610,32 @@ const btnPrimary: React.CSSProperties = {
   fontWeight: 500,
   cursor: "pointer",
   fontFamily: "inherit",
+};
+
+const lockedEmailRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "10px 12px",
+  borderRadius: 8,
+  border: "0.5px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.02)",
+  color: "#CBD5E1",
+  fontSize: 14,
+};
+
+const linkBtn: React.CSSProperties = {
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "#7DB1E8",
+  fontSize: 12,
+  cursor: "pointer",
+  fontFamily: "inherit",
+  textAlign: "left",
 };
 
 const btnSecondary: React.CSSProperties = {
