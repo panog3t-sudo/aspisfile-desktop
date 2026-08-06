@@ -560,7 +560,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
             </h2>
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
               {handoffSlow
-                ? "Still waiting. If you\u2019ve already confirmed in the browser, this will finish on its own in a few seconds \u2014 we\u2019re checking with the server directly. Your browser may also be asking permission to reopen AspisFile; allow it if so."
+                ? "Still waiting. If you\u2019ve already confirmed in the browser, this will finish on its own in a few seconds \u2014 we\u2019re checking with the server directly. Your browser may also be asking permission to reopen AspisFile Viewer; allow it if so."
                 : <>We&apos;ve opened a secure enrollment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key &mdash; AspisFile will take over automatically when you&apos;re done.</>}
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>

@@ -98,7 +98,7 @@ export function ReauthWaitingScreen({ token, email, verifyUrl, openFailed, onCom
               <p style={sub}>
                 Still waiting for you to confirm in the browser. If you&apos;ve already done it,
                 this will finish in a few seconds — we&apos;re checking with the server directly.
-                Your browser may also be asking permission to reopen AspisFile; allow it if so.
+                Your browser may also be asking permission to reopen AspisFile Viewer; allow it if so.
               </p>
             ) : (
               <p style={sub}>
