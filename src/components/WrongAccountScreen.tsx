@@ -56,8 +56,9 @@ export function WrongAccountScreen({ fileRecipient, boundEmail, onSwitch, onCanc
         </button>
 
         <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
-          Switching signs this viewer out of {boundEmail} and asks you to sign in as{" "}
-          {fileRecipient} (Touch ID / your enrollment).
+          Switching signs this viewer out of {boundEmail} and sets up {fileRecipient} on
+          this device — you&apos;ll complete their enrollment, including the emailed setup
+          code if the sender required one.
         </p>
       </div>
     </div>
