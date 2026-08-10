@@ -19,15 +19,22 @@ type Props = {
   onOpenToken?: (token: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; token: string };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
+type SortKey  = "name" | "date" | "size";
 
 function fmtSize(n: number): string {
   if (!n) return "";
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+function fmtDate(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" });
 }
 
 export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
@@ -54,6 +61,13 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   const [home, setHome] = useState<HomeData | null>(null);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeErr, setHomeErr] = useState("");
+
+  // Home controls — collapsed sections by default, name filter, sort.
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>({});
+  const [filesOpen, setFilesOpen] = useState(false);
 
   const refresh = () => {
     const s = getRecipientSession();
@@ -117,6 +131,19 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
 
   const active = !!session && !needsSignIn;
   const hasItems = !!home && (home.rooms.length > 0 || home.files.length > 0);
+  const q = query.trim().toLowerCase();
+
+  // Filter (by name) + sort a document list per the current controls.
+  const prep = (docs: HomeDoc[]): HomeDoc[] => {
+    const filtered = q ? docs.filter(d => d.name.toLowerCase().includes(q)) : docs;
+    return [...filtered].sort((a, b) => {
+      let r = 0;
+      if (sortBy === "name") r = a.name.localeCompare(b.name);
+      else if (sortBy === "size") r = (a.file_size || 0) - (b.file_size || 0);
+      else r = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+      return sortDir === "asc" ? r : -r;
+    });
+  };
 
   // A single clickable document/file row.
   const docRow = (d: HomeDoc) => (
@@ -137,10 +164,40 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {d.name}
       </span>
-      {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{fmtSize(d.file_size)}</span> : null}
+      {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
+      {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
       <span style={{ fontSize: 11.5, color: "#7DB1E8", flexShrink: 0 }}>Open →</span>
     </button>
   );
+
+  // A collapsible section (room or the standalone-files group).
+  const section = (key: string, icon: string, title: string, docs: HomeDoc[], open: boolean, toggle: () => void) => {
+    if (q && docs.length === 0) return null;
+    return (
+      <div key={key} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
+        <button
+          onClick={toggle}
+          style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "12px 14px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
+          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
+          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+        >
+          <span style={{ fontSize: 10, color: "#64748B", width: 10, display: "inline-block", transition: "transform 0.12s", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
+          <span style={{ fontSize: 14 }}>{icon}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+          <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{docs.length} item{docs.length === 1 ? "" : "s"}</span>
+        </button>
+        {open && (
+          <div style={{ maxHeight: 320, overflowY: "auto" }}>
+            {docs.length === 0
+              ? <p style={{ fontSize: 12, color: "#64748B", padding: "12px 14px", margin: 0 }}>No documents.</p>
+              : docs.map(docRow)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const sortLabel: Record<SortKey, string> = { name: "Name", date: "Date added", size: "Size" };
 
   return (
     <div
@@ -170,7 +227,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
 
       {/* ── Active session → the recipient's rooms + files ────────────── */}
       {active && (
-        <div style={{ width: "100%", maxWidth: 520, display: "flex", flexDirection: "column", gap: 14, marginTop: 4 }}>
+        <div style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
             <span style={{ fontSize: 12, color: "#94A3B8" }}>
               Signed in as <span style={{ color: "#E2E8F0", fontWeight: 500 }}>{session!.email}</span>
@@ -200,25 +257,46 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             </div>
           )}
 
-          {/* Data rooms */}
-          {home?.rooms.map(room => (
-            <div key={room.id} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "11px 14px" }}>
-                <span style={{ fontSize: 14 }}>📁</span>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{room.name}</span>
-                <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{room.docs.length} doc{room.docs.length === 1 ? "" : "s"}</span>
+          {/* Filter + sort controls */}
+          {hasItems && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Filter by name…"
+                style={{ flex: 1, minWidth: 150, height: 34, padding: "0 12px", fontSize: 13, borderRadius: 8, border: "0.5px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.04)", color: "#E2E8F0", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+              />
+              <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.04)", border: "0.5px solid rgba(255,255,255,0.12)", borderRadius: 8, padding: 2 }}>
+                {(["name", "date", "size"] as SortKey[]).map(k => (
+                  <button
+                    key={k}
+                    onClick={() => setSortBy(k)}
+                    style={{ fontSize: 12, padding: "5px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontFamily: "inherit", background: sortBy === k ? "#185FA5" : "transparent", color: sortBy === k ? "#fff" : "#94A3B8", whiteSpace: "nowrap" }}
+                  >
+                    {sortLabel[k]}
+                  </button>
+                ))}
               </div>
-              {room.docs.map(docRow)}
-            </div>
-          ))}
-
-          {/* Standalone files */}
-          {home && home.files.length > 0 && (
-            <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ padding: "11px 14px", fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Shared with you</div>
-              {home.files.map(docRow)}
+              <button
+                onClick={() => setSortDir(d => (d === "asc" ? "desc" : "asc"))}
+                title={sortDir === "asc" ? "Ascending — tap for descending" : "Descending — tap for ascending"}
+                style={{ width: 34, height: 34, borderRadius: 8, border: "0.5px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.04)", color: "#E2E8F0", cursor: "pointer", fontFamily: "inherit", fontSize: 14, flexShrink: 0 }}
+              >
+                {sortDir === "asc" ? "↑" : "↓"}
+              </button>
             </div>
           )}
+
+          {/* Data rooms — collapsed by default; expand to browse + scroll */}
+          {home?.rooms.map(room => {
+            const docs = prep(room.docs);
+            const open = q ? docs.length > 0 : !!expandedRooms[room.id];
+            return section(room.id, "📁", room.name, docs, open, () => setExpandedRooms(p => ({ ...p, [room.id]: !p[room.id] })));
+          })}
+
+          {/* Your files — collapsed by default */}
+          {home && home.files.length > 0 &&
+            section("__files__", "🗂️", "Your files", prep(home.files), q ? prep(home.files).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
 
           {onEnrol && (
             <button
