@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { getActiveSessionToken, getRecipientSession, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
+
+declare const __API_BASE__: string;
+const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
 
 type Props = {
   onLink:   (url: string) => void;
@@ -11,9 +14,23 @@ type Props = {
   // expired taps "Sign back in". Resolves { ok } on success (App opens
   // any pending file), or { ok:false, message } to show inline.
   onSignIn?: () => Promise<{ ok: boolean; message?: string }>;
+  // VDR viewer-home — open a chosen file/room-doc by its access token,
+  // exactly as if a deep link had arrived. App wires this to openLink.
+  onOpenToken?: (token: string) => void;
 };
 
-export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; token: string };
+type HomeRoom = { id: string; name: string; docs: HomeDoc[] };
+type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
+
+function fmtSize(n: number): string {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   const [input, setInput] = useState("");
   // Phase A+ UX polish — surface enrolment state on the idle screen so
   // a recipient who already installed the app can either see they're
@@ -31,11 +48,34 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
   // file open (the viewer reads the flag at mount), so no reload needed.
   const [afsOn, setAfsOn] = useState(isAfsRenderEnabled());
 
+  // VDR viewer-home — the recipient's data rooms + files, fetched with the
+  // active passkey session. Listing only; opening always runs the full
+  // /access pipeline (passkey + identity + enrol-code gates unchanged).
+  const [home, setHome] = useState<HomeData | null>(null);
+  const [homeLoading, setHomeLoading] = useState(false);
+  const [homeErr, setHomeErr] = useState("");
+
   const refresh = () => {
     const s = getRecipientSession();
     setSession(s);
     setNeedsSignIn(!!s && !getActiveSessionToken());
   };
+
+  const loadHome = useCallback(async () => {
+    const token = getActiveSessionToken();
+    if (!token) return;
+    setHomeLoading(true); setHomeErr("");
+    try {
+      const res = await fetch(`${BASE}/api/v1/viewer/home`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) { setHomeErr("Couldn't load your files. Tap refresh to try again."); return; }
+      const d = await res.json().catch(() => null);
+      if (d) setHome({ rooms: Array.isArray(d.rooms) ? d.rooms : [], files: Array.isArray(d.files) ? d.files : [] });
+    } catch {
+      setHomeErr("Couldn't reach AspisFile. Check your connection and tap refresh.");
+    } finally {
+      setHomeLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -47,6 +87,12 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
       window.removeEventListener("focus", onVisible);
     };
   }, []);
+
+  // Once we have an active session (enrolled + not expired), pull the home list.
+  useEffect(() => {
+    if (session && !needsSignIn) loadHome();
+    else setHome(null);
+  }, [session, needsSignIn, loadHome]);
 
   async function doSignIn() {
     if (!onSignIn || signingIn) return;
@@ -69,6 +115,33 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
     if (val) onLink(val);
   }
 
+  const active = !!session && !needsSignIn;
+  const hasItems = !!home && (home.rooms.length > 0 || home.files.length > 0);
+
+  // A single clickable document/file row.
+  const docRow = (d: HomeDoc) => (
+    <button
+      key={d.id}
+      onClick={() => onOpenToken?.(d.token)}
+      style={{
+        display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
+        background: "transparent", border: "none", borderTop: "0.5px solid rgba(255,255,255,0.06)",
+        padding: "10px 14px", cursor: onOpenToken ? "pointer" : "default", fontFamily: "inherit",
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
+      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+    >
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "#64748B", flexShrink: 0 }}>
+        <path d="M4 2h5l3 3v9H4z" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {d.name}
+      </span>
+      {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{fmtSize(d.file_size)}</span> : null}
+      <span style={{ fontSize: 11.5, color: "#7DB1E8", flexShrink: 0 }}>Open →</span>
+    </button>
+  );
+
   return (
     <div
       style={{
@@ -76,29 +149,90 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        justifyContent: active ? "flex-start" : "center",
         background: "#0F172A",
         color: "#94A3B8",
         fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
         gap: 16,
         padding: 32,
+        overflowY: "auto",
       }}
     >
-      <div style={{ fontSize: 28, marginBottom: 4 }}>🔒</div>
+      <div style={{ fontSize: 28, marginBottom: 4, marginTop: active ? 12 : 0 }}>🔒</div>
       <p style={{ fontSize: 15, fontWeight: 500, color: "#E2E8F0", margin: 0 }}>
         AspisFile Viewer
       </p>
-      <p style={{ fontSize: 13, margin: 0, color: "#64748B" }}>
-        Open a secure file link or double-click a .afs file to begin.
-      </p>
+      {!active && (
+        <p style={{ fontSize: 13, margin: 0, color: "#64748B" }}>
+          Open a secure file link or double-click a .afs file to begin.
+        </p>
+      )}
 
-      {/* Phase A+ UX polish — recipient identity card.
-          Enrolled  → show the email + a small "Use another code" link
-                      (still routes to EnrolmentScreen, which lets the
-                      user enrol an additional code if a sender issues
-                      one to a different address on the same device).
-          Unenrolled → the original "I have a setup code" button. */}
-      {session ? (
+      {/* ── Active session → the recipient's rooms + files ────────────── */}
+      {active && (
+        <div style={{ width: "100%", maxWidth: 520, display: "flex", flexDirection: "column", gap: 14, marginTop: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ fontSize: 12, color: "#94A3B8" }}>
+              Signed in as <span style={{ color: "#E2E8F0", fontWeight: 500 }}>{session!.email}</span>
+            </span>
+            <button
+              onClick={loadHome}
+              disabled={homeLoading}
+              style={{ background: "transparent", border: "none", color: "#7DB1E8", fontSize: 12, cursor: homeLoading ? "default" : "pointer", fontFamily: "inherit" }}
+            >
+              {homeLoading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+
+          {homeLoading && !home && (
+            <p style={{ fontSize: 13, color: "#64748B", textAlign: "center", margin: "18px 0" }}>Loading your documents…</p>
+          )}
+          {homeErr && (
+            <p style={{ fontSize: 12.5, color: "#FCA5A5", textAlign: "center", margin: 0 }}>{homeErr}</p>
+          )}
+
+          {home && !hasItems && !homeLoading && (
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, padding: "22px 18px", textAlign: "center" }}>
+              <p style={{ fontSize: 13, color: "#94A3B8", margin: 0, lineHeight: 1.6 }}>
+                Nothing has been shared with you yet.<br />
+                Open a file link from your email to get started.
+              </p>
+            </div>
+          )}
+
+          {/* Data rooms */}
+          {home?.rooms.map(room => (
+            <div key={room.id} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "11px 14px" }}>
+                <span style={{ fontSize: 14 }}>📁</span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{room.name}</span>
+                <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{room.docs.length} doc{room.docs.length === 1 ? "" : "s"}</span>
+              </div>
+              {room.docs.map(docRow)}
+            </div>
+          ))}
+
+          {/* Standalone files */}
+          {home && home.files.length > 0 && (
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "11px 14px", fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>Shared with you</div>
+              {home.files.map(docRow)}
+            </div>
+          )}
+
+          {onEnrol && (
+            <button
+              onClick={onEnrol}
+              style={{ alignSelf: "center", marginTop: 2, background: "transparent", border: "none", color: "#94A3B8", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
+            >
+              Use a different setup code
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Session expired → sign back in ────────────────────────────── */}
+      {session && needsSignIn && (
         <div
           style={{
             marginTop: 18,
@@ -119,8 +253,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
           <span style={{ fontSize: 13, color: "#E2E8F0", fontWeight: 500, wordBreak: "break-all" }}>
             {session.email}
           </span>
-
-          {needsSignIn && onSignIn && (
+          {onSignIn && (
             <>
               <p style={{ fontSize: 11, color: "#94A3B8", margin: "6px 0 2px", lineHeight: 1.5, textAlign: "center" }}>
                 Your secure session expired.
@@ -129,17 +262,9 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
                 onClick={doSignIn}
                 disabled={signingIn}
                 style={{
-                  marginTop: 2,
-                  background: "#185FA5",
-                  border: "none",
-                  color: "#fff",
-                  padding: "8px 18px",
-                  borderRadius: 6,
-                  fontSize: 13,
-                  fontWeight: 500,
-                  cursor: signingIn ? "default" : "pointer",
-                  fontFamily: "inherit",
-                  opacity: signingIn ? 0.7 : 1,
+                  marginTop: 2, background: "#185FA5", border: "none", color: "#fff",
+                  padding: "8px 18px", borderRadius: 6, fontSize: 13, fontWeight: 500,
+                  cursor: signingIn ? "default" : "pointer", fontFamily: "inherit", opacity: signingIn ? 0.7 : 1,
                 }}
               >
                 {signingIn ? "Signing you in…" : "Sign back in"}
@@ -151,48 +276,32 @@ export function IdleScreen({ onLink, onEnrol, onSignIn }: Props) {
               )}
             </>
           )}
-
           {onEnrol && (
             <button
               onClick={onEnrol}
-              style={{
-                marginTop: 4,
-                background: "transparent",
-                border: "none",
-                color: "#94A3B8",
-                fontSize: 11,
-                cursor: "pointer",
-                fontFamily: "inherit",
-                textDecoration: "underline",
-              }}
+              style={{ marginTop: 4, background: "transparent", border: "none", color: "#94A3B8", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
             >
               Use a different setup code
             </button>
           )}
         </div>
-      ) : (
-        onEnrol && (
-          // Last-resort fallback — a quiet link, not a prominent button. The
-          // primary path is to open the file link (which enrols automatically);
-          // this is here for the recipient who was emailed a setup code. Same
-          // label as the code email's "tap 'I have a setup code'".
-          <button
-            onClick={onEnrol}
-            style={{
-              marginTop: 16,
-              background: "transparent",
-              border: "none",
-              color: "#64748B",
-              padding: "6px 8px",
-              fontSize: 11,
-              cursor: "pointer",
-              fontFamily: "inherit",
-              textDecoration: "underline",
-            }}
-          >
-            I have a setup code
-          </button>
-        )
+      )}
+
+      {/* ── Not enrolled → quiet setup-code fallback ──────────────────── */}
+      {!session && onEnrol && (
+        // Last-resort fallback — a quiet link, not a prominent button. The
+        // primary path is to open the file link (which enrols automatically);
+        // this is here for the recipient who was emailed a setup code. Same
+        // label as the code email's "tap 'I have a setup code'".
+        <button
+          onClick={onEnrol}
+          style={{
+            marginTop: 16, background: "transparent", border: "none", color: "#64748B",
+            padding: "6px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
+          }}
+        >
+          I have a setup code
+        </button>
       )}
 
       {/* Dev-mode URL input — paste a share link to test without deep link */}

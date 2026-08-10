@@ -1081,6 +1081,7 @@ function AppContent() {
       onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
       onEnrol={() => enterManualEnrol()}
       onSignIn={handleIdleSignIn}
+      onOpenToken={(token) => openLinkRef.current?.({ token, sig: null, env: null, present: false, coview: null, rt: null })}
     />
   );
 }
