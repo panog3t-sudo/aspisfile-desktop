@@ -16,9 +16,9 @@ export default function UpdateBanner() {
 
   useEffect(() => {
     let cancelled = false;
-    // Delay past launch so the check never competes with opening a file —
-    // the viewer's own startup (lock, deep-link drain, session) comes first.
-    const t = setTimeout(() => {
+    let lastFocusCheck = 0;
+
+    const runCheck = () => {
       checkForUpdate().then(u => {
         if (cancelled || !u) return;
         let dismissed: string | null = null;
@@ -26,10 +26,35 @@ export default function UpdateBanner() {
         // A blocking update ignores a previous dismissal — reserved for when
         // min_supported is actually raised.
         if (!u.blocking && dismissed === u.version) return;
-        setInfo(u);
+        // Avoid a re-render churn if we're already showing this exact version.
+        setInfo(prev => (prev && prev.version === u.version ? prev : u));
       });
-    }, 3000);
-    return () => { cancelled = true; clearTimeout(t); };
+    };
+
+    // Delay past launch so the check never competes with opening a file —
+    // the viewer's own startup (lock, deep-link drain, session) comes first.
+    const initial = setTimeout(runCheck, 3000);
+    // Re-check hourly so a LONG-RUNNING viewer still learns about a release
+    // without a restart — the once-per-launch check missed exactly that case.
+    const interval = setInterval(runCheck, 60 * 60 * 1000);
+    // Re-check when the window regains focus (the common "left it open, came
+    // back later" case), throttled to once per 5 min so rapid alt-tabbing
+    // doesn't spam the endpoint. checkForUpdate is a single GET that resolves
+    // to null on any failure, so this stays cheap + non-blocking.
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusCheck < 5 * 60 * 1000) return;
+      lastFocusCheck = now;
+      runCheck();
+    };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(initial);
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   if (!info) return null;
