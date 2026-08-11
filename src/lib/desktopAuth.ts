@@ -29,6 +29,10 @@ export type FileInfo = {
   personal_message: string | null;
   sender: { full_name: string | null; email: string } | null;
   is_owner: boolean;
+  // Data-room context — set when this document lives in a room. Drives the
+  // per-document Q&A button (only when in a room AND Q&A is enabled).
+  collection_id?: string | null;
+  qa_enabled?: boolean;
 };
 
 export type RecipientInfo = {

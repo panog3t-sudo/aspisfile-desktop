@@ -27,6 +27,7 @@ import { SenderApprovalWaitingScreen } from "../components/SenderApprovalWaiting
 import { DelegationScreen } from "../components/DelegationScreen";
 import { DownloadModal } from "../components/DownloadModal";
 import { FeedbackMenu, type Decision, type DraftComment, type DraftMarkup, type DraftSignature } from "./FeedbackMenu";
+import { QAPanel } from "./QAPanel";
 import { SignaturePad, type SignatureData } from "./SignaturePad";
 import { downloadAfsLink, DownloadError, friendlyDownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
@@ -111,6 +112,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Recipient feedback (Phase 1) — server tells us whether to show "Respond".
   // Additive + flag-gated server-side; false by default → viewer unchanged.
   const [recipientFeedback, setRecipientFeedback] = useState(false);
+  // Data-room Q&A — separate from Feedback. Shown only when the doc is in a
+  // room AND Q&A is enabled (file.collection_id + file.qa_enabled).
+  const [showQA, setShowQA] = useState(false);
+  const [qaUnread, setQaUnread] = useState(0);
+  useEffect(() => {
+    const collectionId = file?.collection_id;
+    if (!collectionId || !file?.qa_enabled) { setQaUnread(0); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = getActiveSessionToken();
+        const res = await fetch(`${__API_BASE__}/api/v1/rooms/${collectionId}/qa?fileId=${encodeURIComponent(file.id)}`, {
+          headers: { "X-App-Platform": "desktop", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+        });
+        if (!cancelled && res.ok) { const d = await res.json(); setQaUnread(d.unread ?? 0); }
+      } catch { /* best-effort badge */ }
+    })();
+    return () => { cancelled = true; };
+  }, [file?.id, file?.collection_id, file?.qa_enabled]);
   // Owner review — when the OWNER opens their own file, overlay ALL recipients'
   // pins/strokes, read-only (no menu).
   const [ownerReview, setOwnerReview] = useState(false);
@@ -1454,6 +1474,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // recipient device context); recipients can send a copy to their
             // other enrolled devices.
             onSend={canSend && !file.is_owner ? handleSendToDevice : undefined}
+            onQA={file.collection_id && file.qa_enabled ? () => setShowQA(true) : undefined}
+            qaUnread={qaUnread}
           />
         </div>
         {presenterSession && participantPanelOpen && (
@@ -1608,6 +1630,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       {/* Recipient feedback — unified draft-then-send menu. Overlay only; never
           touches the tile renderer. Flag-gated (recipientFeedback). Owner review
           shows pins/strokes without any menu. */}
+      {showQA && file.collection_id && !locked && (
+        <QAPanel
+          roomId={file.collection_id}
+          fileId={file.id}
+          docName={file.name}
+          onClose={() => setShowQA(false)}
+          onUnread={setQaUnread}
+        />
+      )}
+
       {recipientFeedback && sessionId && !locked && (
         <FeedbackMenu
           fileId={file.id} sessionId={sessionId}

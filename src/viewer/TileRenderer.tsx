@@ -60,6 +60,10 @@ type Props = {
   // B+ multi-device — "Send to another device" export of the held .afs.
   // SecureViewer passes onSend only once a local .afs copy exists to export.
   onSend?:        () => void;
+  // Data-room Q&A — per-document question panel. SecureViewer passes onQA only
+  // when the doc is in a room AND Q&A is enabled. qaUnread drives the badge.
+  onQA?:          () => void;
+  qaUnread?:      number;
   // Recipient feedback Phase 2 — page-anchored comments. Additive overlay ONLY;
   // does not change tile rendering. When commentMode is on, a click on the page
   // reports (page, x, y as page-fractions) via onPlaceComment. Existing pins for
@@ -116,7 +120,7 @@ export function TileRenderer({
   targetPage, onCurrentPageChange, onPresent, followMode,
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
   onPublishCursor,
-  onDownload, downloadState, onSend,
+  onDownload, downloadState, onSend, onQA, qaUnread,
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawTool, markups, onStrokeComplete,
   signMode, onPlaceSignature, signatures, onUpdateSignature,
@@ -551,6 +555,25 @@ export function TileRenderer({
             SecureViewer omits it when the user can't or shouldn't
             download (owner, blob deleted, allow_download false). */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {onQA && (
+            <button
+              onClick={onQA}
+              title="Ask the deal team about this document"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                height: 26, padding: '0 10px', borderRadius: 4,
+                border: '0.5px solid #1D4ED8', background: '#1D4ED8',
+                color: '#fff', cursor: 'pointer',
+                fontSize: 12, fontWeight: 600, lineHeight: 1,
+                fontFamily: 'system-ui', flexShrink: 0,
+              }}
+            >
+              Q&amp;A
+              {(qaUnread ?? 0) > 0 && (
+                <span style={{ fontFamily: 'ui-monospace,Menlo,monospace', fontSize: 9, fontWeight: 700, color: '#3A2A00', background: '#F4BF4F', borderRadius: 20, padding: '1px 6px' }}>{qaUnread}</span>
+              )}
+            </button>
+          )}
           {onSend && (
             <button
               onClick={onSend}
