@@ -55,6 +55,14 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   // localStorage flag from a console). Flipping it takes effect on the next
   // file open (the viewer reads the flag at mount), so no reload needed.
   const [afsOn, setAfsOn] = useState(isAfsRenderEnabled());
+  // macOS-only one-time nudge: guide the user to pin the app to the Dock so
+  // relaunching is as easy as the Windows desktop shortcut. macOS has no
+  // desktop shortcuts and no supported API to auto-pin, so we ask once.
+  // Dismissal persists per-device.
+  const [showDockTip, setShowDockTip] = useState(
+    /Mac/i.test(navigator.userAgent) && localStorage.getItem("ax_dock_tip_dismissed") !== "1"
+  );
+  const dismissDockTip = () => { localStorage.setItem("ax_dock_tip_dismissed", "1"); setShowDockTip(false); };
 
   // VDR viewer-home — the recipient's data rooms + files, fetched with the
   // active passkey session. Listing only; opening always runs the full
@@ -168,7 +176,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       </span>
       {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
       {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
-      <span style={{ fontSize: 11.5, color: "#7DB1E8", flexShrink: 0 }}>Open →</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: "#1D4ED8", borderRadius: 999, padding: "4px 12px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap", boxShadow: "0 1px 4px rgba(29,78,216,0.45)" }}>Open →</span>
     </button>
   );
 
@@ -272,6 +280,17 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         <p style={{ fontSize: 13, margin: 0, color: "#64748B" }}>
           Open a secure file link or double-click a .afs file to begin.
         </p>
+      )}
+
+      {/* macOS Dock nudge — the native equivalent of a Windows desktop shortcut. */}
+      {showDockTip && (
+        <div style={{ width: "100%", maxWidth: 560, display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(29,78,216,0.10)", border: "0.5px solid rgba(29,78,216,0.35)", borderRadius: 10, padding: "11px 13px" }}>
+          <span aria-hidden style={{ fontSize: 15, lineHeight: 1.3 }}>📌</span>
+          <div style={{ flex: 1, fontSize: 12.5, lineHeight: 1.5, color: "#CBD5E1" }}>
+            <b style={{ color: "#E2E8F0" }}>Keep AspisFile in your Dock</b> for quick access — right-click the AspisFile icon in your Dock and choose <b>Options → Keep in Dock</b>.
+          </div>
+          <button onClick={dismissDockTip} title="Dismiss" style={{ background: "none", border: "none", color: "#64748B", cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>×</button>
+        </div>
       )}
 
       {/* ── Active session → the recipient's rooms + files ────────────── */}

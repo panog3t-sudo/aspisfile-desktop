@@ -271,6 +271,31 @@ function checkLaunchArgs(): ViewerParams | null {
 function AppContent() {
   const [mode, setMode] = useState<Mode>("idle");
   const [viewerParams, setViewerParams] = useState<ViewerParams | null>(null);
+  // Mirror of `mode` for the window-close handler (registered once at mount).
+  const modeRef = useRef<Mode>("idle");
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+
+  // macOS/Windows: closing the window while a DOCUMENT is open should return to
+  // the passkey-gated viewer home instead of quitting — so the app stays in the
+  // Dock/taskbar and is easy to relaunch (Mac has no desktop shortcut).
+  // SECURITY: this routes through the EXACT SAME path as the in-app close
+  // (setMode('idle') → SecureViewer unmounts → its cleanup fires session_ended,
+  // sessionStore.clear() and POST /close, terminating the viewer_session and
+  // wiping the in-memory session key). The doc is fully torn down; re-opening
+  // requires the whole passkey/binding/session-start pipeline again. Closing
+  // from the home (or any non-document screen) is NOT intercepted → the window
+  // closes and the app quits, so nothing stays resident in the background.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested((event) => {
+      if (modeRef.current === "viewer") {
+        event.preventDefault();
+        setMode("idle");
+        setViewerParams(null);
+      }
+    }).then((fn) => { unlisten = fn; }, () => { /* listener unavailable — default close */ });
+    return () => { if (unlisten) unlisten(); };
+  }, []);
   // Set when a deep-link's file recipient doesn't match the viewer's bound
   // identity — drives the WrongAccountScreen (deliberate switch, never silent).
   const [wrongAccount, setWrongAccount] = useState<{ fileRecipient: string; boundEmail: string; params: ViewerParams } | null>(null);
