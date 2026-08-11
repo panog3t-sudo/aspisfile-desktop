@@ -64,6 +64,12 @@ type Props = {
   // when the doc is in a room AND Q&A is enabled. qaUnread drives the badge.
   onQA?:          () => void;
   qaUnread?:      number;
+  // Recipient feedback launcher — moved from the old floating bottom pill into
+  // the top toolbar (centered, AspisFile blue) for consistency with Q&A. When
+  // defined, the toolbar shows a "Feedback" button that opens the FeedbackMenu.
+  // feedbackDraftCount drives the unsent-drafts badge.
+  onFeedback?:        () => void;
+  feedbackDraftCount?: number;
   // Recipient feedback Phase 2 — page-anchored comments. Additive overlay ONLY;
   // does not change tile rendering. When commentMode is on, a click on the page
   // reports (page, x, y as page-fractions) via onPlaceComment. Existing pins for
@@ -121,6 +127,7 @@ export function TileRenderer({
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
   onPublishCursor,
   onDownload, downloadState, onSend, onQA, qaUnread,
+  onFeedback, feedbackDraftCount,
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawTool, markups, onStrokeComplete,
   signMode, onPlaceSignature, signatures, onUpdateSignature,
@@ -483,8 +490,36 @@ export function TileRenderer({
           borderBottom: "0.5px solid #334155",
           flexShrink: 0,
           gap: 12,
+          position: "relative",   // anchor for the centered Feedback launcher
         }}
       >
+        {/* Recipient Feedback launcher — absolutely centered in the toolbar and
+            AspisFile blue so it reads as the primary recipient action without
+            disturbing the lock/name (left), zoom (center-right) or Q&A/Download
+            (right) clusters. Opens the FeedbackMenu (respond/comment/markup/
+            sign) — the menu itself is unchanged. */}
+        {onFeedback && !followMode && (
+          <button
+            onClick={onFeedback}
+            title="Respond, comment, mark up or sign this document"
+            style={{
+              position: "absolute", left: "50%", top: "50%",
+              transform: "translate(-50%,-50%)", zIndex: 3,
+              display: "flex", alignItems: "center", gap: 7,
+              height: 28, padding: "0 14px", borderRadius: 999,
+              border: "0.5px solid #1D4ED8", background: "#1D4ED8",
+              color: "#fff", cursor: "pointer",
+              fontSize: 12.5, fontWeight: 600, lineHeight: 1,
+              fontFamily: "system-ui", boxShadow: "0 2px 10px rgba(29,78,216,.45)",
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 13 }}>✎</span>
+            Feedback
+            {(feedbackDraftCount ?? 0) > 0 && (
+              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9, fontWeight: 700, color: "#3A2A00", background: "#F4BF4F", borderRadius: 20, padding: "1px 6px" }}>{feedbackDraftCount}</span>
+            )}
+          </button>
+        )}
         {/* Left: lock button + file name.
             Doc-level close (X) removed — the native window close
             button does the same thing (unmounts SecureViewer, fires

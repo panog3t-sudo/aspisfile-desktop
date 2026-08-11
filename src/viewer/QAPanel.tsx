@@ -46,12 +46,17 @@ export function QAPanel({ roomId, fileId, docName, onClose, onUnread }: {
   useEffect(() => {
     load();
     // Opening the panel marks this document's threads seen → clears the badge.
-    (async () => {
+    const markSeen = async () => {
       try {
         await fetch(`${BASE}/api/v1/rooms/${roomId}/qa`, { method: "POST", headers: headers(), body: JSON.stringify({ fileId, seen: true }) });
         onUnread?.(0);
       } catch { /* best-effort */ }
-    })();
+    };
+    markSeen();
+    // While the panel is open, poll so a deal-team answer appears without a
+    // manual refresh; re-mark seen each round so it never re-badges live.
+    const timer = window.setInterval(async () => { await load(); markSeen(); }, 15000);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -68,8 +73,10 @@ export function QAPanel({ roomId, fileId, docName, onClose, onUnread }: {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(4,6,14,.55)", display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 380, maxWidth: "92vw", height: "100%", background: "#141830", borderLeft: "1px solid #2E3760", display: "flex", flexDirection: "column", boxShadow: "-20px 0 60px rgba(0,0,0,.5)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
+    // Docked side panel — a flex sibling of the document, so the document
+    // shrinks to make room instead of being covered (matches the presenter
+    // participant panel). No full-screen backdrop; the file stays readable.
+    <div style={{ width: 380, maxWidth: "42vw", height: "100%", flexShrink: 0, background: "#141830", borderLeft: "1px solid #2E3760", display: "flex", flexDirection: "column", boxShadow: "-20px 0 60px rgba(0,0,0,.4)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
         <div style={{ padding: "16px 16px 11px", borderBottom: "1px solid #2E3760" }}>
           <div style={{ display: "flex", alignItems: "center" }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: "#EAEFFB" }}>Q&A</div>
@@ -104,6 +111,5 @@ export function QAPanel({ roomId, fileId, docName, onClose, onUnread }: {
           <button onClick={send} disabled={busy || !draft.trim()} style={{ width: "100%", marginTop: 8, background: "#2E55D4", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, padding: 9, cursor: (busy || !draft.trim()) ? "default" : "pointer", opacity: (busy || !draft.trim()) ? 0.6 : 1 }}>{busy ? "Sending…" : "Send question"}</button>
         </div>
       </div>
-    </div>
   );
 }

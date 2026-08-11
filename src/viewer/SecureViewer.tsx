@@ -116,11 +116,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // room AND Q&A is enabled (file.collection_id + file.qa_enabled).
   const [showQA, setShowQA] = useState(false);
   const [qaUnread, setQaUnread] = useState(0);
+  // Recipient Feedback menu open state — lifted here because the launcher now
+  // lives in the top toolbar (TileRenderer) while the menu is rendered below.
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   useEffect(() => {
     const collectionId = file?.collection_id;
-    if (!collectionId || !file?.qa_enabled) { setQaUnread(0); return; }
+    // Panel owns the count while open (it marks seen); poll only when closed so
+    // a deal-team answer lights up the badge live, no manual reopen needed.
+    if (!collectionId || !file?.qa_enabled || showQA) { return; }
     let cancelled = false;
-    (async () => {
+    const poll = async () => {
       try {
         const t = getActiveSessionToken();
         const res = await fetch(`${__API_BASE__}/api/v1/rooms/${collectionId}/qa?fileId=${encodeURIComponent(file.id)}`, {
@@ -128,9 +133,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         });
         if (!cancelled && res.ok) { const d = await res.json(); setQaUnread(d.unread ?? 0); }
       } catch { /* best-effort badge */ }
-    })();
-    return () => { cancelled = true; };
-  }, [file?.id, file?.collection_id, file?.qa_enabled]);
+    };
+    poll();
+    const timer = window.setInterval(poll, 20000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [file?.id, file?.collection_id, file?.qa_enabled, showQA]);
   // Owner review — when the OWNER opens their own file, overlay ALL recipients'
   // pins/strokes, read-only (no menu).
   const [ownerReview, setOwnerReview] = useState(false);
@@ -1476,6 +1483,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onSend={canSend && !file.is_owner ? handleSendToDevice : undefined}
             onQA={file.collection_id && file.qa_enabled ? () => setShowQA(true) : undefined}
             qaUnread={qaUnread}
+            // Recipient Feedback launcher (centered blue toolbar button). Same
+            // gate as the FeedbackMenu render below (recipient feedback only).
+            onFeedback={recipientFeedback ? () => setFeedbackOpen(true) : undefined}
+            feedbackDraftCount={(draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length}
           />
         </div>
         {presenterSession && participantPanelOpen && (
@@ -1485,6 +1496,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             token={token}
             currentPage={currentPage}
             onClose={() => setParticipantPanelOpen(false)}
+          />
+        )}
+        {/* Data-room Q&A — docked beside the document (flex sibling), so the
+            document shrinks to make room instead of being covered. */}
+        {showQA && file.collection_id && !locked && (
+          <QAPanel
+            roomId={file.collection_id}
+            fileId={file.id}
+            docName={file.name}
+            onClose={() => setShowQA(false)}
+            onUnread={setQaUnread}
           />
         )}
       </div>
@@ -1630,16 +1652,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       {/* Recipient feedback — unified draft-then-send menu. Overlay only; never
           touches the tile renderer. Flag-gated (recipientFeedback). Owner review
           shows pins/strokes without any menu. */}
-      {showQA && file.collection_id && !locked && (
-        <QAPanel
-          roomId={file.collection_id}
-          fileId={file.id}
-          docName={file.name}
-          onClose={() => setShowQA(false)}
-          onUnread={setQaUnread}
-        />
-      )}
-
       {recipientFeedback && sessionId && !locked && (
         <FeedbackMenu
           fileId={file.id} sessionId={sessionId}
@@ -1650,6 +1662,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           draftMarkups={draftMarkups} removeDraftMarkup={removeDraftMarkup}
           draftSignatures={draftSignatures} removeDraftSignature={removeDraftSignature}
           onSend={sendBatch} sending={sending}
+          open={feedbackOpen} setOpen={setFeedbackOpen}
         />
       )}
 

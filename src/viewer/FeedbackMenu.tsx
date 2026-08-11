@@ -54,9 +54,13 @@ export function FeedbackMenu(props: {
   removeDraftSignature: (tempId: string) => void;
   onSend: () => Promise<boolean>;
   sending: boolean;
+  // Open state is controlled by the parent — the launcher now lives in the
+  // top toolbar (TileRenderer) for consistency with Q&A / Download, so the
+  // viewer owns the open flag and this component just renders the menu.
+  open: boolean;
+  setOpen: (b: boolean) => void;
 }) {
-  const { mode, setMode, drawTool, setDrawTool, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending } = props;
-  const [open, setOpen] = useState(false);
+  const { mode, setMode, drawTool, setDrawTool, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen } = props;
   const [confirm, setConfirm] = useState(false);
   const [sent, setSent] = useState<SentEntry[]>([]);
   const [note, setNote] = useState(draftDecision?.note ?? "");
@@ -68,6 +72,9 @@ export function FeedbackMenu(props: {
     } catch { /* keep */ }
   }, [props.fileId, props.sessionId]);
   useEffect(() => { load(); }, [load]);
+  // Refresh the sent list each time the menu opens (the toolbar launcher no
+  // longer calls load() on click — it just flips `open`).
+  useEffect(() => { if (open) load(); }, [open, load]);
 
   const draftCount = (draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length;
   const enterMode = (m: "comment" | "draw" | "sign") => { setMode(m); setOpen(false); };
@@ -90,18 +97,8 @@ export function FeedbackMenu(props: {
 
   return (
     <>
-      {/* Collapsed launcher */}
-      {!open && (
-        <button onClick={() => { setOpen(true); load(); }}
-          style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 998,
-            display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 18px", borderRadius: 999, cursor: "pointer",
-            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", fontSize: 13, fontWeight: 640,
-            border: draftCount ? "1px solid #7A561D" : "1px solid #2E3760", background: draftCount ? "#332510" : "#1A1F3A",
-            color: draftCount ? "#E0A54B" : "#EAEFFB", boxShadow: "0 8px 22px rgba(0,0,0,.45)" }}>
-          <span aria-hidden style={{ fontSize: 14 }}>✎</span>Feedback{draftCount ? ` · ${draftCount} draft${draftCount !== 1 ? "s" : ""}` : ""}
-        </button>
-      )}
-
+      {/* Launcher moved to the top toolbar (TileRenderer). This component now
+          only renders the menu overlay + the in-mode "Done" hint bar. */}
       {open && (
         <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(4,6,14,.55)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 460, margin: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 16,
