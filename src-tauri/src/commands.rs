@@ -1,5 +1,13 @@
 use tauri::AppHandle;
 
+// Fully quit the app. Used when the window is closed from the home / non-document
+// screen: macOS keeps the process alive after a plain window close, so the red
+// close button appears to do nothing. We exit explicitly (normal Tauri shutdown).
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 pub fn get_platform() -> String {
     #[cfg(target_os = "windows")]
