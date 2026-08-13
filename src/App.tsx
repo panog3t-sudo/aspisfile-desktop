@@ -292,7 +292,13 @@ function AppContent() {
         event.preventDefault();
         setMode("idle");
         setViewerParams(null);
+        return;
       }
+      // Home / non-document screen — fully quit. macOS keeps the app resident
+      // after a plain window close, so the red button appears to do nothing;
+      // exit explicitly (fall back to destroying the window if the command fails).
+      event.preventDefault();
+      invoke("quit_app").catch(() => { getCurrentWindow().destroy().catch(() => {}); });
     }).then((fn) => { unlisten = fn; }, () => { /* listener unavailable — default close */ });
     return () => { if (unlisten) unlisten(); };
   }, []);

@@ -102,7 +102,10 @@ function pinColor(email?: string): string {
   return `hsl(${h}, 62%, 48%)`;
 }
 
-const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
+// Higher steps (300–800%) added so small/short pages — e.g. a thin screenshot
+// strip — can be enlarged enough to place a signature or read detail. RESET is
+// still 100%; default zoomIndex unchanged (100%).
+const ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200, 300, 400, 600, 800];
 
 const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
   width: 26,

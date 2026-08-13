@@ -19,7 +19,7 @@ type Props = {
   onOpenToken?: (token: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean };
 type HomeFolder = { id: string; name: string; position: number };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
@@ -155,30 +155,40 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
     });
   };
 
-  // A single clickable document/file row.
-  const docRow = (d: HomeDoc) => (
-    <button
-      key={d.id}
-      onClick={() => onOpenToken?.(d.token)}
-      style={{
-        display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
-        background: "transparent", border: "none", borderTop: "0.5px solid rgba(255,255,255,0.06)",
-        padding: "10px 14px", cursor: onOpenToken ? "pointer" : "default", fontFamily: "inherit",
-      }}
-      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-    >
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "#64748B", flexShrink: 0 }}>
-        <path d="M4 2h5l3 3v9H4z" stroke="currentColor" strokeWidth="1.2" />
-      </svg>
-      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {d.name}
-      </span>
-      {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
-      {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
-      <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: "#1D4ED8", borderRadius: 999, padding: "4px 12px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap", boxShadow: "0 1px 4px rgba(29,78,216,0.45)" }}>Open →</span>
-    </button>
-  );
+  // A single document/file row. Expired links (no live access token) render
+  // muted and non-clickable with an "Expired" tag instead of "Open →", so the
+  // list never shows a dead link that the viewer can't actually open.
+  const docRow = (d: HomeDoc) => {
+    const expired = !!d.expired;
+    return (
+      <button
+        key={d.id}
+        onClick={expired ? undefined : () => onOpenToken?.(d.token)}
+        disabled={expired}
+        title={expired ? "This link has expired — ask the sender to re-share." : undefined}
+        style={{
+          display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
+          background: "transparent", border: "none", borderTop: "0.5px solid rgba(255,255,255,0.06)",
+          padding: "10px 14px", cursor: expired ? "default" : (onOpenToken ? "pointer" : "default"),
+          fontFamily: "inherit", opacity: expired ? 0.5 : 1,
+        }}
+        onMouseEnter={e => { if (!expired) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "#64748B", flexShrink: 0 }}>
+          <path d="M4 2h5l3 3v9H4z" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {d.name}
+        </span>
+        {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
+        {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
+        {expired
+          ? <span style={{ fontSize: 10.5, fontWeight: 600, color: "#FCA5A5", background: "rgba(148,29,29,0.28)", border: "0.5px solid rgba(252,165,165,0.35)", borderRadius: 999, padding: "3px 10px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap" }}>Expired</span>
+          : <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: "#1D4ED8", borderRadius: 999, padding: "4px 12px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap", boxShadow: "0 1px 4px rgba(29,78,216,0.45)" }}>Open →</span>}
+      </button>
+    );
+  };
 
   // A collapsible section (room or the standalone-files group).
   const section = (key: string, icon: string, title: string, docs: HomeDoc[], open: boolean, toggle: () => void) => {

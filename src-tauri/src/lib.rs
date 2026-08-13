@@ -176,6 +176,7 @@ pub fn run() {
             commands::biometric_available,
             commands::get_autolock,
             commands::detect_capture_processes,
+            commands::quit_app,
             fileassoc::read_afs,
             fileassoc::take_pending_afs,
             passkey::passkey_register,
