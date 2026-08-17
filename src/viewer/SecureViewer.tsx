@@ -147,7 +147,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [drawTool, setDrawTool] = useState<"pen" | "highlight">("pen");
   const [sentComments, setSentComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
   const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; kind?: "pen" | "highlight" }>>([]);
-  const [sentSignatures, setSentSignatures] = useState<Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; recipient_email?: string }>>([]);
+  const [sentSignatures, setSentSignatures] = useState<Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string }>>([]);
   const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
   const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
   const [draftMarkups, setDraftMarkups] = useState<DraftMarkup[]>([]);
@@ -281,7 +281,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setSentMarkups(entries.filter((e: { kind: string }) => e.kind === "markup")
           .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; tool?: "pen" | "highlight" }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email, kind: e.tool })));
         setSentSignatures(entries.filter((e: { kind: string }) => e.kind === "signature")
-          .map((e: { id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, w: e.w, h: e.h, style: e.style, points: e.points, typed_name: e.typed_name, recipient_email: e.recipient_email })));
+          .map((e: { id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, w: e.w, h: e.h, style: e.style, points: e.points, typed_name: e.typed_name, image_data: e.image_data, recipient_email: e.recipient_email })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
@@ -325,9 +325,21 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const addDraftSignature = useCallback((s: SignatureData) => {
     const ps = pendingSignature;
     if (!ps) return;
-    const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y: ps.y, w: SIG_W, h: SIG_H, signer_name: s.signer_name, at: new Date().toISOString() };
+    // Uploaded images: size the initial box so the picture isn't heavily
+    // letterboxed. Box w/h are page fractions of different dims, so approximate
+    // the page's portrait aspect (~0.72 = width/height) to derive h from the
+    // image's own aspect. The recipient can still drag the corner to resize.
+    const PAGE_ASPECT = 0.72;
+    let w = SIG_W, h = SIG_H;
+    if (s.style === "uploaded" && s.aspect && s.aspect > 0) {
+      h = Math.min(0.4, Math.max(0.03, (w * PAGE_ASPECT) / s.aspect));
+    }
+    const y = Math.min(1 - h, ps.y);   // re-clamp in case h grew past the default
+    const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y, w, h, signer_name: s.signer_name, at: new Date().toISOString() };
     const draft: DraftSignature = s.style === "drawn"
       ? { ...base, style: "drawn", points: s.points }
+      : s.style === "uploaded"
+      ? { ...base, style: "uploaded", image_data: s.image_data }
       : { ...base, style: "typed", typed_name: s.typed_name };
     setDraftSignatures((d) => [...d, draft]);
     setPendingSignature(null);
@@ -352,7 +364,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
           comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
           markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color, kind: m.kind })) : undefined,
-          signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, signer_name: s.signer_name })) : undefined,
+          signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, image_data: s.image_data, signer_name: s.signer_name })) : undefined,
         }),
       });
       setSending(false);
@@ -1435,7 +1447,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             signMode={fbMode === "sign"}
             onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}
-            signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, draft: true }))]}
+            signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, image_data: d.image_data, draft: true }))]}
             onUpdateSignature={recipientFeedback ? updateDraftSignature : undefined}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar

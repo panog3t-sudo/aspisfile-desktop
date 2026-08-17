@@ -14,7 +14,7 @@ declare const __API_BASE__: string;
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
 export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; kind?: "pen" | "highlight"; at: string };
-export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; signer_name: string; at: string };
+export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name: string; at: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }
@@ -105,7 +105,7 @@ export function FeedbackMenu(props: {
             padding: "16px 16px 18px", boxShadow: "0 24px 60px rgba(0,0,0,.6)", maxHeight: "84vh", display: "flex", flexDirection: "column",
             fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", color: "#EAEFFB" }}>
             <div style={{ display: "flex", alignItems: "center", marginBottom: 13 }}>
-              <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 660 }}>Feedback</h3>
+              <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 660 }}>Review</h3>
               <button onClick={() => setOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
             </div>
 
@@ -148,7 +148,10 @@ export function FeedbackMenu(props: {
               {/* Drafts */}
               {draftCount > 0 && (
                 <div>
-                  <div style={{ fontSize: 11.5, color: "#E0A54B", fontWeight: 600, marginBottom: 8 }}>Drafts — not sent yet</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 800, color: "#fff", background: "#E5484D", borderRadius: 999, minWidth: 18, textAlign: "center", padding: "1px 6px", boxShadow: "0 1px 3px rgba(0,0,0,.35)" }}>{draftCount}</span>
+                    <span style={{ fontSize: 11.5, color: "#E0A54B", fontWeight: 600 }}>Drafts — not sent</span>
+                  </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                     {draftDecision && (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #7A561D", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
@@ -175,7 +178,7 @@ export function FeedbackMenu(props: {
                     {draftSignatures.map((s) => (
                       <div key={s.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #2E55D4", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
                         <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>✍️ SIGN · P{s.page}</span>
-                        <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{s.signer_name}{s.style === "typed" ? "" : " · drawn"}</span>
+                        <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{s.signer_name}{s.style === "typed" ? "" : s.style === "uploaded" ? " · image" : " · drawn"}</span>
                         <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96", flexShrink: 0 }}>{fmtTime(s.at)}</span>
                         {del(() => removeDraftSignature(s.tempId))}
                       </div>

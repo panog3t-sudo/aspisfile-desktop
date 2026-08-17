@@ -89,7 +89,7 @@ type Props = {
   // E-signature — tap to place, render drawn/typed signatures in a box.
   signMode?:         boolean;
   onPlaceSignature?: (page: number, x: number, y: number) => void;
-  signatures?:       Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; signer_name?: string; draft?: boolean }>;
+  signatures?:       Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name?: string; draft?: boolean }>;
   // Reposition/resize a DRAFT signature box before send (page-fraction patch).
   onUpdateSignature?: (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void;
 };
@@ -516,10 +516,16 @@ export function TileRenderer({
               fontFamily: "system-ui", boxShadow: "0 2px 10px rgba(29,78,216,.45)",
             }}
           >
-            <span aria-hidden style={{ fontSize: 13 }}>✎</span>
-            Feedback
+            <span aria-hidden style={{ display: "flex" }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M4 16.6l.95-3.5L14.9 3.15a1.9 1.9 0 012.7 2.7L7.6 15.9 4 16.6z" stroke="#fff" strokeWidth={1.7} strokeLinejoin="round" />
+                <path d="M12.9 4.9l2.7 2.7" stroke="#fff" strokeWidth={1.5} strokeLinecap="round" />
+                <path d="M4.4 20.6h13.2" stroke="#fff" strokeWidth={2} strokeLinecap="round" />
+              </svg>
+            </span>
+            Review
             {(feedbackDraftCount ?? 0) > 0 && (
-              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9, fontWeight: 700, color: "#3A2A00", background: "#F4BF4F", borderRadius: 20, padding: "1px 6px" }}>{feedbackDraftCount}</span>
+              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 800, color: "#fff", background: "#E5484D", borderRadius: 999, minWidth: 18, textAlign: "center", padding: "1px 6px", boxShadow: "0 1px 3px rgba(0,0,0,.35)" }}>{feedbackDraftCount}</span>
             )}
           </button>
         )}
@@ -883,6 +889,9 @@ export function TileRenderer({
                         <polyline key={i} points={st.map((p) => `${p.x * 100},${p.y * 100}`).join(" ")} fill="none" stroke="#0E1130" strokeWidth={1.7} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
                       ))}
                     </svg>
+                  ) : s.style === "uploaded" ? (
+                    <img src={s.image_data ?? ""} alt="" draggable={false}
+                      style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none", userSelect: "none" }} />
                   ) : (
                     <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", color: "#0E1130", fontSize: "58cqh", overflow: "hidden", whiteSpace: "nowrap", lineHeight: 1, pointerEvents: "none" }}>{s.typed_name}</div>
                   )}

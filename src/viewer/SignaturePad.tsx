@@ -11,7 +11,8 @@ import { useRef, useState } from "react";
 
 export type SignatureData =
   | { style: "drawn"; points: Array<Array<{ x: number; y: number }>>; signer_name: string }
-  | { style: "typed"; typed_name: string; signer_name: string };
+  | { style: "typed"; typed_name: string; signer_name: string }
+  | { style: "uploaded"; image_data: string; aspect?: number; signer_name: string };
 
 const PAD_W = 360, PAD_H = 150;   // ~2.4:1, matches the on-page signature box aspect
 
@@ -29,8 +30,10 @@ function clearSavedSig(email: string) { try { localStorage.removeItem(SIG_KEY(em
 
 export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () => void; onDone: (s: SignatureData) => void; defaultName?: string }) {
   const emailKey = (defaultName ?? "").trim().toLowerCase();
-  const [tab, setTab] = useState<"draw" | "type">("draw");
+  const [tab, setTab] = useState<"draw" | "type" | "upload">("draw");
   const [typed, setTyped] = useState("");
+  const [upImg, setUpImg] = useState<{ dataUrl: string; aspect: number } | null>(null);
+  const [upErr, setUpErr] = useState<string | null>(null);
   const [strokes, setStrokes] = useState<Strokes>(() => loadSavedSig(emailKey) ?? []);
   const [hasSaved, setHasSaved] = useState(() => !!loadSavedSig(emailKey));
   const [save, setSave] = useState(true);   // remember this drawing on this device
@@ -47,9 +50,26 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
   const forget = () => { clearSavedSig(emailKey); setHasSaved(false); setSave(false); };
 
   const hasDrawing = strokes.some((st) => st.length > 1);
-  const canAdd = tab === "draw" ? hasDrawing : !!typed.trim();
+  const canAdd = tab === "draw" ? hasDrawing : tab === "type" ? !!typed.trim() : !!upImg;
   // Signer identity is the authenticated recipient — no separate name field.
   const drawnName = (defaultName ?? "").trim() || "Signature";
+
+  const onFile = (file: File | null | undefined) => {
+    setUpErr(null);
+    if (!file) return;
+    if (!/^image\/(png|jpe?g)$/.test(file.type)) { setUpErr("Please choose a PNG or JPG image."); return; }
+    if (file.size > 1_400_000) { setUpErr("Image is too large (max ~1.4 MB)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      const im = new Image();
+      im.onload = () => setUpImg({ dataUrl, aspect: im.naturalWidth && im.naturalHeight ? im.naturalWidth / im.naturalHeight : 2.4 });
+      im.onerror = () => setUpErr("That image could not be read.");
+      im.src = dataUrl;
+    };
+    reader.onerror = () => setUpErr("That image could not be read.");
+    reader.readAsDataURL(file);
+  };
 
   const submit = () => {
     if (!canAdd) return;
@@ -57,8 +77,10 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
       const pts = strokes.filter((st) => st.length > 1);
       if (save) saveSavedSig(emailKey, pts);
       onDone({ style: "drawn", points: pts, signer_name: drawnName });
-    } else {
+    } else if (tab === "type") {
       onDone({ style: "typed", typed_name: typed.trim(), signer_name: typed.trim() });
+    } else if (upImg) {
+      onDone({ style: "uploaded", image_data: upImg.dataUrl, aspect: upImg.aspect, signer_name: drawnName });
     }
   };
 
@@ -71,8 +93,8 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
         </div>
 
         <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          {(["draw", "type"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "8px", borderRadius: 9, border: `1px solid ${tab === t ? "#5C82EE" : "#2E3760"}`, background: tab === t ? "#1C2347" : "transparent", color: tab === t ? "#7C9CF5" : "#9098BC", cursor: "pointer", fontSize: 12.5, fontWeight: 640 }}>{t === "draw" ? "✍️ Draw" : "⌨ Type"}</button>
+          {(["draw", "type", "upload"] as const).map((t) => (
+            <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "8px", borderRadius: 9, border: `1px solid ${tab === t ? "#5C82EE" : "#2E3760"}`, background: tab === t ? "#1C2347" : "transparent", color: tab === t ? "#7C9CF5" : "#9098BC", cursor: "pointer", fontSize: 12.5, fontWeight: 640 }}>{t === "draw" ? "✍️ Draw" : t === "type" ? "⌨ Type" : "⬆ Upload"}</button>
           ))}
         </div>
 
@@ -96,10 +118,27 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
               <span style={{ fontSize: 12, color: "#9098BC" }}>{hasSaved ? "Update the signature saved on this device" : "Save this signature on this device for reuse"}</span>
             </button>
           </>
-        ) : (
+        ) : tab === "type" ? (
           <div style={{ width: "100%", aspectRatio: `${PAD_W} / ${PAD_H}`, background: "#FBFBF7", borderRadius: 10, border: "1px solid #2E3760", display: "grid", placeItems: "center", padding: 12 }}>
             <span style={{ fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", fontSize: 34, color: "#0E1130", textAlign: "center", lineHeight: 1.1 }}>{typed || "Your signature"}</span>
           </div>
+        ) : (
+          <>
+            {upImg ? (
+              <div style={{ width: "100%", aspectRatio: `${PAD_W} / ${PAD_H}`, background: "#FBFBF7", borderRadius: 10, border: "1px solid #2E3760", display: "grid", placeItems: "center", overflow: "hidden", padding: 10 }}>
+                <img src={upImg.dataUrl} alt="Signature preview" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+              </div>
+            ) : (
+              <label style={{ width: "100%", aspectRatio: `${PAD_W} / ${PAD_H}`, background: "#0E1228", borderRadius: 10, border: "1px dashed #3A426B", display: "grid", placeItems: "center", cursor: "pointer", color: "#9098BC", fontSize: 12.5, textAlign: "center", padding: 12 }}>
+                <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }} onChange={(e) => onFile(e.target.files?.[0])} />
+                <span>⬆ Click to choose a signature image<br /><span style={{ fontSize: 11, color: "#666E96" }}>PNG or JPG · max ~1.4&nbsp;MB</span></span>
+              </label>
+            )}
+            <div style={{ display: "flex", alignItems: "center", marginTop: 6, minHeight: 18 }}>
+              {upErr ? <span style={{ color: "#E96B5C", fontSize: 11.5 }}>{upErr}</span> : <span />}
+              {upImg && <button onClick={() => { setUpImg(null); setUpErr(null); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 12 }}>Choose another</button>}
+            </div>
+          </>
         )}
         {tab === "type" && (
           <input value={typed} onChange={(e) => setTyped(e.target.value)} maxLength={80} placeholder="Type your signature"
