@@ -145,8 +145,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // (recipient-only, deletable) until "Send". Overlay only.
   const [fbMode, setFbMode] = useState<"none" | "comment" | "draw" | "sign">("none");
   const [drawTool, setDrawTool] = useState<"pen" | "highlight">("pen");
+  // Draw/Highlight colour + thickness (1=thin 2=med 3=thick), chosen in the Review menu.
+  const [drawColor, setDrawColor] = useState("#5B9BF5");           // blue
+  const [drawThickness, setDrawThickness] = useState(2);
+  const [highlightColor, setHighlightColor] = useState("#F2C14E"); // yellow
+  const [highlightThickness, setHighlightThickness] = useState(2);
   const [sentComments, setSentComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
-  const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; kind?: "pen" | "highlight" }>>([]);
+  const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; thickness?: number | null; recipient_email?: string; kind?: "pen" | "highlight" }>>([]);
   const [sentSignatures, setSentSignatures] = useState<Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string }>>([]);
   const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
   const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
@@ -279,7 +284,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setSentComments(entries.filter((e: { kind: string }) => e.kind === "comment")
           .map((e: { id: string; page: number; x: number; y: number; body: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, body: e.body, recipient_email: e.recipient_email })));
         setSentMarkups(entries.filter((e: { kind: string }) => e.kind === "markup")
-          .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; recipient_email?: string; tool?: "pen" | "highlight" }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, recipient_email: e.recipient_email, kind: e.tool })));
+          .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; thickness?: number | null; recipient_email?: string; tool?: "pen" | "highlight" }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, thickness: e.thickness, recipient_email: e.recipient_email, kind: e.tool })));
         setSentSignatures(entries.filter((e: { kind: string }) => e.kind === "signature")
           .map((e: { id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, w: e.w, h: e.h, style: e.style, points: e.points, typed_name: e.typed_name, image_data: e.image_data, recipient_email: e.recipient_email })));
       }
@@ -305,11 +310,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     if (drawTool === "highlight") {
       const a = points[0], b = points[points.length - 1];
       const pts = [{ x: a.x, y: a.y }, { x: b.x, y: a.y }];   // snap horizontal at start height
-      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points: pts, color: "#EEFF00", kind: "highlight", at }]);
+      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points: pts, color: highlightColor, thickness: highlightThickness, kind: "highlight", at }]);
     } else {
-      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: "#E0A54B", kind: "pen", at }]);
+      setDraftMarkups((m) => [...m, { tempId: "d" + (++tempIdRef.current), page, points, color: drawColor, thickness: drawThickness, kind: "pen", at }]);
     }
-  }, [drawTool]);
+  }, [drawTool, drawColor, drawThickness, highlightColor, highlightThickness]);
   const removeDraftComment = useCallback((id: string) => setDraftComments((c) => c.filter((x) => x.tempId !== id)), []);
   const removeDraftMarkup  = useCallback((id: string) => setDraftMarkups((m) => m.filter((x) => x.tempId !== id)), []);
 
@@ -363,7 +368,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           session_id: sessionId,
           decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
           comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
-          markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color, kind: m.kind })) : undefined,
+          markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color, thickness: m.thickness, kind: m.kind })) : undefined,
           signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, image_data: s.image_data, signer_name: s.signer_name })) : undefined,
         }),
       });
@@ -1441,9 +1446,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             draftPin={pendingComment}
             onPlaceComment={recipientFeedback ? onPlaceComment : undefined}
             drawMode={fbMode === "draw"}
-            drawColor="#E0A54B"
+            drawColor={drawTool === "highlight" ? highlightColor : drawColor}
+            drawThickness={drawTool === "highlight" ? highlightThickness : drawThickness}
             drawTool={drawTool}
-            markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, draft: true, kind: d.kind }))]}
+            markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, thickness: d.thickness, draft: true, kind: d.kind }))]}
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             signMode={fbMode === "sign"}
             onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}
@@ -1669,6 +1675,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           fileId={file.id} sessionId={sessionId}
           mode={fbMode} setMode={setFbMode}
           drawTool={drawTool} setDrawTool={setDrawTool}
+          drawColor={drawColor} setDrawColor={setDrawColor}
+          drawThickness={drawThickness} setDrawThickness={setDrawThickness}
+          highlightColor={highlightColor} setHighlightColor={setHighlightColor}
+          highlightThickness={highlightThickness} setHighlightThickness={setHighlightThickness}
           draftDecision={draftDecision} setDraftDecision={setDraftDecision}
           draftComments={draftComments} removeDraftComment={removeDraftComment}
           draftMarkups={draftMarkups} removeDraftMarkup={removeDraftMarkup}

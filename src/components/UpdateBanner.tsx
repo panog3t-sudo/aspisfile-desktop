@@ -87,7 +87,14 @@ export default function UpdateBanner() {
         )}
       </div>
       <button
-        onClick={() => openDownload(info.url)}
+        onClick={() => {
+          // Open the /download PAGE (with install steps + "close when done"),
+          // not the raw .pkg/.exe URL — a direct binary link opens a blank
+          // browser tab that just downloads the file with no instructions.
+          let page = "https://aspisfile.com/download";
+          try { page = new URL(info.url).origin + "/download"; } catch { /* keep default */ }
+          openDownload(page);
+        }}
         style={{
           flexShrink: 0, fontSize: 11.5, fontWeight: 500, padding: "6px 12px",
           borderRadius: 5, border: "none", background: "#2E55D4", color: "#fff",

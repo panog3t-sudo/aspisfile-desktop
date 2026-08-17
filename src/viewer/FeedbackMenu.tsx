@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type CSSProperties } from "react";
 
 // Recipient feedback — unified draft-then-send menu.
 //
@@ -13,7 +13,7 @@ declare const __API_BASE__: string;
 
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
-export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; kind?: "pen" | "highlight"; at: string };
+export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; thickness?: number; kind?: "pen" | "highlight"; at: string };
 export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name: string; at: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
@@ -30,6 +30,12 @@ const DEC_META: Record<Decision, { label: string; color: string; bg: string; ico
   changes_requested: { label: "Changes requested", color: "#E0A54B", bg: "#332510", icon: "!" },
   rejected:          { label: "Rejected",          color: "#E96B5C", bg: "#331512", icon: "✕" },
 };
+// Draw/Highlight palette — 5 swatches matching the approved mockup.
+const COLORS: { k: string; c: string }[] = [
+  { k: "yellow", c: "#F2C14E" }, { k: "green", c: "#5DBE6E" }, { k: "blue", c: "#5B9BF5" },
+  { k: "pink", c: "#E85C8A" }, { k: "purple", c: "#B57BE0" },
+];
+
 const fmtTime = (iso: string) => { try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
 
 const chip = { fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 999 } as const;
@@ -44,6 +50,16 @@ export function FeedbackMenu(props: {
   setMode: (m: "none" | "comment" | "draw" | "sign") => void;
   drawTool: "pen" | "highlight";
   setDrawTool: (t: "pen" | "highlight") => void;
+  // Draw + Highlight colour/thickness — selected in the accordion, applied by
+  // the parent (SecureViewer) when a stroke completes.
+  drawColor: string;
+  setDrawColor: (c: string) => void;
+  drawThickness: number;            // 1=thin, 2=medium, 3=thick
+  setDrawThickness: (t: number) => void;
+  highlightColor: string;
+  setHighlightColor: (c: string) => void;
+  highlightThickness: number;
+  setHighlightThickness: (t: number) => void;
   draftDecision: { decision: Decision; note: string } | null;
   setDraftDecision: (d: { decision: Decision; note: string } | null) => void;
   draftComments: DraftComment[];
@@ -60,10 +76,12 @@ export function FeedbackMenu(props: {
   open: boolean;
   setOpen: (b: boolean) => void;
 }) {
-  const { mode, setMode, drawTool, setDrawTool, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen } = props;
+  const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen } = props;
   const [confirm, setConfirm] = useState(false);
   const [sent, setSent] = useState<SentEntry[]>([]);
   const [note, setNote] = useState(draftDecision?.note ?? "");
+  // Which accordion section is expanded (only one at a time).
+  const [expanded, setExpanded] = useState<null | "respond" | "draw" | "highlight" | "sign">(null);
 
   const load = useCallback(async () => {
     try {
@@ -79,6 +97,39 @@ export function FeedbackMenu(props: {
   const draftCount = (draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length;
   const enterMode = (m: "comment" | "draw" | "sign") => { setMode(m); setOpen(false); };
   const doSend = async () => { const ok = await onSend(); if (ok) { setConfirm(false); setNote(""); await load(); } };
+
+  // ── Accordion shared styles + colour/thickness pickers ──
+  const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "10px 10px", background: "none", border: "none", color: "#EAEFFB", cursor: "pointer", fontFamily: "inherit", textAlign: "left", borderRadius: 11 };
+  const iconBox: CSSProperties = { width: 26, height: 26, borderRadius: 8, background: "#1A2038", display: "grid", placeItems: "center", color: "#9DB4FF", flexShrink: 0, fontSize: 14 };
+  const bodyStyle: CSSProperties = { padding: "0 10px 12px 48px" };
+  const fieldLabel: CSSProperties = { fontSize: 10.5, fontWeight: 680, letterSpacing: "0.05em", textTransform: "uppercase", color: "#666E96", margin: "10px 0 8px" };
+  const startBtn: CSSProperties = { width: "100%", marginTop: 12, background: "#2E55D4", color: "#fff", border: "none", borderRadius: 10, padding: "9px", fontSize: 12.5, fontWeight: 660, cursor: "pointer", fontFamily: "inherit" };
+  const caret = (isOpen: boolean) => <span style={{ color: "#666E96", fontSize: 15, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s", flexShrink: 0, lineHeight: 1 }}>›</span>;
+  const swatches = (value: string, onChange: (c: string) => void) => (
+    <div style={{ display: "flex", gap: 9 }}>
+      {COLORS.map((x) => {
+        const on = value === x.c;
+        return <button key={x.k} onClick={() => onChange(x.c)} title={x.k}
+          style={{ width: 24, height: 24, borderRadius: "50%", background: x.c, cursor: "pointer",
+            border: on ? "2px solid #fff" : "2px solid transparent", boxShadow: on ? "0 0 0 2px #2E55D4" : "none",
+            display: "grid", placeItems: "center", color: "#0c1220", fontSize: 12, fontWeight: 900 }}>{on ? "✓" : ""}</button>;
+      })}
+    </div>
+  );
+  const thicknessPicker = (value: number, onChange: (t: number) => void, hi: boolean) => (
+    <div style={{ display: "flex", gap: 8 }}>
+      {[1, 2, 3].map((t) => {
+        const on = value === t;
+        const h = hi ? [8, 12, 17][t - 1] : [2, 4, 7][t - 1];
+        return <button key={t} onClick={() => onChange(t)}
+          style={{ height: 34, minWidth: 44, borderRadius: 9, cursor: "pointer",
+            border: on ? "1px solid #2E55D4" : "1px solid #2E3760", background: on ? "#1A2347" : "transparent",
+            display: "grid", placeItems: "center" }}>
+          <span style={{ width: 24, height: h, background: "#EAEFFB", borderRadius: hi ? 2 : 99, opacity: hi ? 0.55 : 1 }} />
+        </button>;
+      })}
+    </div>
+  );
 
   // Collapsed + in comment/draw mode → the "Done" hint bar.
   if (mode !== "none" && !open) {
@@ -100,54 +151,118 @@ export function FeedbackMenu(props: {
       {/* Launcher moved to the top toolbar (TileRenderer). This component now
           only renders the menu overlay + the in-mode "Done" hint bar. */}
       {open && (
-        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(4,6,14,.55)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 460, margin: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 16,
-            padding: "16px 16px 18px", boxShadow: "0 24px 60px rgba(0,0,0,.6)", maxHeight: "84vh", display: "flex", flexDirection: "column",
+        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10001, background: "transparent" }}>
+          {/* Top-left dropdown, anchored under the Review launcher in the toolbar. */}
+          <div onClick={(e) => e.stopPropagation()} style={{ position: "fixed", top: 50, left: 12, width: 340, maxWidth: "calc(100vw - 24px)", background: "#0F1424", border: "1px solid #2E3760", borderRadius: 14,
+            padding: "10px 10px 12px", boxShadow: "0 24px 64px rgba(0,0,0,.6)", maxHeight: "82vh", display: "flex", flexDirection: "column",
             fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", color: "#EAEFFB" }}>
             <div style={{ display: "flex", alignItems: "center", marginBottom: 13 }}>
               <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 660 }}>Review</h3>
               <button onClick={() => setOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
             </div>
 
-            <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
-              {/* Respond */}
-              <div>
-                <div style={{ fontSize: 11.5, color: "#9098BC", fontWeight: 600, marginBottom: 8 }}>Your response</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 9 }}>
-                  {CHOICES.map((c) => {
-                    const on = draftDecision?.decision === c.key;
-                    return (
-                      <button key={c.key} onClick={() => setDraftDecision({ decision: c.key, note })}
-                        style={{ border: `1px solid ${on ? c.color : c.border}`, borderRadius: 11, padding: "10px 6px", background: on ? c.bg : "transparent", cursor: "pointer",
-                          display: "flex", flexDirection: "column", alignItems: "center", gap: 6, boxShadow: on ? `0 0 0 1px ${c.color} inset` : "none" }}>
-                        <span style={{ width: 28, height: 28, borderRadius: 8, background: c.bg, color: c.color, display: "grid", placeItems: "center", fontSize: 14, fontWeight: 700 }}>{c.icon}</span>
-                        <span style={{ fontSize: 11, fontWeight: 640, color: c.color }}>{c.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <textarea value={note} onChange={(e) => { setNote(e.target.value); if (draftDecision) setDraftDecision({ ...draftDecision, note: e.target.value }); }}
-                  maxLength={2000} placeholder="Add a note (optional)…"
-                  style={{ width: "100%", minHeight: 48, resize: "vertical", boxSizing: "border-box", marginTop: 9, border: "1px solid #2E3760", background: "#080A14", color: "#EAEFFB", borderRadius: 10, padding: "9px 11px", fontSize: 13, fontFamily: "inherit" }} />
+            <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+              {/* Respond (accordion) */}
+              <div style={{ background: expanded === "respond" ? "#161c33" : "transparent", borderRadius: 11 }}>
+                <button onClick={() => setExpanded(expanded === "respond" ? null : "respond")} style={rowStyle}>
+                  <span style={iconBox}>✓</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Respond</span>
+                    <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>{draftDecision ? DEC_META[draftDecision.decision].label : "Approve, request a change, or reject"}</span>
+                  </span>
+                  {draftDecision && <span style={{ width: 11, height: 11, borderRadius: "50%", background: DEC_META[draftDecision.decision].color, flexShrink: 0 }} />}
+                  {caret(expanded === "respond")}
+                </button>
+                {expanded === "respond" && (
+                  <div style={bodyStyle}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                      {CHOICES.map((c) => {
+                        const on = draftDecision?.decision === c.key;
+                        return (
+                          <button key={c.key} onClick={() => setDraftDecision({ decision: c.key, note })}
+                            style={{ border: `1px solid ${on ? c.color : c.border}`, borderRadius: 10, padding: "9px 4px", background: on ? c.bg : "transparent", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 5, boxShadow: on ? `0 0 0 1px ${c.color} inset` : "none" }}>
+                            <span style={{ width: 26, height: 26, borderRadius: 8, background: c.bg, color: c.color, display: "grid", placeItems: "center", fontSize: 14, fontWeight: 800 }}>{c.icon}</span>
+                            <span style={{ fontSize: 10.5, fontWeight: 660, color: c.color }}>{c.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <textarea value={note} onChange={(e) => { setNote(e.target.value); if (draftDecision) setDraftDecision({ ...draftDecision, note: e.target.value }); }}
+                      maxLength={2000} placeholder="Add a note (optional)…"
+                      style={{ width: "100%", minHeight: 44, resize: "vertical", boxSizing: "border-box", marginTop: 8, border: "1px solid #2E3760", background: "#080A14", color: "#EAEFFB", borderRadius: 9, padding: "8px 10px", fontSize: 12.5, fontFamily: "inherit" }} />
+                  </div>
+                )}
               </div>
 
-              {/* Annotate */}
-              <div style={{ display: "flex", gap: 9 }}>
-                <button onClick={() => enterMode("comment")} style={{ flex: 1, border: "1px solid #2E3760", background: "#1A1F3A", color: "#EAEFFB", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>💬 Comment</button>
-                <button onClick={() => { setDrawTool("pen"); enterMode("draw"); }} style={{ flex: 1, border: "1px solid #2E3760", background: "#1A1F3A", color: "#EAEFFB", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>✎ Draw</button>
-                <button onClick={() => { setDrawTool("highlight"); enterMode("draw"); }} style={{ flex: 1, border: "1px solid #7A561D", background: "#332510", color: "#E0A54B", borderRadius: 10, padding: "10px 6px", fontSize: 12, fontWeight: 640, cursor: "pointer" }}>🖍 Highlight</button>
+              {/* Comment (row) */}
+              <button onClick={() => enterMode("comment")} style={rowStyle}>
+                <span style={iconBox}>💬</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Comment</span>
+                  <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Tap a spot on the page to add a note</span>
+                </span>
+                {caret(false)}
+              </button>
+
+              {/* Draw (accordion) */}
+              <div style={{ background: expanded === "draw" ? "#161c33" : "transparent", borderRadius: 11 }}>
+                <button onClick={() => setExpanded(expanded === "draw" ? null : "draw")} style={rowStyle}>
+                  <span style={iconBox}>✎</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Draw</span>
+                    <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Freehand pen — colour &amp; thickness</span>
+                  </span>
+                  <span style={{ width: 12, height: 12, borderRadius: "50%", background: drawColor, flexShrink: 0 }} />
+                  {caret(expanded === "draw")}
+                </button>
+                {expanded === "draw" && (
+                  <div style={bodyStyle}>
+                    <div style={fieldLabel}>Colour</div>
+                    {swatches(drawColor, setDrawColor)}
+                    <div style={fieldLabel}>Thickness</div>
+                    {thicknessPicker(drawThickness, setDrawThickness, false)}
+                    <button onClick={() => { setDrawTool("pen"); enterMode("draw"); }} style={startBtn}>Start drawing</button>
+                  </div>
+                )}
               </div>
 
-              {/* Sign — its own prominent row (an e-signature is a heavier action) */}
-              <button onClick={() => enterMode("sign")} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", border: "1px solid #2E55D4", background: "#141C3D", color: "#EAEFFB", borderRadius: 11, padding: "11px 13px", fontSize: 13, fontWeight: 640, cursor: "pointer", textAlign: "left" }}>
-                <span aria-hidden style={{ fontSize: 16 }}>✍️</span>
-                <span style={{ flex: 1 }}>Sign the document</span>
-                <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#7C9CF5", background: "#1C2347", padding: "2px 7px", borderRadius: 999 }}>PASSKEY-VERIFIED</span>
+              {/* Highlight (accordion) */}
+              <div style={{ background: expanded === "highlight" ? "#161c33" : "transparent", borderRadius: 11 }}>
+                <button onClick={() => setExpanded(expanded === "highlight" ? null : "highlight")} style={rowStyle}>
+                  <span style={iconBox}>🖍</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Highlight</span>
+                    <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Marker across the page — colour &amp; width</span>
+                  </span>
+                  <span style={{ width: 12, height: 12, borderRadius: "50%", background: highlightColor, flexShrink: 0 }} />
+                  {caret(expanded === "highlight")}
+                </button>
+                {expanded === "highlight" && (
+                  <div style={bodyStyle}>
+                    <div style={fieldLabel}>Colour</div>
+                    {swatches(highlightColor, setHighlightColor)}
+                    <div style={fieldLabel}>Width</div>
+                    {thicknessPicker(highlightThickness, setHighlightThickness, true)}
+                    <button onClick={() => { setDrawTool("highlight"); enterMode("draw"); }} style={startBtn}>Start highlighting</button>
+                  </div>
+                )}
+              </div>
+
+              {/* Sign (row → SignaturePad: draw / type / upload) */}
+              <button onClick={() => enterMode("sign")} style={rowStyle}>
+                <span style={iconBox}>✍️</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Sign</span>
+                  <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Draw it, type it, or upload
+                    <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9, color: "#7C9CF5", background: "#1C2347", padding: "1px 6px", borderRadius: 999, marginLeft: 5 }}>PASSKEY-VERIFIED</span>
+                  </span>
+                </span>
+                {caret(false)}
               </button>
 
               {/* Drafts */}
               {draftCount > 0 && (
-                <div>
+                <div style={{ borderTop: "1px solid #242B4C", marginTop: 8, paddingTop: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                     <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 800, color: "#fff", background: "#E5484D", borderRadius: 999, minWidth: 18, textAlign: "center", padding: "1px 6px", boxShadow: "0 1px 3px rgba(0,0,0,.35)" }}>{draftCount}</span>
                     <span style={{ fontSize: 11.5, color: "#E0A54B", fontWeight: 600 }}>Drafts — not sent</span>
