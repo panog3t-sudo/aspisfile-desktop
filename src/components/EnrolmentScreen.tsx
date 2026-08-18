@@ -547,7 +547,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
             )}
 
             <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
-              Codes expire 60 minutes after they&apos;re emailed, or 24 hours after the sender shows them. Single-use.
+              Codes expire 15 minutes after they&apos;re emailed, or 24 hours after the sender shows them. Single-use.
             </p>
           </>
         )}
