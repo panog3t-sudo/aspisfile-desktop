@@ -38,9 +38,15 @@ type Props = {
   // Access token for the file, if we came from one. Enables the "Email me a
   // code" self-service action (request-fresh-code). Absent from the idle path.
   token?: string;
+  // COLD SIGN-IN — the viewer opened with no token AND no passkey (fresh install,
+  // or a fallback from a failed deep-link). The recipient signs in by typing their
+  // email → we email a code (the token-less /recipient/signin-code endpoint) →
+  // code + Touch ID/Windows Hello → passkey → Home lists their files. This is the
+  // universal "not signed in" screen; it never leaves the user in limbo.
+  coldSignIn?: boolean;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: Props) {
+export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, coldSignIn }: Props) {
   // Locked when we know the recipient from the file — the code is bound to this
   // exact address, so editing it could only ever produce a mismatch.
   const emailLocked = !!initialEmail;
@@ -68,6 +74,13 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
   // unlikely to arrive — flips the waiting copy from "hang tight" to
   // actionable rather than spinning forever.
   const [handoffSlow, setHandoffSlow] = useState(false);
+  // OS for copy — Touch ID (macOS) vs Windows Hello. Read once on mount so the
+  // sign-in copy is correct on both (the old screen hard-coded "Mac"/"Touch ID").
+  const [platform, setPlatform] = useState<"macos" | "windows" | "unknown">("unknown");
+  useEffect(() => {
+    invoke<string>("get_platform").then((p) => setPlatform(p === "macos" ? "macos" : p === "windows" ? "windows" : "unknown")).catch(() => {});
+  }, []);
+  const bio = platform === "macos" ? "Touch ID" : platform === "windows" ? "Windows Hello" : "Touch ID or Windows Hello";
 
   // ── Poll fallback for the browser handoff ────────────────────────────
   // The browser is supposed to fire aspisfile://enrol-complete when the
@@ -148,16 +161,31 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
   // address typed here), so this can't be used to redirect a code to a
   // forwarder — it only ever helps the real invitee.
   async function handleResend() {
-    if (!token || resendState === "sending" || cooldown > 0) return;
+    if (resendState === "sending" || cooldown > 0) return;
+    // Cold sign-in (no token): email a code to the typed address via the
+    // token-less endpoint. Requires a valid email first.
+    const cleanEmail = email.trim().toLowerCase();
+    if (!token && coldSignIn && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setResendState("error");
+      setResendMsg("Enter the email your file was sent to, then request a code.");
+      return;
+    }
+    if (!token && !coldSignIn) return;   // no way to send without a token or cold mode
     setResendState("sending");
     setError("");
     try {
-      const res = await fetch(`${BASE}/api/v1/access/${token}/request-fresh-code`, { method: "POST" });
+      const res = token
+        ? await fetch(`${BASE}/api/v1/access/${token}/request-fresh-code`, { method: "POST" })
+        : await fetch(`${BASE}/api/v1/recipient/signin-code`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: cleanEmail }),
+          });
       if (res.ok) {
         setResendState("sent");
         setResendMsg(
-          email.trim()
-            ? `Sent to ${email.trim().toLowerCase()} — check your inbox (and spam).`
+          cleanEmail
+            ? `Sent to ${cleanEmail} — check your inbox (and spam).`
             : "Sent — check your inbox (and spam).",
         );
         setCooldown(60);
@@ -359,7 +387,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
               Do you have a setup code?
             </h1>
             <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 16px" }}>
-              To finish setting up on this Mac you&apos;ll enter a one-time code that we email to you.
+              To finish signing in on this device you&apos;ll enter a one-time code that we email to you.
             </p>
 
             {emailLocked && (
@@ -392,7 +420,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
             )}
 
             <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
-              The code is emailed to you and finishes with Touch ID — no browser, no password.
+              The code is emailed to you and finishes with {bio}.
             </p>
           </>
         )}
@@ -401,7 +429,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
         {phase === "input" && hasCode !== null && (
           <>
             <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
-              Enter your setup code
+              {coldSignIn && !emailLocked ? "Sign in to AspisFile Viewer" : "Enter your setup code"}
             </h1>
 
             {emailLocked ? (
@@ -422,16 +450,23 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
                 )}
                 <p style={{ fontSize: 13, color: resendState === "sent" ? "#86EFAC" : "#94A3B8", lineHeight: 1.6, margin: "16px 0 0" }}>
                   {resendState === "sent"
-                    ? `✓ ${resendMsg} Enter it below — we'll ask for Touch ID to finish.`
-                    : <>Check your inbox (and spam) for your code, then enter it below. We&apos;ll ask for Touch ID to finish — no browser, no password.</>}
+                    ? `✓ ${resendMsg} Enter it below — we'll ask for ${bio} to finish.`
+                    : <>Check your inbox (and spam) for your code, then enter it below. We&apos;ll ask for {bio} to finish.</>}
                 </p>
               </>
             ) : (
               <>
-                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
-                  Enter your email and the setup code from your inbox. We&apos;ll ask for Touch ID to finish.
+                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 16px" }}>
+                  {coldSignIn
+                    ? <>Your document is ready. Sign in with the email address it was sent to, and we&apos;ll open it here.</>
+                    : <>Enter your email and the setup code from your inbox. We&apos;ll ask for {bio} to finish.</>}
                 </p>
-                <Label>Email</Label>
+                {coldSignIn && (
+                  <p style={{ fontSize: 12, color: "#64748B", lineHeight: 1.7, margin: "0 0 18px" }}>
+                    <b style={{ color: "#94A3B8" }}>1.</b> Enter your email &nbsp;·&nbsp; <b style={{ color: "#94A3B8" }}>2.</b> Enter the code we email you &nbsp;·&nbsp; <b style={{ color: "#94A3B8" }}>3.</b> Confirm with {bio}
+                  </p>
+                )}
+                <Label>Email address</Label>
                 <input
                   type="email"
                   value={email}
@@ -443,6 +478,25 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
                   spellCheck={false}
                   autoFocus
                 />
+                {coldSignIn && (
+                  <>
+                    <button
+                      onClick={handleResend}
+                      disabled={resendState === "sending" || cooldown > 0}
+                      style={{ ...btnSecondary, marginTop: 10, opacity: (resendState === "sending" || cooldown > 0) ? 0.5 : 1 }}
+                    >
+                      {resendState === "sending" ? "Sending…" : cooldown > 0 ? `Email me a code (${cooldown}s)` : "Email me a code"}
+                    </button>
+                    {resendMsg && (
+                      <p style={{ fontSize: 12, color: resendState === "sent" ? "#86EFAC" : "#FCA5A5", lineHeight: 1.5, margin: "8px 0 0" }}>
+                        {resendState === "sent" ? "✓ " : ""}{resendMsg}
+                      </p>
+                    )}
+                    <p style={{ fontSize: 11.5, color: "#64748B", margin: "10px 0 0", lineHeight: 1.5 }}>
+                      Use the same address the sender shared the file with. The code expires in 15 minutes.
+                    </p>
+                  </>
+                )}
               </>
             )}
 
@@ -513,7 +567,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
               Confirm with Touch ID
             </h2>
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
-              Approve the system prompt to finish enrollment.
+              Approve the system prompt to finish signing in.
             </p>
           </div>
         )}
@@ -561,7 +615,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token }: P
             <p style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
               {handoffSlow
                 ? "Still waiting. If you\u2019ve already confirmed in the browser, this will finish on its own in a few seconds \u2014 we\u2019re checking with the server directly. Your browser may also be asking permission to reopen AspisFile Viewer; allow it if so."
-                : <>We&apos;ve opened a secure enrollment page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key &mdash; AspisFile will take over automatically when you&apos;re done.</>}
+                : <>We&apos;ve opened a secure sign-in page in your default browser. Confirm there using Touch ID, Windows Hello, your phone or a security key &mdash; AspisFile Viewer will take over automatically when you&apos;re done.</>}
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
               <button onClick={handleRestart} style={btnSecondary}>Use a different code</button>

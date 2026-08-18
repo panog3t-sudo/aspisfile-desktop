@@ -7,9 +7,9 @@ const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://a
 
 type Props = {
   onLink:   (url: string) => void;
-  // Phase A+ Stage 4 — invoked when the user taps "I have an
-  // enrollment code". App.tsx switches to the EnrolmentScreen.
-  onEnrol?: () => void;
+  // Sign in on this device → App.tsx switches to EnrolmentScreen. cold=true
+  // (default) = the email→code sign-in; cold=false = the user already has a code.
+  onEnrol?: (cold?: boolean) => void;
   // Phase 3 — invoked when an enrolled recipient whose session has
   // expired taps "Sign back in". Resolves { ok } on success (App opens
   // any pending file), or { ok:false, message } to show inline.
@@ -374,7 +374,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
 
           {onEnrol && (
             <button
-              onClick={onEnrol}
+              onClick={() => onEnrol(false)}
               style={{ alignSelf: "center", marginTop: 2, background: "transparent", border: "none", color: "#94A3B8", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
             >
               Use a different setup code
@@ -430,7 +430,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           )}
           {onEnrol && (
             <button
-              onClick={onEnrol}
+              onClick={() => onEnrol(false)}
               style={{ marginTop: 4, background: "transparent", border: "none", color: "#94A3B8", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
             >
               Use a different setup code
@@ -441,19 +441,29 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
 
       {/* ── Not enrolled → quiet setup-code fallback ──────────────────── */}
       {!session && onEnrol && (
-        // Last-resort fallback — a quiet link, not a prominent button. The
-        // primary path is to open the file link (which enrols automatically);
-        // this is here for the recipient who was emailed a setup code. Same
-        // label as the code email's "tap 'I have a setup code'".
-        <button
-          onClick={onEnrol}
-          style={{
-            marginTop: 16, background: "transparent", border: "none", color: "#64748B",
-            padding: "6px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
-          }}
-        >
-          I have a setup code
-        </button>
+        // Not signed in → sign in right here (email → code → Touch ID/Hello),
+        // no need to bounce back to the browser. This is the universal
+        // not-signed-in entry, so a failed deep link never dead-ends.
+        <div style={{ width: "100%", maxWidth: 360, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginTop: 20 }}>
+          <button
+            onClick={() => onEnrol(true)}
+            style={{
+              width: "100%", background: "#2E55D4", border: "none", color: "#fff",
+              padding: "12px 0", borderRadius: 10, fontSize: 14, fontWeight: 640, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            Sign in to AspisFile Viewer
+          </button>
+          <button
+            onClick={() => onEnrol(false)}
+            style={{
+              background: "transparent", border: "none", color: "#64748B",
+              padding: "4px 8px", fontSize: 11.5, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
+            }}
+          >
+            I already have a setup code
+          </button>
+        </div>
       )}
 
       {/* Dev-mode URL input — paste a share link to test without deep link */}

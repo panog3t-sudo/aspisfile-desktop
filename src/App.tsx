@@ -312,6 +312,10 @@ function AppContent() {
   // screen's "Email me a code" action can call request-fresh-code. Null when the
   // screen is reached from idle (no file context) — the resend button is hidden.
   const [enrolToken, setEnrolToken] = useState<string | null>(null);
+  // Cold sign-in — the viewer is not signed in and has no file token; the manual
+  // screen leads with email → "Email me a code" (token-less endpoint). The
+  // universal "not signed in" entry (default + failure fallback), no limbo.
+  const [enrolCold, setEnrolCold] = useState(false);
   // Drives EnrolmentWaitingScreen — the visible, self-completing state for
   // the rt auto-enrolment path (replaces sitting on a blank IdleScreen).
   const [enrolWait, setEnrolWait] = useState<
@@ -686,10 +690,13 @@ function AppContent() {
   // a fresh enrolment isn't blocked by a previous one in the same session.
   // An optional prefillEmail (from a CODE_REQUIRED response) pre-fills the
   // email field so the recipient can't fat-finger a mismatching address.
-  function enterManualEnrol(prefillEmail?: string, token?: string) {
+  function enterManualEnrol(prefillEmail?: string, token?: string, cold?: boolean) {
     enrolCompletedRef.current = false;
     setEnrolPrefill(typeof prefillEmail === "string" ? prefillEmail : null);
     setEnrolToken(typeof token === "string" ? token : null);
+    // Cold sign-in when explicitly requested, or implicitly whenever we have
+    // neither a prefilled email nor a token (a bare idle sign-in).
+    setEnrolCold(cold ?? (!prefillEmail && !token));
     setMode("enrol");
   }
 
@@ -1093,6 +1100,7 @@ function AppContent() {
         // that won't match the code; the token powers the "Email me a code" action.
         initialEmail={enrolPrefill ?? undefined}
         token={enrolToken ?? undefined}
+        coldSignIn={enrolCold}
         // Path B: onComplete is only fired if a future inline-enrolment
         // implementation triggers it. With the browser-redirect path
         // currently active, the aspisfile://enrol-complete deep-link
@@ -1110,7 +1118,7 @@ function AppContent() {
   return (
     <IdleScreen
       onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
-      onEnrol={() => enterManualEnrol()}
+      onEnrol={(cold?: boolean) => enterManualEnrol(undefined, undefined, cold ?? true)}
       onSignIn={handleIdleSignIn}
       onOpenToken={(token) => openLinkRef.current?.({ token, sig: null, env: null, present: false, coview: null, rt: null })}
     />
