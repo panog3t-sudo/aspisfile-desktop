@@ -66,6 +66,30 @@ declare const __API_BASE__: string;
 
 const BASE = (typeof __API_BASE__ !== 'undefined' && __API_BASE__) || 'https://aspisfile.com';
 
+// Fire-and-forget telemetry for the NATIVE bridge (macOS AS bridge) outcome.
+// Until now only the browser ceremony (/enroll/desktop) reported outcomes, so we
+// had no data on how often the native bridge succeeds/fails — needed to decide
+// whether a worst-case fallback is required (see docs/native-signin-design.md).
+// source='native_bridge' distinguishes these from the browser telemetry.
+function reportNativeOutcome(
+  step: 'register' | 'authenticate',
+  outcome: 'success' | 'failed',
+  email?: string,
+  errorName?: string,
+  durationMs?: number,
+) {
+  try {
+    void fetch(`${BASE}/api/v1/recipient-passkeys/telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        outcome, step, source: 'native_bridge', has_platform_auth: true,
+        error_name: errorName?.slice(0, 80), duration_ms: durationMs ?? null, email,
+      }),
+    }).catch(() => {});
+  } catch { /* never let telemetry affect the ceremony */ }
+}
+
 export type PasskeyErrorKind =
   | 'unsupported'
   | 'cancelled'
@@ -124,12 +148,17 @@ export async function registerPasskey(params: {
   // 2. WebAuthn ceremony — native AS bridge on macOS (in-window
   //    Touch ID), simplewebauthn elsewhere (Windows Hello via WKWebView2).
   let credential;
+  const useBridge = await isMacBridge();
+  const t0 = Date.now();
   try {
-    credential = (await isMacBridge())
+    credential = useBridge
       ? await bridgeRegister(options)
       : await startRegistration({ optionsJSON: options });
+    if (useBridge) reportNativeOutcome('register', 'success', params.email, undefined, Date.now() - t0);
   } catch (err: any) {
-    throw normaliseWebAuthnError(err);
+    const normalised = normaliseWebAuthnError(err);
+    if (useBridge) reportNativeOutcome('register', 'failed', params.email, `${normalised.kind}:${err?.name ?? err?.message ?? 'unknown'}`, Date.now() - t0);
+    throw normalised;
   }
 
   // 3. Verify on server
@@ -198,12 +227,17 @@ export async function authenticatePasskey(params: {
   const options: PublicKeyCredentialRequestOptionsJSON = await optionsRes.json();
 
   let credential;
+  const useBridge = await isMacBridge();
+  const t0 = Date.now();
   try {
-    credential = (await isMacBridge())
+    credential = useBridge
       ? await bridgeAuthenticate(options)
       : await startAuthentication({ optionsJSON: options });
+    if (useBridge) reportNativeOutcome('authenticate', 'success', params.email, undefined, Date.now() - t0);
   } catch (err: any) {
-    throw normaliseWebAuthnError(err);
+    const normalised = normaliseWebAuthnError(err);
+    if (useBridge) reportNativeOutcome('authenticate', 'failed', params.email, `${normalised.kind}:${err?.name ?? err?.message ?? 'unknown'}`, Date.now() - t0);
+    throw normalised;
   }
 
   let verifyRes: Response;
