@@ -55,7 +55,10 @@ export function LegalOverlay({
           <ul style={{ fontSize: 12, color: "#94A3B8", margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
             <li>This file is confidential and intended solely for you.</li>
             <li>You will not screenshot, record, or distribute the contents.</li>
-            <li>All access is logged and watermarked.</li>
+            <li>All access is logged.</li>
+            {file.watermark && (
+              <li>Every page is watermarked with your email address and the date &amp; time you open it.</li>
+            )}
             {!file.allow_download && <li>Downloading is not permitted.</li>}
           </ul>
         </div>

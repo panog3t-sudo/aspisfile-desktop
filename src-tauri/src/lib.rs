@@ -60,13 +60,22 @@ fn build_minimal_menu<R: tauri::Runtime>(
         .item(&PredefinedMenuItem::quit(app, None)?)
         .build()?;
 
+    // Edit menu: PASTE ONLY — so Cmd+V works in the sign-in / setup-code text
+    // fields (macOS routes Cmd+V through the Edit menu's Paste item, which was
+    // absent). Deliberately NO Copy/Cut/Select-All: document content is
+    // copy-protected (event-level block in TileRenderer), and showing "Copy"
+    // could imply the document can be copied. Paste is input-only and safe.
+    let edit_submenu = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::paste(app, None)?)
+        .build()?;
+
     let window_submenu = SubmenuBuilder::new(app, "Window")
         .item(&PredefinedMenuItem::minimize(app, None)?)
         .item(&PredefinedMenuItem::maximize(app, None)?)
         .build()?;
 
     let menu = MenuBuilder::new(app)
-        .items(&[&app_submenu, &window_submenu])
+        .items(&[&app_submenu, &edit_submenu, &window_submenu])
         .build()?;
     Ok((menu, lock_item))
 }
