@@ -107,7 +107,11 @@ export class PasskeyError extends Error {
 function normaliseWebAuthnError(err: any): PasskeyError {
   const name = String(err?.name ?? '');
   const msg  = String(err?.message ?? err ?? 'Unknown error');
-  if (name === 'NotAllowedError' || /cancel/i.test(msg)) {
+  // Cancel detection (Layer A of the native consolidation): the browser path
+  // throws NotAllowedError; the native macOS AS bridge returns a "CANCELLED:"
+  // prefixed string (ASAuthorizationError.canceled / code 1001). Both mean the
+  // USER backed out — the caller must NOT escape to the browser on this.
+  if (name === 'NotAllowedError' || /^CANCELLED\b/.test(msg) || /cancel/i.test(msg)) {
     return new PasskeyError('cancelled', 'Authentication cancelled.');
   }
   if (name === 'NotSupportedError' || /not supported/i.test(msg)) {

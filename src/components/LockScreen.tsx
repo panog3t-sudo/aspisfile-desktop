@@ -6,6 +6,7 @@ import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
 import { getActiveSessionToken, getRecipientSession } from "../lib/recipient-session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { authenticatePasskey, PasskeyError } from "../lib/passkey";
 
 declare const __API_BASE__: string;
 
@@ -87,8 +88,33 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     }
     setStatus("verifying");
     setError("");
-    pollRef.current = true;
 
+    // macOS: run the assertion through the NATIVE AS bridge (in-window Touch ID
+    // / QR-to-phone), no browser — same as the rest of the native sign-in
+    // consolidation, and a stronger presence proof (the ceremony never leaves
+    // the signed binary). authenticate-verify already stamps the session, so
+    // success IS the unlock. A user-CANCEL stays on the lock screen (never
+    // escapes to the browser); only a genuine bridge failure falls through to
+    // the browser path below. Windows keeps the browser+poll path (WebView2
+    // can't do WebAuthn: origin ≠ aspisfile.com RP) until its Win32 bridge ships.
+    let platform = "unknown";
+    try { platform = await invoke<string>("get_platform"); } catch {}
+    if (platform === "macos") {
+      try {
+        await authenticatePasskey({ email: sess.email });
+        recordBiometric();
+        onUnlock();
+        return;
+      } catch (err) {
+        if (err instanceof PasskeyError && err.kind === "cancelled") {
+          setStatus("idle");
+          return;
+        }
+        // Genuine native failure → fall through to the browser last resort.
+      }
+    }
+
+    pollRef.current = true;
     try {
       await openUrl(`${__API_BASE__}/auth/desktop-verify?email=${encodeURIComponent(sess.email)}`);
     } catch {

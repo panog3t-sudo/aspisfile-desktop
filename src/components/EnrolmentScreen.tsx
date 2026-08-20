@@ -44,9 +44,14 @@ type Props = {
   // code + Touch ID/Windows Hello → passkey → Home lists their files. This is the
   // universal "not signed in" screen; it never leaves the user in limbo.
   coldSignIn?: boolean;
+  // Layer B (native consolidation): when a returning recipient CANCELLED the
+  // native passkey sheet, this provides a one-tap "Sign in with your passkey"
+  // retry (re-runs the sign-in). Absent for every other entry (fresh cold
+  // sign-in, code-required, error fallback) — where there's no passkey to retry.
+  onRetryPasskey?: () => void;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, coldSignIn }: Props) {
+export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, coldSignIn, onRetryPasskey }: Props) {
   // Locked when we know the recipient from the file — the code is bound to this
   // exact address, so editing it could only ever produce a mismatch.
   const emailLocked = !!initialEmail;
@@ -431,6 +436,29 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
             <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
               {coldSignIn && !emailLocked ? "Sign in to AspisFile Viewer" : "Enter your setup code"}
             </h1>
+
+            {/* Layer B: a returning user who cancelled the native passkey sheet
+                lands here — offer a one-tap passkey retry above the email-code
+                fallback, so an accidental cancel isn't a full round-trip. Shown
+                only when App.tsx passed onRetryPasskey (i.e. a passkey exists). */}
+            {onRetryPasskey && (
+              <div style={{ margin: "6px 0 16px" }}>
+                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 10px" }}>
+                  Sign-in was cancelled. Try your passkey again, or use an email code below.
+                </p>
+                <button
+                  onClick={onRetryPasskey}
+                  style={{ width: "100%", padding: "11px 14px", borderRadius: 8, background: "#185FA5", color: "#fff", border: "none", fontSize: 14, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Sign in with your passkey
+                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 2px" }}>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
+                  <span style={{ fontSize: 11, color: "#64748B" }}>or</span>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
+                </div>
+              </div>
+            )}
 
             {emailLocked ? (
               <>

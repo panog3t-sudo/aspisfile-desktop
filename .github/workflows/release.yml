@@ -19,12 +19,16 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           TAG_VERSION="${TAG#v}"
+          # A pre-release/beta tag (e.g. v1.9.76-beta.1) carries a -suffix that is
+          # NOT part of the app version — the version files stay numeric because
+          # WiX/MSI rejects pre-release version strings. Compare the base version.
+          BASE_VERSION="${TAG_VERSION%%-*}"
           CONF_VERSION=$(grep -E '^\s*"version"' src-tauri/tauri.conf.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
           PKG_VERSION=$(grep -E '^\s*"version"' package.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
-          echo "Tag version:    $TAG_VERSION"
+          echo "Tag version:    $TAG_VERSION (base $BASE_VERSION)"
           echo "tauri.conf:     $CONF_VERSION"
           echo "package.json:   $PKG_VERSION"
-          if [ "$TAG_VERSION" != "$CONF_VERSION" ] || [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+          if [ "$BASE_VERSION" != "$CONF_VERSION" ] || [ "$BASE_VERSION" != "$PKG_VERSION" ]; then
             echo ""
             echo "❌ Version mismatch — bump tauri.conf.json and package.json to $TAG_VERSION before tagging."
             echo "macOS Get Info / About reads CFBundleShortVersionString from tauri.conf.json, so the OS would lie about the installed version."
@@ -486,4 +490,8 @@ jobs:
             artifacts/windows/AspisFile-Portable.exe
             checksums.txt
           draft: false
-          prerelease: false
+          # A tag with a -suffix (e.g. v1.9.76-beta.1) is a PRE-RELEASE: GitHub
+          # excludes it from releases/latest, so it never repoints the download
+          # page (/downloads/* → releases/latest/download) or bumps the version
+          # APIs / update banner. Plain vX.Y.Z tags stay full releases → latest.
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}

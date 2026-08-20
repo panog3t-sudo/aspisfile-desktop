@@ -15,7 +15,7 @@ import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContex
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, clearSessionTokenOnly, saveRecipientSession } from "./lib/recipient-session";
 import { WrongAccountScreen } from "./components/WrongAccountScreen";
-import { authenticatePasskey } from "./lib/passkey";
+import { authenticatePasskey, PasskeyError } from "./lib/passkey";
 import { toggleAfsRender } from "./lib/afs-render";
 import "./App.css";
 import { DebugOverlay } from "./components/DebugOverlay";
@@ -215,18 +215,25 @@ function tryHandleEnrolComplete(url: string): { email: string } | null {
 // the recipient session on success. Returns true if a session was
 // minted, false if no usable passkey is on this device (caller then
 // falls back to the fresh-code enrolment path).
-async function trySignInWithExistingPasskey(token: string): Promise<boolean> {
+// Layer A (native consolidation): return a DISCRIMINATED outcome, not a bare
+// boolean, so the caller can tell a user-CANCEL apart from a real failure — the
+// conflation that sent every cancel (and Kobus) to the browser. Behaviour is
+// unchanged for now; Layer B routes 'cancelled' to a native retry instead.
+type SignInOutcome = 'success' | 'cancelled' | 'failed';
+
+async function trySignInWithExistingPasskey(token: string): Promise<SignInOutcome> {
   try {
     const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
-    if (!metaRes.ok) return false;
+    if (!metaRes.ok) return 'failed';
     const meta = await metaRes.json() as { recipient_email?: string };
-    if (!meta.recipient_email) return false;
+    if (!meta.recipient_email) return 'failed';
     await authenticatePasskey({ email: meta.recipient_email });
-    return true;
-  } catch {
-    // No discoverable passkey on this device, user cancelled, or the
-    // server rejected the assertion — fall back to enrolment.
-    return false;
+    return 'success';
+  } catch (err) {
+    // A user-cancel must NOT be treated the same as a hard failure (no
+    // discoverable passkey, server-rejected assertion, network, etc.).
+    if (err instanceof PasskeyError && err.kind === 'cancelled') return 'cancelled';
+    return 'failed';
   }
 }
 
@@ -316,6 +323,11 @@ function AppContent() {
   // screen leads with email → "Email me a code" (token-less endpoint). The
   // universal "not signed in" entry (default + failure fallback), no limbo.
   const [enrolCold, setEnrolCold] = useState(false);
+  // Layer B: when the enrol screen is reached because a returning user CANCELLED
+  // the native passkey sheet, this holds a one-tap "Sign in with your passkey"
+  // retry (re-runs the buffered link's sign-in). null for every other enrol
+  // entry (CODE_REQUIRED, error fallback, idle) — no passkey to retry there.
+  const [enrolRetry, setEnrolRetry] = useState<(() => void) | null>(null);
   // Drives EnrolmentWaitingScreen — the visible, self-completing state for
   // the rt auto-enrolment path (replaces sitting on a blank IdleScreen).
   const [enrolWait, setEnrolWait] = useState<
@@ -494,8 +506,8 @@ function AppContent() {
           // authenticatePasskey was never called anywhere, so every
           // session-less open went to enrolment and dead-ended on
           // register-verify's already-registered guard.
-          const signedIn = await trySignInWithExistingPasskey(params.token);
-          if (signedIn) {
+          const outcome = await trySignInWithExistingPasskey(params.token);
+          if (outcome === 'success') {
             // The passkey ceremony just proved presence — dedup the
             // per-file native biometric gate, clear the buffered link,
             // and replay so openLink mounts the viewer (session now set).
@@ -504,12 +516,28 @@ function AppContent() {
             openLinkRef.current?.(params);
             return;
           }
-          // Passkey exists but the native bridge can't reach its vault (the
-          // Phase 2 cross-vault case, e.g. a Google-synced passkey on a Mac).
-          // Re-auth through the browser sign-in page instead of dead-ending on
-          // a fresh code: a real assertion (any vault, phone-QR) mints a
-          // session via the reauth-status poll. beginBrowserReauth itself falls
-          // back to the code path if it can't resolve the recipient.
+          if (outcome === 'cancelled') {
+            // Layer B: a user-CANCEL of the native sheet stays NATIVE — land on
+            // the in-viewer "Sign in to AspisFile Viewer" screen (email-me-a-code,
+            // no dead-end), NEVER the browser. The buffered link (pendingLinkRef,
+            // set above) replays on completion, so the file opens after sign-in.
+            // NB: only fires on macOS — on Windows authenticatePasskey throws a
+            // SecurityError (WebView2 origin ≠ aspisfile.com RP) → 'failed', so
+            // Windows keeps the browser fallback below until its native Win32
+            // bridge ships.
+            enterManualEnrol(undefined, params.token, true, () => {
+              // One-tap retry: re-open the buffered link, which re-runs the whole
+              // sign-in (native passkey sheet again). Success replays → file opens.
+              const p = pendingLinkRef.current;
+              if (p) openLinkRef.current?.(p);
+            });
+            return;
+          }
+          // 'failed' — a genuine native bridge failure (macOS) or the Windows
+          // WebView2 RP-mismatch. Last-resort browser re-auth (unchanged): a real
+          // assertion (any vault, phone-QR) mints a session via the reauth-status
+          // poll. beginBrowserReauth falls back to the code path if it can't
+          // resolve the recipient.
           beginBrowserReauth(params.token);
         })
         .catch(() => enterManualEnrol(undefined, params.token));
@@ -690,13 +718,16 @@ function AppContent() {
   // a fresh enrolment isn't blocked by a previous one in the same session.
   // An optional prefillEmail (from a CODE_REQUIRED response) pre-fills the
   // email field so the recipient can't fat-finger a mismatching address.
-  function enterManualEnrol(prefillEmail?: string, token?: string, cold?: boolean) {
+  function enterManualEnrol(prefillEmail?: string, token?: string, cold?: boolean, retryPasskey?: () => void) {
     enrolCompletedRef.current = false;
     setEnrolPrefill(typeof prefillEmail === "string" ? prefillEmail : null);
     setEnrolToken(typeof token === "string" ? token : null);
     // Cold sign-in when explicitly requested, or implicitly whenever we have
     // neither a prefilled email nor a token (a bare idle sign-in).
     setEnrolCold(cold ?? (!prefillEmail && !token));
+    // Only the cancel path passes a retry; every other entry clears it so the
+    // "Sign in with your passkey" button appears ONLY where a passkey exists.
+    setEnrolRetry(() => retryPasskey ?? null);
     setMode("enrol");
   }
 
@@ -1101,6 +1132,10 @@ function AppContent() {
         initialEmail={enrolPrefill ?? undefined}
         token={enrolToken ?? undefined}
         coldSignIn={enrolCold}
+        // Layer B: one-tap "Sign in with your passkey" retry — set ONLY when we
+        // arrived here from a cancelled native sheet (enrolRetry); undefined
+        // otherwise, so the button never shows on code-required / idle entries.
+        onRetryPasskey={enrolRetry ?? undefined}
         // Path B: onComplete is only fired if a future inline-enrolment
         // implementation triggers it. With the browser-redirect path
         // currently active, the aspisfile://enrol-complete deep-link

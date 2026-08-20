@@ -249,7 +249,17 @@ declare_class!(
             let domain  = error.domain().to_string();
             let code    = error.code();
             let localized = error.localizedDescription().to_string();
-            let msg = format!("AS error: {} (code {}): {}", domain, code, localized);
+            // ASAuthorizationError.canceled == 1001. Surface a user-cancel with a
+            // machine-readable CANCELLED prefix so the JS layer
+            // (normaliseWebAuthnError) maps it to PasskeyError('cancelled') and the
+            // caller keeps the ceremony NATIVE — a cancel must never trigger a
+            // browser fallback. Any other code stays a generic "AS error" and is
+            // treated as a real failure.
+            let msg = if code == 1001 {
+                format!("CANCELLED: user cancelled ({}): {}", domain, localized)
+            } else {
+                format!("AS error: {} (code {}): {}", domain, code, localized)
+            };
             let result = match self.ivars().kind {
                 PasskeyOp::Register => BridgeResult::Register(Err(msg)),
                 PasskeyOp::Assert   => BridgeResult::Assert(Err(msg)),
