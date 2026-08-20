@@ -573,6 +573,19 @@ export function TileRenderer({
             mirrors the presenter exactly) */}
         {!followMode && (
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+            {/* Auto-lock On/Off — clickable, LEFT of the zoom buttons. ON = white
+                text (prominent), OFF = muted. Toggles via set_autolock; chip and
+                the "Lock when idle" menu checkmark share apply_autolock. */}
+            <button
+              onClick={() => { const next = !autolockOn; setAutolockOn(next); invoke("set_autolock", { enabled: next }).catch(() => {}); }}
+              title={autolockOn
+                ? "Auto-lock is ON — the viewer locks when idle. Click to turn off."
+                : "Auto-lock is OFF — the viewer stays open when idle. Click to turn on."}
+              style={{ flexShrink: 0, marginRight: 8, display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 10px", borderRadius: 4, border: "0.5px solid #334155", background: "transparent", color: autolockOn ? "#F1F5F9" : "#94A3B8", cursor: "pointer", fontSize: 11.5, fontWeight: 500, lineHeight: 1, fontFamily: "system-ui" }}
+            >
+              <span style={{ width: 5, height: 5, borderRadius: 999, background: autolockOn ? "#34D399" : "#64748B", flexShrink: 0 }} />
+              Auto-lock {autolockOn ? "On" : "Off"}
+            </button>
             <button
               onClick={() => setZoomIndex((i) => {
                 const next = Math.max(0, i - 1);
@@ -621,19 +634,6 @@ export function TileRenderer({
             SecureViewer omits it when the user can't or shouldn't
             download (owner, blob deleted, allow_download false). */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          {/* Auto-lock On/Off — CLICKABLE toggle on the RHS (mirrors the "Lock
-              when idle" menu item; both stay in sync via set_autolock + the
-              autolock-changed event). Minimal text + a small status dot, no icon. */}
-          <button
-            onClick={() => { const next = !autolockOn; setAutolockOn(next); invoke("set_autolock", { enabled: next }).catch(() => {}); }}
-            title={autolockOn
-              ? "Auto-lock is ON — the viewer locks when idle. Click to turn off."
-              : "Auto-lock is OFF — the viewer stays open when idle. Click to turn on."}
-            style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 10px", borderRadius: 4, border: "0.5px solid #334155", background: "transparent", color: "#94A3B8", cursor: "pointer", fontSize: 11.5, fontWeight: 500, lineHeight: 1, fontFamily: "system-ui" }}
-          >
-            <span style={{ width: 5, height: 5, borderRadius: 999, background: autolockOn ? "#34D399" : "#64748B", flexShrink: 0 }} />
-            Auto-lock {autolockOn ? "On" : "Off"}
-          </button>
           {onQA && (
             <button
               onClick={onQA}

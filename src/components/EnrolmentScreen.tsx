@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { registerPasskey, PasskeyError } from "../lib/passkey";
 import { saveRecipientSession } from "../lib/recipient-session";
+import { passkeyIsFrictiony } from "../lib/signin-hints";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -86,6 +87,12 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
     invoke<string>("get_platform").then((p) => setPlatform(p === "macos" ? "macos" : p === "windows" ? "windows" : "unknown")).catch(() => {});
   }, []);
   const bio = platform === "macos" ? "Touch ID" : platform === "windows" ? "Windows Hello" : "Touch ID or Windows Hello";
+  // #5 — smart emphasis. When a passkey retry is on offer (the user just
+  // cancelled a native sheet) we normally lead with it. But once they've
+  // cancelled it a couple of times on this device, stop pushing the same wall:
+  // the email-code path becomes the primary and the passkey retry demotes to a
+  // quiet link. Read once at mount — the counter only changes between mounts.
+  const [preferCode] = useState(() => !!onRetryPasskey && passkeyIsFrictiony());
 
   // ── Poll fallback for the browser handoff ────────────────────────────
   // The browser is supposed to fire aspisfile://enrol-complete when the
@@ -288,8 +295,8 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
     // Fast client-side format check — codes look like "word-word-1234". Catches
     // a typo or a half-pasted code before the round-trip; the server still
     // validates the code authoritatively.
-    if (!/^[a-z]+-[a-z]+-\d+$/.test(cleanCode)) {
-      setError("That doesn't look like a setup code — it should look like word-word-1234. Check your email.");
+    if (!/^[a-z]+-[a-z]+-\d{4}$/.test(cleanCode)) {
+      setError("That doesn't look like a full setup code — it should be two words + 4 digits (like word-word-1234). Check your email.");
       return;
     }
 
@@ -399,10 +406,12 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
               Sign in to AspisFile Viewer
             </h1>
 
-            {/* Cancel context (onRetryPasskey): lead with a one-tap passkey retry —
-                the user just fumbled the native sheet, so this is the fastest way
-                back in. The email-code path sits below as the fallback. */}
-            {onRetryPasskey && (
+            {/* Cancel context (onRetryPasskey), first attempts: lead with a
+                one-tap passkey retry — the user just fumbled the native sheet, so
+                this is the fastest way back in. The email-code path sits below as
+                the fallback. #5: once they've cancelled a few times, `preferCode`
+                flips and we DON'T lead with the passkey wall (handled below). */}
+            {onRetryPasskey && !preferCode && (
               <>
                 <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 12px" }}>
                   The sign-in prompt closed or timed out — that&apos;s easy to fix.
@@ -416,6 +425,14 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
                   <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
                 </div>
               </>
+            )}
+
+            {/* #5 escalated: the passkey sheet keeps getting cancelled on this
+                device, so lead with the code path instead of the same wall. */}
+            {onRetryPasskey && preferCode && (
+              <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 12px" }}>
+                Passkey not working on this device? Get a one-time code by email instead.
+              </p>
             )}
 
             <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 14px" }}>
@@ -439,12 +456,22 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 20 }}>
-              <button onClick={handleNoCode} disabled={resendState === "sending"} style={onRetryPasskey ? btnSecondary : btnPrimary}>
+              <button
+                onClick={handleNoCode}
+                disabled={resendState === "sending"}
+                style={onRetryPasskey && !preferCode ? btnSecondary : btnPrimary}
+              >
                 {resendState === "sending" ? "Sending…" : "Email me a code"}
               </button>
               <button onClick={() => { setError(""); setHasCode(true); }} style={linkBtn}>
                 I already have a code
               </button>
+              {/* #5 escalated: passkey retry is still available, just demoted. */}
+              {onRetryPasskey && preferCode && (
+                <button onClick={onRetryPasskey} style={{ ...linkBtn, marginTop: 4 }}>
+                  Or try your passkey again
+                </button>
+              )}
             </div>
 
             {onCancel && (

@@ -15,7 +15,8 @@ import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContex
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, clearSessionTokenOnly, saveRecipientSession } from "./lib/recipient-session";
 import { WrongAccountScreen } from "./components/WrongAccountScreen";
-import { authenticatePasskey, PasskeyError } from "./lib/passkey";
+import { authenticatePasskey, registerPasskey, PasskeyError } from "./lib/passkey";
+import { recordPasskeyCancel, resetPasskeyFriction } from "./lib/signin-hints";
 import { toggleAfsRender } from "./lib/afs-render";
 import "./App.css";
 import { DebugOverlay } from "./components/DebugOverlay";
@@ -282,6 +283,16 @@ function AppContent() {
   const modeRef = useRef<Mode>("idle");
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
+  // #7 — transient "busy" message shown OVER the IdleScreen home while a link is
+  // being processed (fetching meta, native Touch ID sign-in, native enrolment).
+  // Without it the recipient stares at the static home for the 1–3s the passkey
+  // ceremony takes and assumes nothing happened. The overlay is gated on
+  // mode === "idle", so every terminal branch (viewer / enrol / enrol_wait /
+  // reauth_wait) dismisses it automatically; the effect below is the backstop
+  // that clears it whenever we leave idle, so the next idle starts clean.
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => { if (mode !== "idle") setBusy(null); }, [mode]);
+
   // macOS/Windows: closing the window while a DOCUMENT is open should return to
   // the passkey-gated viewer home instead of quitting — so the app stays in the
   // Dock/taskbar and is easy to relaunch (Mac has no desktop shortcut).
@@ -455,6 +466,7 @@ function AppContent() {
     // the viewer for their own file.
     if (!params.present && !getActiveSessionToken()) {
       pendingLinkRef.current = params;
+      setBusy("Opening your file…"); // #7 — replace the static home while we work
       debugLog('coview', 'openLink no session → stashed pendingLinkRef', { coview: params.coview?.slice(0,8) ?? null });
       // First-time bootstrap path A — deep link carries a registration
       // token (rt) from /access/<token>'s server-rendered bootstrap
@@ -506,17 +518,20 @@ function AppContent() {
           // authenticatePasskey was never called anywhere, so every
           // session-less open went to enrolment and dead-ended on
           // register-verify's already-registered guard.
+          setBusy("Signing you in…"); // #7 — native Touch ID sheet is about to appear
           const outcome = await trySignInWithExistingPasskey(params.token);
           if (outcome === 'success') {
             // The passkey ceremony just proved presence — dedup the
             // per-file native biometric gate, clear the buffered link,
             // and replay so openLink mounts the viewer (session now set).
+            resetPasskeyFriction(); // #5 — a win clears any escalation
             recordBiometric();
             pendingLinkRef.current = null;
             openLinkRef.current?.(params);
             return;
           }
           if (outcome === 'cancelled') {
+            recordPasskeyCancel(); // #5 — escalate to the code path after repeats
             // Layer B: a user-CANCEL of the native sheet stays NATIVE — land on
             // the in-viewer "Sign in to AspisFile Viewer" screen (email-me-a-code,
             // no dead-end), NEVER the browser. The buffered link (pendingLinkRef,
@@ -656,6 +671,42 @@ function AppContent() {
       });
       setMode("enrol_wait");
       return;
+    }
+
+    // #6 — first-open register NATIVELY on macOS (in-window Touch ID via the
+    // AS bridge), no browser round-trip. The AS bridge stamps the associated-
+    // domain origin, so register-verify accepts it. registerPasskey saves the
+    // recipient session on success, so we just replay the buffered link and the
+    // file opens — same shape as trySignInWithExistingPasskey's success path.
+    // Windows keeps the browser enrol (WKWebView2's webview origin doesn't match
+    // the server's EXPECTED_ORIGINS — that's the future Win32 module's job).
+    let platform = "unknown";
+    try { platform = await invoke<string>("get_platform"); } catch { /* keep browser fallback */ }
+    if (platform === "macos") {
+      try {
+        setBusy("Setting up secure access…"); // #7 — native register (Touch ID) in progress
+        await registerPasskey({ email, registrationToken: rt, deviceLabel: "AspisFile Mac" });
+        // Enrolled + session saved natively. Replay the buffered link → open.
+        resetPasskeyFriction(); // #5 — a win clears any escalation
+        enrolCompletedRef.current = true;
+        recordBiometric();
+        const p = pendingLinkRef.current;
+        pendingLinkRef.current = null;
+        if (p) openLinkRef.current?.(p);
+        return;
+      } catch (err) {
+        // User cancelled the Touch ID sheet — stay NATIVE (never the browser).
+        // Land them on the manual screen with a one-tap passkey retry, exactly
+        // like Layer B's cancel handling for existing-passkey sign-in.
+        if (err instanceof PasskeyError && err.kind === "cancelled") {
+          recordPasskeyCancel(); // #5 — escalate to the code path after repeats
+          enterManualEnrol(email, token, true, () => beginAutoEnrolment(token, rt));
+          return;
+        }
+        // Genuine failure (network, server-rejected, no authenticator) — fall
+        // through to the browser enrol, which is the proven universal path.
+        console.warn("[auto-enrolment] native register failed, falling back to browser:", err);
+      }
     }
 
     const url = new URL(`${BASE}/enroll/desktop`);
@@ -1151,12 +1202,41 @@ function AppContent() {
   }
 
   return (
-    <IdleScreen
-      onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
-      onEnrol={(cold?: boolean) => enterManualEnrol(undefined, undefined, cold ?? true)}
-      onSignIn={handleIdleSignIn}
-      onOpenToken={(token) => openLinkRef.current?.({ token, sig: null, env: null, present: false, coview: null, rt: null })}
-    />
+    <>
+      <IdleScreen
+        onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
+        onEnrol={(cold?: boolean) => enterManualEnrol(undefined, undefined, cold ?? true)}
+        onSignIn={handleIdleSignIn}
+        onOpenToken={(token) => openLinkRef.current?.({ token, sig: null, env: null, present: false, coview: null, rt: null })}
+      />
+      {busy && <BusyOverlay message={busy} />}
+    </>
+  );
+}
+
+// #7 — full-screen "working" overlay shown over the IdleScreen home while a
+// link is being processed. Matches the minimal dark viewer theme: no icon, a
+// quiet ring spinner, one line of copy.
+function BusyOverlay({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 50,
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18,
+        background: "rgba(15,23,42,0.94)",
+        fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
+      }}
+    >
+      <div
+        style={{
+          width: 26, height: 26, borderRadius: "50%",
+          border: "2px solid #334155", borderTopColor: "#7DB1E8",
+          animation: "aspis-spin 0.8s linear infinite",
+        }}
+      />
+      <p style={{ fontSize: 13, color: "#94A3B8", margin: 0 }}>{message}</p>
+      <style>{`@keyframes aspis-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
   );
 }
 

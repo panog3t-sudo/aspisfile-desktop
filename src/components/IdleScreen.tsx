@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { getActiveSessionToken, getRecipientSession, RecipientSession } from "../lib/recipient-session";
+import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
 
 declare const __API_BASE__: string;
@@ -78,6 +78,10 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>({});
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [filesOpen, setFilesOpen] = useState(false);
+  // Sign-out confirmation — a mis-click here wipes the session and forces a full
+  // re-sign-in, so gate it behind a small in-app Yes/No (window.confirm would
+  // render an off-theme browser dialog inside the viewer).
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   const refresh = () => {
     const s = getRecipientSession();
@@ -304,11 +308,61 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       )}
 
       {/* ── Active session → the recipient's rooms + files ────────────── */}
+      {confirmSignOut && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed", inset: 0, zIndex: 60,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(15,23,42,0.72)",
+            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
+          }}
+          onClick={() => setConfirmSignOut(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%", maxWidth: 360,
+              background: "#1E293B", border: "0.5px solid #334155", borderRadius: 12,
+              padding: 24, textAlign: "center",
+            }}
+          >
+            <p style={{ fontSize: 15, fontWeight: 600, color: "#F1F5F9", margin: "0 0 8px" }}>Sign out?</p>
+            <p style={{ fontSize: 12.5, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 20px" }}>
+              You&apos;ll need to sign in again with your passkey or an email code to open your files.
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => setConfirmSignOut(false)}
+                style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: "0.5px solid rgba(255,255,255,0.18)", background: "transparent", color: "#E2E8F0", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { clearAllRecipientState(); window.location.reload(); }}
+                style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: "none", background: "#B91C1C", color: "#fff", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {active && (
         <div style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
             <span style={{ fontSize: 12, color: "#94A3B8" }}>
               Signed in as <span style={{ color: "#E2E8F0", fontWeight: 500 }}>{session!.email}</span>
+              {" · "}
+              <button
+                onClick={() => setConfirmSignOut(true)}
+                title="Sign out to open a file shared with a different email address"
+                style={{ background: "transparent", border: "none", color: "#7DB1E8", fontSize: 12, cursor: "pointer", fontFamily: "inherit", padding: 0 }}
+              >
+                Sign out
+              </button>
             </span>
             <button
               onClick={loadHome}
