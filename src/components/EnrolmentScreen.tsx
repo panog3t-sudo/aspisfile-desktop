@@ -389,10 +389,30 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
         {phase === "input" && hasCode === null && (
           <>
             <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 6px", color: "#F1F5F9" }}>
-              Do you have a setup code?
+              Sign in to AspisFile Viewer
             </h1>
-            <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 16px" }}>
-              To finish signing in on this device you&apos;ll enter a one-time code that we email to you.
+
+            {/* Cancel context (onRetryPasskey): lead with a one-tap passkey retry —
+                the user just fumbled the native sheet, so this is the fastest way
+                back in. The email-code path sits below as the fallback. */}
+            {onRetryPasskey && (
+              <>
+                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 12px" }}>
+                  The sign-in prompt closed or timed out — that&apos;s easy to fix.
+                </p>
+                <button onClick={onRetryPasskey} style={btnPrimary}>
+                  Sign in with your passkey
+                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 12px" }}>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
+                  <span style={{ fontSize: 11, color: "#64748B" }}>or use an email code</span>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
+                </div>
+              </>
+            )}
+
+            <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 14px" }}>
+              We&apos;ll email a one-time code {emailLocked ? "to the address below" : "to the address this file was shared with"}, then confirm with {bio}.
             </p>
 
             {emailLocked && (
@@ -412,21 +432,17 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 20 }}>
-              <button onClick={() => { setError(""); setHasCode(true); }} style={btnPrimary}>
-                Yes, I have a code
+              <button onClick={handleNoCode} disabled={resendState === "sending"} style={onRetryPasskey ? btnSecondary : btnPrimary}>
+                {resendState === "sending" ? "Sending…" : "Email me a code"}
               </button>
-              <button onClick={handleNoCode} disabled={resendState === "sending"} style={btnSecondary}>
-                {resendState === "sending" ? "Sending…" : "No — email me a code"}
+              <button onClick={() => { setError(""); setHasCode(true); }} style={linkBtn}>
+                I already have a code
               </button>
             </div>
 
             {onCancel && (
               <button onClick={onCancel} style={{ ...linkBtn, marginTop: 16 }}>Cancel</button>
             )}
-
-            <p style={{ fontSize: 11, color: "#64748B", marginTop: 18, lineHeight: 1.5 }}>
-              The code is emailed to you and finishes with {bio}.
-            </p>
           </>
         )}
 
@@ -437,28 +453,9 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
               {coldSignIn && !emailLocked ? "Sign in to AspisFile Viewer" : "Enter your setup code"}
             </h1>
 
-            {/* Layer B: a returning user who cancelled the native passkey sheet
-                lands here — offer a one-tap passkey retry above the email-code
-                fallback, so an accidental cancel isn't a full round-trip. Shown
-                only when App.tsx passed onRetryPasskey (i.e. a passkey exists). */}
-            {onRetryPasskey && (
-              <div style={{ margin: "6px 0 16px" }}>
-                <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 10px" }}>
-                  Sign-in was cancelled. Try your passkey again, or use an email code below.
-                </p>
-                <button
-                  onClick={onRetryPasskey}
-                  style={{ width: "100%", padding: "11px 14px", borderRadius: 8, background: "#185FA5", color: "#fff", border: "none", fontSize: 14, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
-                >
-                  Sign in with your passkey
-                </button>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 2px" }}>
-                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
-                  <span style={{ fontSize: 11, color: "#64748B" }}>or</span>
-                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.10)" }} />
-                </div>
-              </div>
-            )}
+            {/* The "Sign in with your passkey" retry now lives on the first
+                (gate) screen above, so a cancelled user sees it immediately
+                rather than behind the code choice. */}
 
             {emailLocked ? (
               <>
@@ -532,8 +529,8 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
             <input
               type="text"
               value={code}
-              onChange={(e) => { setCode(e.target.value.toLowerCase()); setError(""); }}
-              placeholder="anchor-sunset-7421"
+              onChange={(e) => { setCode(e.target.value.replace(/\s+/g, "").toLowerCase()); setError(""); }}
+              placeholder="Add your code here"
               style={{ ...inputStyle, fontFamily: "Menlo, Monaco, 'Courier New', monospace", letterSpacing: 1 }}
               autoCapitalize="none"
               autoCorrect="off"
