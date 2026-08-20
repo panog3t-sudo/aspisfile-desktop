@@ -6,9 +6,13 @@ mod passkey;
 mod autolock;
 
 use tauri::{
-    Manager, Emitter,
+    Manager,
     menu::{Menu, MenuBuilder, SubmenuBuilder, PredefinedMenuItem, AboutMetadata, CheckMenuItem},
 };
+
+// Shared handle to the "Lock when idle" check item, so BOTH the menu toggle and
+// the set_autolock command (the on-screen chip) update the same checkmark.
+pub struct AutolockMenu(pub std::sync::Mutex<CheckMenuItem<tauri::Wry>>);
 
 // Minimal macOS menu bar: App + Window only.
 //
@@ -147,16 +151,16 @@ pub fn run() {
             // secure document viewer.
             if let Ok((menu, lock_item)) = build_minimal_menu(app.handle()) {
                 let _ = app.set_menu(menu);
+                // Share the check item via state so BOTH the menu toggle AND the
+                // set_autolock command (on-screen chip) update the same checkmark
+                // — they can never disagree.
+                app.manage(AutolockMenu(std::sync::Mutex::new(lock_item)));
                 // Menu-event handler for the "Lock when idle" toggle: flip +
-                // persist the setting, update the checkmark, and tell the
-                // frontend so the lock arms/disarms live. Keeps the check item
-                // alive by moving its handle into the closure.
-                app.on_menu_event(move |app, event| {
+                // persist + sync checkmark + notify the frontend (shared logic).
+                app.on_menu_event(|app, event| {
                     if event.id().as_ref() == "autolock_toggle" {
                         let next = !autolock::is_enabled(app);
-                        autolock::set_enabled(app, next);
-                        let _ = lock_item.set_checked(next);
-                        let _ = app.emit("autolock-changed", next);
+                        commands::apply_autolock(app, next);
                     }
                 });
             }
@@ -184,6 +188,7 @@ pub fn run() {
             commands::authenticate_biometric,
             commands::biometric_available,
             commands::get_autolock,
+            commands::set_autolock,
             commands::detect_capture_processes,
             commands::quit_app,
             fileassoc::read_afs,

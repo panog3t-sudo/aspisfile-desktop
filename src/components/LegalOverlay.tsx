@@ -57,7 +57,7 @@ export function LegalOverlay({
             <li>You will not screenshot, record, or distribute the contents.</li>
             <li>All access is logged.</li>
             {file.watermark && (
-              <li>Every page is watermarked with your email address and the date &amp; time you open it.</li>
+              <li>Every page is watermarked with your email address and the date you open it.</li>
             )}
             {!file.allow_download && <li>Downloading is not permitted.</li>}
           </ul>

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
 import { useLock, BIOMETRIC_FRESH_MS } from "../contexts/LockContext";
-import { getActiveSessionToken, getRecipientSession } from "../lib/recipient-session";
+import { getActiveSessionToken, getRecipientSession, clearAllRecipientState } from "../lib/recipient-session";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { authenticatePasskey, PasskeyError } from "../lib/passkey";
@@ -257,9 +257,13 @@ export function LockScreen({ fileName, onUnlock }: Props) {
   };
 
   const signOutEscape = async () => {
-    await supabase.auth.signOut({ scope: "local" });
-    // App.tsx's auth listener will route to idle; onUnlock is a no-op
-    // here because there's nothing to unlock into.
+    // Recipients sign in with a passkey RECIPIENT session (localStorage), NOT a
+    // Supabase session — so signing out must clear THAT too, or the viewer stays
+    // "signed in" and Sign out appears to do nothing (the bug). Clear both, then
+    // reload so the app re-inits with no session and lands on the sign-in screen.
+    clearAllRecipientState();
+    try { await supabase.auth.signOut({ scope: "local" }); } catch { /* best-effort */ }
+    window.location.reload();
   };
 
   return (

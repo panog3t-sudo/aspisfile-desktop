@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 
 // Fully quit the app. Used when the window is closed from the home / non-document
 // screen: macOS keeps the process alive after a plain window close, so the red
@@ -52,6 +52,24 @@ pub async fn authenticate_biometric(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn get_autolock(app: AppHandle) -> bool {
     crate::autolock::is_enabled(&app)
+}
+
+/// Apply autolock on/off from anywhere: persist it, keep the "Lock when idle"
+/// menu checkmark in sync, and notify the frontend (the toolbar chip + the
+/// LockContext) so the idle lock arms/disarms live. Shared by the menu toggle
+/// and the on-screen chip so they can never disagree.
+pub fn apply_autolock(app: &AppHandle, enabled: bool) {
+    crate::autolock::set_enabled(app, enabled);
+    if let Some(item) = app.try_state::<crate::AutolockMenu>() {
+        if let Ok(mi) = item.0.lock() { let _ = mi.set_checked(enabled); }
+    }
+    let _ = app.emit("autolock-changed", enabled);
+}
+
+/// The on-screen "Auto-lock On/Off" chip calls this to toggle from the viewer.
+#[tauri::command]
+pub fn set_autolock(app: AppHandle, enabled: bool) {
+    apply_autolock(&app, enabled);
 }
 
 #[tauri::command]

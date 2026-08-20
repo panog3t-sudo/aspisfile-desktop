@@ -557,26 +557,16 @@ export function TileRenderer({
           <span style={{ fontSize: 13, color: "#94A3B8", fontFamily: "system-ui", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {file.name}
           </span>
-          {/* Minimal status chips — plain text on the dark toolbar, no icons.
-              Watermarked (presence-based) + Auto-lock On/Off (mirrors the menu
-              toggle; small status dot, not a picture icon). */}
+          {/* Watermarked chip — plain minimal text, presence-based (no icon).
+              The clickable Auto-lock chip lives on the RIGHT, near the zoom cluster. */}
           {file.watermark && (
             <span
-              title="Every page is watermarked with your email address and the date & time you opened it"
+              title="Every page is watermarked with your email address and the date you opened it"
               style={{ flexShrink: 0, fontSize: 11, fontWeight: 500, color: "#94A3B8", border: "0.5px solid #334155", borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap", fontFamily: "system-ui" }}
             >
               Watermarked
             </span>
           )}
-          <span
-            title={autolockOn
-              ? "Auto-lock is on — the viewer locks when idle. Change it in the AspisFile Viewer menu."
-              : "Auto-lock is off — the viewer stays open when idle. Change it in the AspisFile Viewer menu."}
-            style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 500, color: "#94A3B8", border: "0.5px solid #334155", borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap", fontFamily: "system-ui" }}
-          >
-            <span style={{ width: 5, height: 5, borderRadius: 999, background: autolockOn ? "#34D399" : "#64748B", flexShrink: 0 }} />
-            Auto-lock {autolockOn ? "On" : "Off"}
-          </span>
         </div>
 
         {/* Center: zoom controls (hidden in follow mode — recipient
@@ -631,6 +621,19 @@ export function TileRenderer({
             SecureViewer omits it when the user can't or shouldn't
             download (owner, blob deleted, allow_download false). */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {/* Auto-lock On/Off — CLICKABLE toggle on the RHS (mirrors the "Lock
+              when idle" menu item; both stay in sync via set_autolock + the
+              autolock-changed event). Minimal text + a small status dot, no icon. */}
+          <button
+            onClick={() => { const next = !autolockOn; setAutolockOn(next); invoke("set_autolock", { enabled: next }).catch(() => {}); }}
+            title={autolockOn
+              ? "Auto-lock is ON — the viewer locks when idle. Click to turn off."
+              : "Auto-lock is OFF — the viewer stays open when idle. Click to turn on."}
+            style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 10px", borderRadius: 4, border: "0.5px solid #334155", background: "transparent", color: "#94A3B8", cursor: "pointer", fontSize: 11.5, fontWeight: 500, lineHeight: 1, fontFamily: "system-ui" }}
+          >
+            <span style={{ width: 5, height: 5, borderRadius: 999, background: autolockOn ? "#34D399" : "#64748B", flexShrink: 0 }} />
+            Auto-lock {autolockOn ? "On" : "Off"}
+          </button>
           {onQA && (
             <button
               onClick={onQA}

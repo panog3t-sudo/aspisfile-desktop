@@ -538,14 +538,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       .then(setLocalAuthAvailable)
       .catch(() => setLocalAuthAvailable(true));
   }, []);
-  useLockGuard(isViewing && localAuthAvailable, useCallback(() => setLocked(true), []));
+  // autolockEnabled gates the per-file idle lock below — turning "Lock when
+  // idle" off in the menu must actually stop it (was missing → the doc still
+  // idle-locked even with the toggle off). Live via the context's listener.
+  const { setViewingActive, autolockEnabled } = useLock();
+  useLockGuard(isViewing && localAuthAvailable && autolockEnabled, useCallback(() => setLocked(true), []));
 
   // Tell the app-level lock to stand down while this viewer is mounted — the
   // per-file useLockGuard above owns the idle lock here. Without this, both
   // the app-level idle lock and this one fired at the same timeout, stacking
   // two lock screens (the second bailed on the biometric mutex, forcing a
   // second unlock click after Touch ID — trace 2026-07-22).
-  const { setViewingActive } = useLock();
   useEffect(() => {
     setViewingActive(true);
     return () => setViewingActive(false);

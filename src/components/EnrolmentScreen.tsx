@@ -281,8 +281,15 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
       setError("Enter a valid email.");
       return;
     }
-    if (cleanCode.length < 4) {
+    if (!cleanCode) {
       setError("Enter the setup code.");
+      return;
+    }
+    // Fast client-side format check — codes look like "word-word-1234". Catches
+    // a typo or a half-pasted code before the round-trip; the server still
+    // validates the code authoritatively.
+    if (!/^[a-z]+-[a-z]+-\d+$/.test(cleanCode)) {
+      setError("That doesn't look like a setup code — it should look like word-word-1234. Check your email.");
       return;
     }
 

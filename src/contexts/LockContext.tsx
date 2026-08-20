@@ -42,6 +42,11 @@ type LockContextType = {
   // had to click a second unlock button after Touch ID (trace 2026-07-22).
   setViewingActive(active: boolean): void;
 
+  // "Lock when idle" menu toggle state, mirrored from Rust (get_autolock +
+  // autolock-changed event). Consumers (SecureViewer's per-file idle lock, the
+  // toolbar chip) gate on this so turning it OFF actually stops the idle lock.
+  autolockEnabled: boolean;
+
   // Single-prompt biometric dedup. Any caller that successfully runs
   // a Touch ID / Windows Hello prompt calls recordBiometric();
   // sibling gates check lastBiometricAt and skip their own prompt if
@@ -76,6 +81,7 @@ const LockContext = createContext<LockContextType>({
   unlock:             () => {},
   lock:               () => {},
   setViewingActive:   () => {},
+  autolockEnabled:    true,
   lastBiometricAt:    0,
   recordBiometric:    () => {},
   tryBeginBiometric:  () => true,
@@ -147,6 +153,16 @@ export function LockProvider({ children }: { children: ReactNode }) {
       setInitialised(true);
     };
     init();
+  }, []);
+
+  // Keep autolockEnabled live when the "Lock when idle" menu toggle changes
+  // mid-session (Rust emits autolock-changed) — so the per-file idle lock and
+  // the toolbar chip react immediately, not only at next launch.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<boolean>("autolock-changed", (e) => setAutolockEnabled(!!e.payload))
+      .then((fn) => { unlisten = fn; }, () => {});
+    return () => { unlisten?.(); };
   }, []);
 
   // ── App-level blur lock (mirrors mobile's AppState background path) ──
@@ -240,6 +256,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
         unlock: () => setLockedState(false),
         lock:   () => setLockedState(true),
         setViewingActive: (active: boolean) => setViewingActiveState(active),
+        autolockEnabled,
         lastBiometricAt,
         recordBiometric: () => setLastBiometricAt(Date.now()),
         tryBeginBiometric: () => {
