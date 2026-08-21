@@ -50,9 +50,13 @@ type Props = {
   // retry (re-runs the sign-in). Absent for every other entry (fresh cold
   // sign-in, code-required, error fallback) — where there's no passkey to retry.
   onRetryPasskey?: () => void;
+  // CODE_REQUIRED entry: the server already auto-emailed the one-time code, so
+  // skip the "Email me a code" gate and open straight on "enter your code"
+  // (with a "we've emailed it to you" confirmation) — no duplicate request.
+  initialCodeSent?: boolean;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, coldSignIn, onRetryPasskey }: Props) {
+export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, coldSignIn, onRetryPasskey, initialCodeSent }: Props) {
   // Locked when we know the recipient from the file — the code is bound to this
   // exact address, so editing it could only ever produce a mismatch.
   const emailLocked = !!initialEmail;
@@ -62,15 +66,20 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
   const [error, setError] = useState("");
   // "Email me a code" (request-fresh-code) state + a 60s cooldown so a stuck
   // recipient can self-serve a code without hammering the endpoint.
-  const [resendState,   setResendState]   = useState<"idle" | "sending" | "sent" | "error">("idle");
-  const [resendMsg,     setResendMsg]     = useState("");
+  // Seed "sent" state when the server already emailed the code (CODE_REQUIRED),
+  // so the screen shows the "✓ emailed to you" confirmation instead of inviting
+  // a fresh request.
+  const [resendState,   setResendState]   = useState<"idle" | "sending" | "sent" | "error">(initialCodeSent ? "sent" : "idle");
+  const [resendMsg,     setResendMsg]     = useState(initialCodeSent && initialEmail ? `Sent to ${initialEmail} — check your inbox (and spam).` : "");
   const [cooldown,      setCooldown]      = useState(0);
   const [showWrongAddr, setShowWrongAddr] = useState(false);
   // Gate: "Do you have a setup code?" — null = ask; non-null = show the entry
   // form. Only asked when we can actually send one (token present); the idle
   // path (a recipient who already has a code from their email) skips straight
   // to entry so a code-holder isn't slowed by an extra question.
-  const [hasCode, setHasCode] = useState<boolean | null>(token ? null : true);
+  // Skip the "Email me a code" gate when the server already sent one
+  // (initialCodeSent) — go straight to the code-entry screen.
+  const [hasCode, setHasCode] = useState<boolean | null>(token && !initialCodeSent ? null : true);
   // Stash the registration token after a successful redeem so that
   // a bridge failure can fall back to the browser using the SAME rt
   // — the original code is single-use and already consumed by the
@@ -542,7 +551,11 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
                     <button
                       onClick={handleResend}
                       disabled={resendState === "sending" || cooldown > 0}
-                      style={{ ...btnSecondary, marginTop: 10, opacity: (resendState === "sending" || cooldown > 0) ? 0.5 : 1 }}
+                      // Progressive emphasis: this is the primary (blue) action while
+                      // it's the user's real next step — no code emailed yet AND none
+                      // typed. Once a code is sent or entered, it steps back to muted
+                      // and "Continue" becomes the primary instead.
+                      style={{ ...(resendState !== "sent" && code.trim().length === 0 ? btnPrimary : btnSecondary), marginTop: 10, opacity: (resendState === "sending" || cooldown > 0) ? 0.5 : 1 }}
                     >
                       {resendState === "sending" ? "Sending…" : cooldown > 0 ? `Email me a code (${cooldown}s)` : "Email me a code"}
                     </button>
@@ -579,7 +592,12 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
               {onCancel && (
                 <button onClick={onCancel} style={btnSecondary}>Cancel</button>
               )}
-              <button onClick={handleSubmit} style={btnPrimary}>Continue</button>
+              {/* Progressive emphasis: "Continue" only lights up (blue) once a code
+                  has been entered — before that there's nothing to continue with, so
+                  it stays muted and the eye goes to "Email me a code" above. Still
+                  clickable when empty so handleSubmit can show the "enter a code"
+                  hint if the user jumps ahead. */}
+              <button onClick={handleSubmit} style={code.trim().length > 0 ? btnPrimary : btnSecondary}>Continue</button>
             </div>
 
             {/* Re-request — only when we have a token to scope it. The gate
@@ -589,7 +607,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
                 {resendState === "error" && (
                   <p style={{ fontSize: 12, color: "#FCA5A5", lineHeight: 1.5, margin: "0 0 6px" }}>{resendMsg}</p>
                 )}
-                {resendState === "idle" && (
+                {(resendState === "idle" || resendState === "sent") && (
                   <p style={{ fontSize: 12, color: "#94A3B8", margin: "0 0 6px" }}>Didn&apos;t get the code?</p>
                 )}
                 <button

@@ -339,6 +339,11 @@ function AppContent() {
   // retry (re-runs the buffered link's sign-in). null for every other enrol
   // entry (CODE_REQUIRED, error fallback, idle) — no passkey to retry there.
   const [enrolRetry, setEnrolRetry] = useState<(() => void) | null>(null);
+  // True when we reached the enrol screen via CODE_REQUIRED — the server ALREADY
+  // auto-emailed the one-time code, so the screen should skip the "Email me a
+  // code" gate and land straight on "enter the code we sent you" (otherwise the
+  // user re-requests and gets a confusing second code).
+  const [enrolCodeSent, setEnrolCodeSent] = useState(false);
   // Drives EnrolmentWaitingScreen — the visible, self-completing state for
   // the rt auto-enrolment path (replaces sitting on a blank IdleScreen).
   const [enrolWait, setEnrolWait] = useState<
@@ -497,7 +502,9 @@ function AppContent() {
           if (r.status === 403) {
             const body = await r.json().catch(() => null);
             if (body?.error === 'CODE_REQUIRED') {
-              enterManualEnrol(body.recipient_email ?? undefined, params.token);
+              // Server already auto-emailed the code (codeSent=true) → land on the
+              // "enter your code" screen, not the "Email me a code" gate.
+              enterManualEnrol(body.recipient_email ?? undefined, params.token, undefined, undefined, true);
               return { handled: true, rt: undefined };
             }
           }
@@ -769,7 +776,7 @@ function AppContent() {
   // a fresh enrolment isn't blocked by a previous one in the same session.
   // An optional prefillEmail (from a CODE_REQUIRED response) pre-fills the
   // email field so the recipient can't fat-finger a mismatching address.
-  function enterManualEnrol(prefillEmail?: string, token?: string, cold?: boolean, retryPasskey?: () => void) {
+  function enterManualEnrol(prefillEmail?: string, token?: string, cold?: boolean, retryPasskey?: () => void, codeSent?: boolean) {
     enrolCompletedRef.current = false;
     setEnrolPrefill(typeof prefillEmail === "string" ? prefillEmail : null);
     setEnrolToken(typeof token === "string" ? token : null);
@@ -779,6 +786,9 @@ function AppContent() {
     // Only the cancel path passes a retry; every other entry clears it so the
     // "Sign in with your passkey" button appears ONLY where a passkey exists.
     setEnrolRetry(() => retryPasskey ?? null);
+    // CODE_REQUIRED entries pass codeSent=true — the server already emailed the
+    // code, so skip the "Email me a code" gate (don't invite a duplicate).
+    setEnrolCodeSent(!!codeSent);
     setMode("enrol");
   }
 
@@ -1183,6 +1193,9 @@ function AppContent() {
         initialEmail={enrolPrefill ?? undefined}
         token={enrolToken ?? undefined}
         coldSignIn={enrolCold}
+        // CODE_REQUIRED: the code was already auto-emailed — skip the gate and
+        // show "enter the code we sent you" directly.
+        initialCodeSent={enrolCodeSent}
         // Layer B: one-tap "Sign in with your passkey" retry — set ONLY when we
         // arrived here from a cancelled native sheet (enrolRetry); undefined
         // otherwise, so the button never shows on code-required / idle entries.
