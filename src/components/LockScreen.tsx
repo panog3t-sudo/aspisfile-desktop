@@ -89,17 +89,16 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     setStatus("verifying");
     setError("");
 
-    // macOS: run the assertion through the NATIVE AS bridge (in-window Touch ID
-    // / QR-to-phone), no browser — same as the rest of the native sign-in
-    // consolidation, and a stronger presence proof (the ceremony never leaves
-    // the signed binary). authenticate-verify already stamps the session, so
-    // success IS the unlock. A user-CANCEL stays on the lock screen (never
-    // escapes to the browser); only a genuine bridge failure falls through to
-    // the browser path below. Windows keeps the browser+poll path (WebView2
-    // can't do WebAuthn: origin ≠ aspisfile.com RP) until its Win32 bridge ships.
+    // macOS (AS bridge) AND Windows (Win32 WebAuthn): run the assertion through
+    // the NATIVE bridge (in-window Touch ID / Windows Hello · QR-to-phone · key),
+    // no browser — a stronger presence proof (the ceremony never leaves the
+    // signed binary). authenticate-verify already stamps the session, so success
+    // IS the unlock. A user-CANCEL stays on the lock screen (never escapes to
+    // the browser); only a genuine bridge failure falls through to the browser
+    // last-resort below. Only Linux/other keeps the browser+poll path.
     let platform = "unknown";
     try { platform = await invoke<string>("get_platform"); } catch {}
-    if (platform === "macos") {
+    if (platform === "macos" || platform === "windows") {
       try {
         await authenticatePasskey({ email: sess.email });
         recordBiometric();

@@ -324,12 +324,12 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
     setError("");
     setPhase("running");
 
-    // Native bridge attempt — macOS only. On non-macOS, get_platform
-    // returns "windows" and we skip straight to the browser path.
+    // Native bridge attempt — macOS (AS bridge) AND Windows (Win32 WebAuthn).
+    // Only Linux/other skips to the browser path.
     let platform = "unknown";
     try { platform = await invoke<string>("get_platform"); } catch {}
 
-    if (platform !== "macos") {
+    if (platform !== "macos" && platform !== "windows") {
       await fallbackToBrowser(cleanEmail, cleanCode);
       return;
     }
@@ -356,12 +356,13 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
       return;
     }
 
-    // 2. Native AS bridge → in-window Touch ID, then server verify.
+    // 2. Native bridge → in-window passkey dialog (macOS Touch ID / Windows
+    //    Hello·QR·security key), then server verify.
     try {
       await registerPasskey({
         email:             cleanEmail,
         registrationToken,
-        deviceLabel:       "AspisFile Mac",
+        deviceLabel:       platform === "windows" ? "AspisFile Windows" : "AspisFile Mac",
       });
     } catch (err: any) {
       // Cancelled by user — back to the form, keep pendingRt so they
