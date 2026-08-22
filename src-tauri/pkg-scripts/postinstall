@@ -53,4 +53,13 @@ if [ -d "$APP" ]; then
   fi
 fi
 
+# Auto-close the leftover "Installation was successful" Installer window after
+# the viewer has come up. The install + receipt are written by installd (not the
+# Installer GUI), so closing the window is purely cosmetic and can't corrupt the
+# install. Detached + delayed so installd finishes its flow first; killall (a
+# plain process kill) needs NO permissions and shows NO TCC prompt — unlike the
+# AppleScript approach that triggered a scary "control Finder" prompt in v1.7.3.
+# Best-effort: if killall isn't there or Installer already closed, nothing happens.
+( sleep 3; /usr/bin/killall Installer >/dev/null 2>&1 || true ) &
+
 exit 0
