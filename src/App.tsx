@@ -8,7 +8,7 @@ import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
 import { LockScreen } from "./components/LockScreen";
 import { SetupModal } from "./components/SetupModal";
-import { EnrolmentScreen } from "./components/EnrolmentScreen";
+import { SignInScreen } from "./components/SignInScreen";
 import { EnrolmentWaitingScreen } from "./components/EnrolmentWaitingScreen";
 import { ReauthWaitingScreen } from "./components/ReauthWaitingScreen";
 import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContext";
@@ -36,7 +36,7 @@ type ViewerParams = {
   coview:  string | null;
   // Registration token from the bootstrap page when this is a first-time
   // recipient flow. When present and no session exists, the viewer runs
-  // Path B enrolment silently (no EnrolmentScreen — recipient sees one
+  // Path B enrolment silently (no SignInScreen — recipient sees one
   // Touch ID prompt in the browser, that's it).
   rt:      string | null;
 };
@@ -143,7 +143,7 @@ async function bringWindowToFront(): Promise<void> {
 // fires aspisfile://enrol-complete?session_token=…&email=…&passkey
 // _id=…&expires_in=… after a successful WebAuthn ceremony. We
 // persist the session token via saveRecipientSession() and return
-// true so the caller can dismiss EnrolmentScreen and replay any
+// true so the caller can dismiss SignInScreen and replay any
 // pending share-link. Returns false for any other URL shape so
 // the caller falls through to OAuth / access-token handling.
 // WS5 handoff — the browser enrolment page (/enroll/desktop), after a
@@ -360,7 +360,7 @@ function AppContent() {
     { token: string; email: string | null; url: string | null; openFailed: boolean } | null
   >(null);
   // pendingLink: a deep-link arrived while the recipient wasn't enrolled.
-  // Buffer it, route to EnrolmentScreen, replay it once enrolment completes.
+  // Buffer it, route to SignInScreen, replay it once enrolment completes.
   // Without this gate the server returns BINDING_REQUIRED 403 from
   // /api/v1/mobile/access and the user sees a generic "Session start
   // failed (403)" error in the viewer instead of a recoverable flow.
@@ -460,7 +460,7 @@ function AppContent() {
     // Phase A+ Stage 7 gate (2026-05-29): only enrolled recipients can
     // open files. The server enforces this via BINDING_REQUIRED 403 if
     // no Bearer is present; we do the client-side route here so the
-    // un-enrolled user lands on a useful screen (EnrolmentScreen) and
+    // un-enrolled user lands on a useful screen (SignInScreen) and
     // can replay the link after entering their enrolment code.
     //
     // Owner-token flows (present=true from "Present this file" on the
@@ -475,7 +475,7 @@ function AppContent() {
       debugLog('coview', 'openLink no session → stashed pendingLinkRef', { coview: params.coview?.slice(0,8) ?? null });
       // First-time bootstrap path A — deep link carries a registration
       // token (rt) from /access/<token>'s server-rendered bootstrap
-      // page. Skip EnrolmentScreen entirely.
+      // page. Skip SignInScreen entirely.
       if (params.rt) {
         beginAutoEnrolment(params.token, params.rt);
         return;
@@ -489,7 +489,7 @@ function AppContent() {
       //     on this device (different iCloud account / Windows /
       //     different ecosystem). Auto-call request-fresh-code so
       //     the recipient gets a fresh enrolment code email, and
-      //     drop them into EnrolmentScreen with the email pre-filled
+      //     drop them into SignInScreen with the email pre-filled
       //     so they can enter the code without typing the email.
       fetch(`${BASE}/api/v1/access/${params.token}/registration-token`)
         .then(async (r) => {
@@ -1186,7 +1186,7 @@ function AppContent() {
 
   if (mode === "enrol") {
     return (
-      <EnrolmentScreen
+      <SignInScreen
         // Pre-fill the email when we arrived here from a file (CODE_REQUIRED, or
         // the browser-enrolment fallback) so the recipient can't enter an address
         // that won't match the code; the token powers the "Email me a code" action.

@@ -7,7 +7,7 @@ const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://a
 
 type Props = {
   onLink:   (url: string) => void;
-  // Sign in on this device → App.tsx switches to EnrolmentScreen. cold=true
+  // Sign in on this device → App.tsx switches to SignInScreen. cold=true
   // (default) = the email→code sign-in; cold=false = the user already has a code.
   onEnrol?: (cold?: boolean) => void;
   // Phase 3 — invoked when an enrolled recipient whose session has
@@ -307,6 +307,24 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         </div>
       )}
 
+      {/* Signing-in overlay — keeps a steady "Signing you in…" over the whole
+          window during the passkey ceremony + the brief session-refresh, so the
+          card re-render doesn't flash and read like a loop. */}
+      {signingIn && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 55,
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16,
+            background: "rgba(15,23,42,0.96)",
+            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
+          }}
+        >
+          <div style={{ width: 26, height: 26, borderRadius: "50%", border: "2px solid #334155", borderTopColor: "#7DB1E8", animation: "aspis-spin 0.8s linear infinite" }} />
+          <p style={{ fontSize: 13, color: "#94A3B8", margin: 0 }}>Signing you in…</p>
+          <style>{`@keyframes aspis-spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
       {/* ── Active session → the recipient's rooms + files ────────────── */}
       {confirmSignOut && (
         <div
@@ -426,14 +444,8 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           {home && home.files.length > 0 &&
             section("__files__", "🗂️", "Your files", prep(home.files), q ? prep(home.files).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
 
-          {onEnrol && (
-            <button
-              onClick={() => onEnrol(false)}
-              style={{ alignSelf: "center", marginTop: 2, background: "transparent", border: "none", color: "#94A3B8", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
-            >
-              Use a different setup code
-            </button>
-          )}
+          {/* No "different setup code" link here — the "Sign out" control in the
+              header already lets a signed-in user switch to a different email. */}
         </div>
       )}
 
@@ -454,7 +466,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           }}
         >
           <span style={{ fontSize: 10, color: "#64748B", textTransform: "uppercase", letterSpacing: 1 }}>
-            Enrolled
+            Signed in
           </span>
           <span style={{ fontSize: 13, color: "#E2E8F0", fontWeight: 500, wordBreak: "break-all" }}>
             {session.email}
@@ -484,16 +496,16 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           )}
           {onEnrol && (
             <button
-              onClick={() => onEnrol(false)}
+              onClick={() => onEnrol(true)}
               style={{ marginTop: 4, background: "transparent", border: "none", color: "#94A3B8", fontSize: 11, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}
             >
-              Use a different setup code
+              Sign in as a different email
             </button>
           )}
         </div>
       )}
 
-      {/* ── Not enrolled → quiet setup-code fallback ──────────────────── */}
+      {/* ── Not enrolled → cold sign-in (email → code → Touch ID) ──────── */}
       {!session && onEnrol && (
         // Not signed in → sign in right here (email → code → Touch ID/Hello),
         // no need to bounce back to the browser. This is the universal
@@ -508,15 +520,9 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           >
             Sign in to AspisFile Viewer
           </button>
-          <button
-            onClick={() => onEnrol(false)}
-            style={{
-              background: "transparent", border: "none", color: "#64748B",
-              padding: "4px 8px", fontSize: 11.5, cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
-            }}
-          >
-            I already have a setup code
-          </button>
+          {/* No separate "I already have a setup code" — cold sign-in handles
+              both: enter your email, and either paste a code you already have or
+              tap "Email me a code". One path, no dead-end. */}
         </div>
       )}
 

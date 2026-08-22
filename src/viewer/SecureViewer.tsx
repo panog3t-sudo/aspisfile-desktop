@@ -627,7 +627,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       // session token Bearer for non-owner /mobile/access calls and
       // returns BINDING_REQUIRED 403 without one. App.tsx's openLink()
       // gate prevents this case from reaching here by routing
-      // un-enrolled link arrivals to EnrolmentScreen first. The
+      // un-enrolled link arrivals to SignInScreen first. The
       // error-handling block below catches BINDING_REQUIRED defensively
       // so an expired session (8h TTL) surfaces a useful message.
       const sessionToken = getActiveSessionToken();

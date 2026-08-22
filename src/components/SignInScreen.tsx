@@ -56,7 +56,7 @@ type Props = {
   initialCodeSent?: boolean;
 };
 
-export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, coldSignIn, onRetryPasskey, initialCodeSent }: Props) {
+export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSignIn, onRetryPasskey, initialCodeSent }: Props) {
   // Locked when we know the recipient from the file — the code is bound to this
   // exact address, so editing it could only ever produce a mismatch.
   const emailLocked = !!initialEmail;
@@ -204,11 +204,23 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
           });
       if (res.ok) {
         setResendState("sent");
-        setResendMsg(
-          cleanEmail
-            ? `Sent to ${cleanEmail} — check your inbox (and spam).`
-            : "Sent — check your inbox (and spam).",
-        );
+        // Cold sign-in (no token) hits /recipient/signin-code, which only emails
+        // an address that actually has files — and returns the SAME generic 200
+        // either way (enumeration-safe). So we must NOT claim a code was sent;
+        // use a non-revealing message that never leaks whether files exist.
+        if (!token) {
+          setResendMsg(
+            cleanEmail
+              ? `If ${cleanEmail} has files shared with it, we've sent a code — check your inbox and spam. No code? Make sure it's the exact address the file was shared to.`
+              : "If that address has files shared with it, we've sent a code — check your inbox and spam.",
+          );
+        } else {
+          setResendMsg(
+            cleanEmail
+              ? `Sent to ${cleanEmail} — check your inbox (and spam).`
+              : "Sent — check your inbox (and spam).",
+          );
+        }
         setCooldown(60);
       } else if (res.status === 429) {
         setResendState("error");
@@ -526,12 +538,12 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
               <>
                 <p style={{ fontSize: 13, color: "#94A3B8", lineHeight: 1.6, margin: "0 0 16px" }}>
                   {coldSignIn
-                    ? <>Your document is ready. Sign in with the email address it was sent to, and we&apos;ll open it here.</>
+                    ? <>Sign in with the email your files were shared to, and we&apos;ll open them here. Enter a code you already have, or tap &ldquo;Email me a code&rdquo;.</>
                     : <>Enter your email and the setup code from your inbox. We&apos;ll ask for {bio} to finish.</>}
                 </p>
                 {coldSignIn && (
                   <p style={{ fontSize: 12, color: "#64748B", lineHeight: 1.7, margin: "0 0 18px" }}>
-                    <b style={{ color: "#94A3B8" }}>1.</b> Enter your email &nbsp;·&nbsp; <b style={{ color: "#94A3B8" }}>2.</b> Enter the code we email you &nbsp;·&nbsp; <b style={{ color: "#94A3B8" }}>3.</b> Confirm with {bio}
+                    <b style={{ color: "#94A3B8" }}>1.</b> Enter your email &nbsp;·&nbsp; <b style={{ color: "#94A3B8" }}>2.</b> Enter a code you have, or email yourself one &nbsp;·&nbsp; <b style={{ color: "#94A3B8" }}>3.</b> Confirm with {bio}
                   </p>
                 )}
                 <Label>Email address</Label>
@@ -539,7 +551,7 @@ export function EnrolmentScreen({ onComplete, onCancel, initialEmail, token, col
                   type="email"
                   value={email}
                   onChange={(e) => { setEmail(e.target.value.toLowerCase()); setError(""); }}
-                  placeholder="you@example.com"
+                  placeholder="Enter your email address"
                   style={inputStyle}
                   autoCapitalize="none"
                   autoCorrect="off"
