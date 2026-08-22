@@ -680,19 +680,19 @@ function AppContent() {
       return;
     }
 
-    // #6 — first-open register NATIVELY on macOS (in-window Touch ID via the
-    // AS bridge), no browser round-trip. The AS bridge stamps the associated-
-    // domain origin, so register-verify accepts it. registerPasskey saves the
-    // recipient session on success, so we just replay the buffered link and the
-    // file opens — same shape as trySignInWithExistingPasskey's success path.
-    // Windows keeps the browser enrol (WKWebView2's webview origin doesn't match
-    // the server's EXPECTED_ORIGINS — that's the future Win32 module's job).
+    // #6 — first-open register NATIVELY, in-window, no browser round-trip:
+    // macOS via the AS bridge (Touch ID), Windows via the Win32 WebAuthn bridge
+    // (Hello / phone-QR / security key). Both build clientDataJSON with
+    // origin=https://aspisfile.com so register-verify accepts it. registerPasskey
+    // saves the recipient session on success, so we replay the buffered link and
+    // the file opens — same shape as trySignInWithExistingPasskey's success path.
+    // Only Linux/other keeps the browser enrol.
     let platform = "unknown";
     try { platform = await invoke<string>("get_platform"); } catch { /* keep browser fallback */ }
-    if (platform === "macos") {
+    if (platform === "macos" || platform === "windows") {
       try {
-        setBusy("Setting up secure access…"); // #7 — native register (Touch ID) in progress
-        await registerPasskey({ email, registrationToken: rt, deviceLabel: "AspisFile Mac" });
+        setBusy("Setting up secure access…"); // #7 — native register in progress
+        await registerPasskey({ email, registrationToken: rt, deviceLabel: platform === "windows" ? "AspisFile Windows" : "AspisFile Mac" });
         // Enrolled + session saved natively. Replay the buffered link → open.
         resetPasskeyFriction(); // #5 — a win clears any escalation
         enrolCompletedRef.current = true;

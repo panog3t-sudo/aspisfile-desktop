@@ -28,17 +28,24 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
-// Non-macOS stubs — Windows + Linux fall back to the existing Path B
-// browser flow in the JS layer (lib/passkey.ts decides which path
-// to use based on get_platform()).
-#[cfg(not(target_os = "macos"))]
+// Native Windows bridge — Win32 WebAuthn (webauthn.dll). Same command contract
+// as macOS (options-JSON in, RegistrationResponseJSON / AssertionResponseJSON
+// out), so the JS layer is identical across both OSes.
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::*;
+
+// Linux (and any other target) has no native WebAuthn bridge — the JS layer
+// falls back to the browser flow there (lib/passkey.ts checks get_platform()).
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[tauri::command]
 pub async fn passkey_register(_options_json: String) -> Result<String, String> {
-    Err("Native AS bridge is macOS-only — use Path B browser flow on Windows".to_string())
+    Err("Native passkey bridge is macOS/Windows-only — use the browser flow".to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[tauri::command]
 pub async fn passkey_authenticate(_options_json: String) -> Result<String, String> {
-    Err("Native AS bridge is macOS-only — use Path B browser flow on Windows".to_string())
+    Err("Native passkey bridge is macOS/Windows-only — use the browser flow".to_string())
 }

@@ -30,15 +30,16 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { saveRecipientSession } from './recipient-session';
 
-// Native AS bridge — macOS only. On Windows the WKWebView2 path still
-// works via simplewebauthn (we don't have an equivalent native bridge).
-// On macOS the in-WebView ceremony is broken (Code=1004 + nil
-// credential) so we route through the AuthenticationServices framework
-// directly via passkey_register / passkey_authenticate commands.
-async function isMacBridge(): Promise<boolean> {
+// Native passkey bridge — macOS (AuthenticationServices) AND Windows (Win32
+// WebAuthn / webauthn.dll). Both run the OS's own passkey dialog IN-WINDOW via
+// the passkey_register / passkey_authenticate commands, so no browser and no
+// per-browser variance. The in-WebView2 simplewebauthn path can't be used
+// (WebView2's tauri.localhost origin ≠ our aspisfile.com RP), which is exactly
+// why each OS gets a native bridge. Only Linux/other falls back to the browser.
+async function hasNativeBridge(): Promise<boolean> {
   try {
     const platform = await invoke<string>('get_platform');
-    return platform === 'macos';
+    return platform === 'macos' || platform === 'windows';
   } catch {
     return false;
   }
@@ -152,7 +153,7 @@ export async function registerPasskey(params: {
   // 2. WebAuthn ceremony — native AS bridge on macOS (in-window
   //    Touch ID), simplewebauthn elsewhere (Windows Hello via WKWebView2).
   let credential;
-  const useBridge = await isMacBridge();
+  const useBridge = await hasNativeBridge();
   const t0 = Date.now();
   try {
     credential = useBridge
@@ -231,7 +232,7 @@ export async function authenticatePasskey(params: {
   const options: PublicKeyCredentialRequestOptionsJSON = await optionsRes.json();
 
   let credential;
-  const useBridge = await isMacBridge();
+  const useBridge = await hasNativeBridge();
   const t0 = Date.now();
   try {
     credential = useBridge

@@ -63,5 +63,11 @@ objc2-foundation = { version = "0.2", features = [
 base64 = "0.22"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Security_Credentials_UI", "Foundation"] }
+windows = { version = "0.58", features = [
+  "Security_Credentials_UI",
+  "Foundation",
+  # Native Win32 WebAuthn bridge (passkey/windows.rs)
+  "Win32_Foundation",
+  "Win32_Networking_WindowsWebServices",
+] }
 
