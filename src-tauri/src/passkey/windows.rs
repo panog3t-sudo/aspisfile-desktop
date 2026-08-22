@@ -164,11 +164,15 @@ fn err_to_string(e: windows::core::Error) -> String {
 }
 
 // Resolve the Tauri main window's native HWND to anchor the modal WebAuthn UI.
+// Tauri pulls a NEWER `windows` crate (0.61) than our bridge (0.58), so its
+// HWND is a distinct type — bridge it via the raw *mut c_void so our WebAuthn
+// calls receive an HWND of our own crate version.
 fn main_hwnd(app: &AppHandle) -> Result<HWND, String> {
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "no 'main' window to anchor the passkey dialog".to_string())?;
-    win.hwnd().map_err(|e| format!("window hwnd unavailable: {e}"))
+    let raw = win.hwnd().map_err(|e| format!("window hwnd unavailable: {e}"))?;
+    Ok(HWND(raw.0))
 }
 
 // ─── Command: register (WebAuthNAuthenticatorMakeCredential) ─────────
@@ -270,7 +274,7 @@ pub async fn passkey_register(app: AppHandle, options_json: String) -> Result<St
             std::slice::from_raw_parts(att.pbCredentialId, att.cbCredentialId as usize).to_vec();
         (att_obj, cred_id)
     };
-    unsafe { WebAuthNFreeCredentialAttestation(att_ptr) };
+    unsafe { WebAuthNFreeCredentialAttestation(Some(att_ptr as *const _)) };
 
     let out = RegistrationResponse {
         id: b64url(&cred_id),
