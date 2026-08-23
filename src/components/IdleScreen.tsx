@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, type ReactElement } from "react";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
 
@@ -20,7 +20,7 @@ type Props = {
 };
 
 type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean };
-type HomeFolder = { id: string; name: string; position: number };
+type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
 type SortKey  = "name" | "date" | "size";
@@ -221,15 +221,47 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
     );
   };
 
-  // A data room: collapsible container → numbered collapsible folders → docs.
+  // A data room: collapsible container → nested numbered folders → docs. Folders
+  // arrive with parent_id (member-visible ancestors only); build the tree here.
   const renderRoom = (room: HomeRoom) => {
-    const docsIn = (fid: string | null) => prep(room.docs.filter(d => (d.folder_id ?? null) === fid));
     const folders = room.folders ?? [];
-    const groups = folders.map((f, i) => ({ folder: f, number: i + 1, docs: docsIn(f.id) }));
+    const childFolders = (pid: string | null) =>
+      folders.filter(f => (f.parent_id ?? null) === pid).sort((a, b) => (a.position - b.position) || a.name.localeCompare(b.name));
+    const docsIn = (fid: string | null) => prep(room.docs.filter(d => (d.folder_id ?? null) === fid));
+    const subtreeDocCount = (fid: string): number =>
+      room.docs.filter(d => (d.folder_id ?? null) === fid).length + childFolders(fid).reduce((n, c) => n + subtreeDocCount(c.id), 0);
     const unfiled = docsIn(null);
-    const totalShown = groups.reduce((n, g) => n + g.docs.length, 0) + unfiled.length;
+    const rootFolders = childFolders(null);
+    const totalShown = prep(room.docs).length;
     if (q && totalShown === 0) return null;
     const roomOpen = q ? totalShown > 0 : !!expandedRooms[room.id];
+
+    // A folder renders only if it (or a descendant) holds a doc that survives the
+    // current search; the parent chain was already filtered to the member's path
+    // server-side, so nothing here can leak an off-path name.
+    const renderFolderNode = (folder: HomeFolder, number: string, depth: number): ReactElement | null => {
+      const subs = childFolders(folder.id);
+      const docs = docsIn(folder.id);
+      const subNodes = subs.map((s, i) => renderFolderNode(s, `${number}.${i + 1}`, depth + 1)).filter(Boolean) as ReactElement[];
+      if (q && docs.length === 0 && subNodes.length === 0) return null;
+      const fOpen = q ? true : (expandedFolders[folder.id] ?? true);
+      return (
+        <div key={folder.id} style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 9, overflow: "hidden", marginBottom: 6, marginLeft: depth ? 10 : 0 }}>
+          <button onClick={() => setExpandedFolders(p => ({ ...p, [folder.id]: !(p[folder.id] ?? true) }))} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+            <span style={{ fontSize: 9, color: "#64748B", width: 9, display: "inline-block", transition: "transform 0.12s", transform: fOpen ? "rotate(90deg)" : "none" }}>▶</span>
+            <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, fontWeight: 700, color: "#7DB1E8" }}>{number}</span>
+            <span style={{ fontSize: 13 }}>📁</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</span>
+            <span style={{ fontSize: 10.5, color: "#64748B" }}>{subtreeDocCount(folder.id)}</span>
+          </button>
+          {fOpen && <div style={{ padding: subs.length ? "0 6px 6px" : 0 }}>
+            {subNodes}
+            {docs.map(docRow)}
+          </div>}
+        </div>
+      );
+    };
+
     return (
       <div key={room.id} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
         <button onClick={() => setExpandedRooms(p => ({ ...p, [room.id]: !p[room.id] }))} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "12px 14px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
@@ -240,22 +272,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         </button>
         {roomOpen && (
           <div style={{ maxHeight: 440, overflowY: "auto", padding: folders.length ? "6px" : 0 }}>
-            {groups.map(g => {
-              if (q && g.docs.length === 0) return null;
-              const fOpen = q ? g.docs.length > 0 : (expandedFolders[g.folder.id] ?? true);
-              return (
-                <div key={g.folder.id} style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 9, overflow: "hidden", marginBottom: 6 }}>
-                  <button onClick={() => setExpandedFolders(p => ({ ...p, [g.folder.id]: !(p[g.folder.id] ?? true) }))} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-                    <span style={{ fontSize: 9, color: "#64748B", width: 9, display: "inline-block", transition: "transform 0.12s", transform: fOpen ? "rotate(90deg)" : "none" }}>▶</span>
-                    <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, fontWeight: 700, color: "#7DB1E8" }}>{g.number}</span>
-                    <span style={{ fontSize: 13 }}>📁</span>
-                    <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.folder.name}</span>
-                    <span style={{ fontSize: 10.5, color: "#64748B" }}>{g.docs.length}</span>
-                  </button>
-                  {fOpen && <div>{g.docs.map(docRow)}</div>}
-                </div>
-              );
-            })}
+            {rootFolders.map((f, i) => renderFolderNode(f, `${i + 1}`, 0))}
             {unfiled.length > 0 && (folders.length > 0
               ? <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 9, overflow: "hidden" }}>
                   <div style={{ padding: "8px 12px", fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748B" }}>Room root</div>
