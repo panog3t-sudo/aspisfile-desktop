@@ -19,9 +19,13 @@
 //!   2. anchors the modal to the real Tauri window hWnd (not GetForegroundWindow).
 //!   3. maps user-cancel (NotAllowedError) to a `CANCELLED:` prefix so the JS
 //!      `normaliseWebAuthnError` routes it to 'cancelled' (Layer A/B parity).
-//!
-//! TODO (Kobus plan, follow-up once the core is verified on-device): honour the
-//! server-populated excludeCredentials via pExcludeCredentialList on register.
+//!   4. honours the server-populated excludeCredentials via pExcludeCredentialList
+//!      on register (WS1 of the Kobus fix, docs/kobus-fix-and-telemetry-plan.md):
+//!      without it the authenticator mints a SECOND discoverable credential for a
+//!      device that already has one, the server discards it on the (email,
+//!      device_fingerprint) unique violation, and the device is then signing with
+//!      a credential the server never stored → permanent AUTH_FAILED. Passing the
+//!      recipient's existing credential IDs makes the OS refuse the duplicate.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine;
@@ -41,7 +45,6 @@ struct RegistrationOptions {
     #[allow(dead_code)]
     pub_key_cred_params: Vec<serde_json::Value>,
     #[serde(rename = "excludeCredentials", default)]
-    #[allow(dead_code)]
     exclude_credentials: Vec<CredDescriptor>,
 }
 
@@ -238,6 +241,36 @@ pub async fn passkey_register(app: AppHandle, options_json: String) -> Result<St
         pwszHashAlgId: PCWSTR(hash_w.as_ptr()),
     };
 
+    // ── Exclude list (WS1 Kobus fix) ──
+    // Decode each server-supplied excludeCredentials.id (base64url) and hand the
+    // OS a pExcludeCredentialList so the authenticator refuses to create a second
+    // credential for a device that already holds one. Every buffer/struct here
+    // must outlive the WebAuthNAuthenticatorMakeCredential call below, so they're
+    // bound in this scope (dropped only at function end).
+    let mut exclude_id_bufs: Vec<Vec<u8>> = opts
+        .exclude_credentials
+        .iter()
+        .filter_map(|c| B64URL.decode(c.id.trim_end_matches('=')).ok())
+        .filter(|b| !b.is_empty())
+        .collect();
+    let mut exclude_ex: Vec<WEBAUTHN_CREDENTIAL_EX> = exclude_id_bufs
+        .iter_mut()
+        .map(|buf| WEBAUTHN_CREDENTIAL_EX {
+            dwVersion: WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION,
+            cbId: buf.len() as u32,
+            pbId: buf.as_mut_ptr(),
+            pwszCredentialType: PCWSTR(cred_type_w.as_ptr()),
+            dwTransports: 0, // no transport constraint — match any authenticator
+        })
+        .collect();
+    // WEBAUTHN_CREDENTIAL_LIST holds an array of POINTERS to the EX structs.
+    let mut exclude_ptrs: Vec<*mut WEBAUTHN_CREDENTIAL_EX> =
+        exclude_ex.iter_mut().map(|e| e as *mut _).collect();
+    let mut exclude_list = WEBAUTHN_CREDENTIAL_LIST {
+        cCredentials: exclude_ptrs.len() as u32,
+        ppCredentials: exclude_ptrs.as_mut_ptr(),
+    };
+
     let mut make_opts = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS::default();
     make_opts.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION;
     make_opts.dwTimeoutMilliseconds = 120_000; // cover a slow phone-QR ceremony
@@ -245,6 +278,12 @@ pub async fn passkey_register(app: AppHandle, options_json: String) -> Result<St
     make_opts.bRequireResidentKey = TRUE; // discoverable — matches the proven spike
     make_opts.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
     make_opts.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
+    // Attach the exclude list only when non-empty (an empty list's dangling
+    // ppCredentials pointer must never reach the OS). First-time registrants
+    // have no existing credentials → null → no behaviour change.
+    if !exclude_ptrs.is_empty() {
+        make_opts.pExcludeCredentialList = &mut exclude_list as *mut _;
+    }
 
     let att_ptr = unsafe {
         WebAuthNAuthenticatorMakeCredential(
