@@ -393,6 +393,23 @@ function AppContent() {
   // subsequent app-lock cycle would re-fire take_pending_afs and the
   // user would see their file re-opened on every unlock.
   const drainedAfsRef = useRef(false);
+  // One-shot: set by an explicit Sign out (IdleScreen / LockScreen) just before
+  // it reloads the app. On that reload getCurrent()/take_pending_afs would
+  // otherwise re-deliver the ORIGINAL launch file link and auto-fire its passkey
+  // — signing you straight back in as the account you just left, and leaving no
+  // way to sign in as a different email. Read+clear the flag ONCE at first render
+  // (before any effect runs) so the two launch-replay paths skip it and land on a
+  // clean cold sign-in instead. Runtime onOpenUrl (a NEW file link clicked after
+  // sign-out) is NOT gated — only the stale relaunch replay is suppressed.
+  const signedOutRef = useRef<boolean>((() => {
+    try {
+      if (sessionStorage.getItem("ax_signed_out") === "1") {
+        sessionStorage.removeItem("ax_signed_out");
+        return true;
+      }
+    } catch { /* no sessionStorage */ }
+    return false;
+  })());
 
   async function openLink(params: ViewerParams) {
     debugLog('coview', 'openLink', {
@@ -1018,6 +1035,15 @@ function AppContent() {
       .then(async (urls) => {
         debugLog('coview', 'getCurrent resolved', { urls: urls?.map(u => String(u).slice(0,80)) });
         if (cancelled || !urls || urls.length === 0) return;
+        // Explicit sign-out just reloaded us — do NOT auto-reopen the launch
+        // file (that re-authenticates you as the account you just left). Land
+        // on a clean cold sign-in (email field) so you can sign in as any email.
+        if (signedOutRef.current) {
+          debugLog('coview', 'getCurrent: suppressed launch replay after sign-out');
+          await bringWindowToFront();
+          enterManualEnrol(undefined, undefined, true);
+          return;
+        }
         // Surface the window before any URL processing — gives the
         // browser-side detection a deterministic focus-shift to read.
         await bringWindowToFront();
@@ -1090,6 +1116,9 @@ function AppContent() {
   // guards against re-draining on subsequent lock cycles.
   useEffect(() => {
     if (drainedAfsRef.current) return;
+    // Explicit sign-out: consume the guard but skip the drain, so a just-signed-
+    // out user doesn't get the launch .afs auto-reopened over the cold sign-in.
+    if (signedOutRef.current) { drainedAfsRef.current = true; return; }
     if (!lockInitialised || appLocked) return;
     drainedAfsRef.current = true;
     invoke<AfsLink | null>("take_pending_afs")

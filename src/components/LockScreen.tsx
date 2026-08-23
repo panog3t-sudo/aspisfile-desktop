@@ -260,6 +260,10 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     // Supabase session — so signing out must clear THAT too, or the viewer stays
     // "signed in" and Sign out appears to do nothing (the bug). Clear both, then
     // reload so the app re-inits with no session and lands on the sign-in screen.
+    // Mark this reload as a deliberate sign-out so App.tsx does NOT auto-reopen
+    // the launch file on re-init (which would re-authenticate you straight back
+    // in as the account you just left). See App.tsx signedOutRef.
+    try { sessionStorage.setItem("ax_signed_out", "1"); } catch { /* no sessionStorage */ }
     clearAllRecipientState();
     try { await supabase.auth.signOut({ scope: "local" }); } catch { /* best-effort */ }
     window.location.reload();

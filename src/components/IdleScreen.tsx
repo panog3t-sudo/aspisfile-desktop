@@ -358,7 +358,14 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
                 Cancel
               </button>
               <button
-                onClick={() => { clearAllRecipientState(); window.location.reload(); }}
+                onClick={() => {
+                  // Mark this reload as a deliberate sign-out so App.tsx does NOT
+                  // auto-reopen the launch file (which would sign you straight
+                  // back in as the account you just left). See App.tsx signedOutRef.
+                  try { sessionStorage.setItem("ax_signed_out", "1"); } catch { /* no sessionStorage */ }
+                  clearAllRecipientState();
+                  window.location.reload();
+                }}
                 style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: "none", background: "#B91C1C", color: "#fff", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}
               >
                 Sign out
