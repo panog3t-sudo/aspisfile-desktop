@@ -91,9 +91,31 @@ function reportNativeOutcome(
   } catch { /* never let telemetry affect the ceremony */ }
 }
 
+// Fire-and-forget sign-in PATH telemetry — which flow the viewer committed to
+// and how it ended. Complements the per-ceremony reportNativeOutcome + the
+// server verify-path telemetry: this is the FLOW view for monitoring sign-up/
+// sign-in (recovery rate, browser-fallback rate, drop-off by path).
+export function reportSigninPath(
+  path: 'first_open_register' | 'returning_authenticate' | 'cold_signin' | 'recovery_reenroll' | 'browser_fallback',
+  outcome: 'started' | 'success' | 'cancelled' | 'failed' | 'reenroll',
+  extra?: { platform?: string; errorName?: string; email?: string },
+) {
+  try {
+    void fetch(`${BASE}/api/v1/recipient-passkeys/telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'signin_path', path, outcome,
+        platform: extra?.platform, error_name: extra?.errorName?.slice(0, 80), email: extra?.email,
+      }),
+    }).catch(() => {});
+  } catch { /* never let telemetry affect sign-in */ }
+}
+
 export type PasskeyErrorKind =
   | 'unsupported'
   | 'cancelled'
+  | 'credential_not_found'   // WS2a — server no longer holds this device's credential (revoked/orphaned)
   | 'server_rejected'
   | 'network'
   | 'unknown';
@@ -257,6 +279,12 @@ export async function authenticatePasskey(params: {
   }
   const verifyJson = await verifyRes.json().catch(() => ({} as any));
   if (!verifyRes.ok || !verifyJson.success) {
+    // WS2a — the server no longer holds the credential this device signed with
+    // (revoked / orphaned). Surface a distinct kind so the caller routes to a
+    // fresh code→register sign-in instead of a dead end.
+    if (verifyJson.error === 'CREDENTIAL_NOT_FOUND') {
+      throw new PasskeyError('credential_not_found', "This device's passkey is no longer registered.");
+    }
     throw new PasskeyError('server_rejected', verifyJson.error ?? `authenticate-verify ${verifyRes.status}`);
   }
 

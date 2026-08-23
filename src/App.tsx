@@ -15,7 +15,7 @@ import { LockProvider, useLock, BIOMETRIC_FRESH_MS } from "./contexts/LockContex
 import { supabase } from "./lib/supabase";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, clearSessionTokenOnly, saveRecipientSession } from "./lib/recipient-session";
 import { WrongAccountScreen } from "./components/WrongAccountScreen";
-import { authenticatePasskey, registerPasskey, PasskeyError } from "./lib/passkey";
+import { authenticatePasskey, registerPasskey, PasskeyError, reportSigninPath } from "./lib/passkey";
 import { recordPasskeyCancel, resetPasskeyFriction } from "./lib/signin-hints";
 import { toggleAfsRender } from "./lib/afs-render";
 import "./App.css";
@@ -220,7 +220,10 @@ function tryHandleEnrolComplete(url: string): { email: string } | null {
 // boolean, so the caller can tell a user-CANCEL apart from a real failure — the
 // conflation that sent every cancel (and Kobus) to the browser. Behaviour is
 // unchanged for now; Layer B routes 'cancelled' to a native retry instead.
-type SignInOutcome = 'success' | 'cancelled' | 'failed';
+// 'reenroll' (WS2a): the device signed with a credential the server no longer
+// holds (revoked / orphaned) — route to a fresh code→register sign-in, not the
+// browser re-auth (which would fail the same way).
+type SignInOutcome = 'success' | 'cancelled' | 'failed' | 'reenroll';
 
 async function trySignInWithExistingPasskey(token: string): Promise<SignInOutcome> {
   try {
@@ -234,6 +237,8 @@ async function trySignInWithExistingPasskey(token: string): Promise<SignInOutcom
     // A user-cancel must NOT be treated the same as a hard failure (no
     // discoverable passkey, server-rejected assertion, network, etc.).
     if (err instanceof PasskeyError && err.kind === 'cancelled') return 'cancelled';
+    // WS2a — the server doesn't have this device's credential → recover, don't fail.
+    if (err instanceof PasskeyError && err.kind === 'credential_not_found') return 'reenroll';
     return 'failed';
   }
 }
@@ -543,8 +548,10 @@ function AppContent() {
           // session-less open went to enrolment and dead-ended on
           // register-verify's already-registered guard.
           setBusy("Signing you in…"); // #7 — native Touch ID sheet is about to appear
+          reportSigninPath('returning_authenticate', 'started');
           const outcome = await trySignInWithExistingPasskey(params.token);
           if (outcome === 'success') {
+            reportSigninPath('returning_authenticate', 'success');
             // The passkey ceremony just proved presence — dedup the
             // per-file native biometric gate, clear the buffered link,
             // and replay so openLink mounts the viewer (session now set).
@@ -554,7 +561,19 @@ function AppContent() {
             openLinkRef.current?.(params);
             return;
           }
+          if (outcome === 'reenroll') {
+            // WS2a — the device holds a credential the server no longer has
+            // (revoked / orphaned, e.g. Kobus's stale Google-PM passkey). NOT a
+            // dead-end: route to a fresh code→register sign-in, exactly like a
+            // first-time recipient. No passkey-retry button (the passkey is
+            // gone); the buffered link (pendingLinkRef) replays on completion so
+            // the file opens. The mailbox code is the proof of control.
+            reportSigninPath('recovery_reenroll', 'reenroll');
+            enterManualEnrol(undefined, params.token, true);
+            return;
+          }
           if (outcome === 'cancelled') {
+            reportSigninPath('returning_authenticate', 'cancelled');
             recordPasskeyCancel(); // #5 — escalate to the code path after repeats
             // Layer B: a user-CANCEL of the native sheet stays NATIVE — land on
             // the in-viewer "Sign in to AspisFile Viewer" screen (email-me-a-code,
@@ -577,6 +596,8 @@ function AppContent() {
           // assertion (any vault, phone-QR) mints a session via the reauth-status
           // poll. beginBrowserReauth falls back to the code path if it can't
           // resolve the recipient.
+          reportSigninPath('returning_authenticate', 'failed');
+          reportSigninPath('browser_fallback', 'started');
           beginBrowserReauth(params.token);
         })
         .catch(() => enterManualEnrol(undefined, params.token));
@@ -707,10 +728,12 @@ function AppContent() {
     let platform = "unknown";
     try { platform = await invoke<string>("get_platform"); } catch { /* keep browser fallback */ }
     if (platform === "macos" || platform === "windows") {
+      reportSigninPath('first_open_register', 'started', { platform, email });
       try {
         setBusy("Setting up secure access…"); // #7 — native register in progress
         await registerPasskey({ email, registrationToken: rt, deviceLabel: platform === "windows" ? "AspisFile Windows" : "AspisFile Mac" });
         // Enrolled + session saved natively. Replay the buffered link → open.
+        reportSigninPath('first_open_register', 'success', { platform, email });
         resetPasskeyFriction(); // #5 — a win clears any escalation
         enrolCompletedRef.current = true;
         recordBiometric();
@@ -723,12 +746,15 @@ function AppContent() {
         // Land them on the manual screen with a one-tap passkey retry, exactly
         // like Layer B's cancel handling for existing-passkey sign-in.
         if (err instanceof PasskeyError && err.kind === "cancelled") {
+          reportSigninPath('first_open_register', 'cancelled', { platform, email });
           recordPasskeyCancel(); // #5 — escalate to the code path after repeats
           enterManualEnrol(email, token, true, () => beginAutoEnrolment(token, rt));
           return;
         }
         // Genuine failure (network, server-rejected, no authenticator) — fall
         // through to the browser enrol, which is the proven universal path.
+        reportSigninPath('first_open_register', 'failed', { platform, email, errorName: err instanceof PasskeyError ? err.kind : String((err as any)?.name ?? '') });
+        reportSigninPath('browser_fallback', 'started', { platform, email });
         console.warn("[auto-enrolment] native register failed, falling back to browser:", err);
       }
     }

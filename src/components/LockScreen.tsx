@@ -109,6 +109,16 @@ export function LockScreen({ fileName, onUnlock }: Props) {
           setStatus("idle");
           return;
         }
+        // WS2a — the server no longer holds this device's credential (revoked /
+        // orphaned, e.g. a stale Google-PM passkey surfaced by the OS picker).
+        // The browser path would fail identically, so don't escape to it —
+        // surface a clear re-sign-in message; Sign out (below) lands on a fresh
+        // cold sign-in to set up a new passkey. No dead-end.
+        if (err instanceof PasskeyError && err.kind === "credential_not_found") {
+          setStatus("error");
+          setError("This device's saved passkey is no longer registered. Tap Sign out below, then sign in again to set up a new one.");
+          return;
+        }
         // Genuine native failure → fall through to the browser last resort.
       }
     }
