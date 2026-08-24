@@ -246,15 +246,15 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       if (q && docs.length === 0 && subNodes.length === 0) return null;
       const fOpen = q ? true : (expandedFolders[folder.id] ?? true);
       return (
-        <div key={folder.id} style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 9, overflow: "hidden", marginBottom: 6, marginLeft: depth ? 10 : 0 }}>
-          <button onClick={() => setExpandedFolders(p => ({ ...p, [folder.id]: !(p[folder.id] ?? true) }))} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 12px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <div key={folder.id}>
+          <button onClick={() => setExpandedFolders(p => ({ ...p, [folder.id]: !(p[folder.id] ?? true) }))} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 8px", borderRadius: 7, background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
             <span style={{ fontSize: 9, color: "#64748B", width: 9, display: "inline-block", transition: "transform 0.12s", transform: fOpen ? "rotate(90deg)" : "none" }}>▶</span>
             <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, fontWeight: 700, color: "#7DB1E8" }}>{number}</span>
             <span style={{ fontSize: 13 }}>📁</span>
             <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</span>
             <span style={{ fontSize: 10.5, color: "#64748B" }}>{subtreeDocCount(folder.id)}</span>
           </button>
-          {fOpen && <div style={{ padding: subs.length ? "0 6px 6px" : 0 }}>
+          {fOpen && <div style={{ marginLeft: 13, paddingLeft: 13, borderLeft: "1.5px solid rgba(255,255,255,0.10)" }}>
             {subNodes}
             {docs.map(docRow)}
           </div>}
