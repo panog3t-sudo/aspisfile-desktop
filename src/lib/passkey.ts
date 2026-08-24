@@ -100,15 +100,21 @@ export function reportSigninPath(
   outcome: 'started' | 'success' | 'cancelled' | 'failed' | 'reenroll',
   extra?: { platform?: string; errorName?: string; email?: string },
 ) {
+  const url = `${BASE}/api/v1/recipient-passkeys/telemetry`;
+  const payload = JSON.stringify({
+    event: 'signin_path', path, outcome,
+    platform: extra?.platform, error_name: extra?.errorName?.slice(0, 80), email: extra?.email,
+  });
+  // sendBeacon survives the native passkey dialog taking over the webview — a
+  // plain fire-and-forget fetch fired right before it gets dropped. A string
+  // body is a text/plain "simple" request (no CORS preflight); the telemetry
+  // route's req.json() parses it regardless of the content-type header.
   try {
-    void fetch(`${BASE}/api/v1/recipient-passkeys/telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        event: 'signin_path', path, outcome,
-        platform: extra?.platform, error_name: extra?.errorName?.slice(0, 80), email: extra?.email,
-      }),
-    }).catch(() => {});
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function'
+        && navigator.sendBeacon(url, payload)) return;
+  } catch { /* fall through to fetch */ }
+  try {
+    void fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, keepalive: true }).catch(() => {});
   } catch { /* never let telemetry affect sign-in */ }
 }
 
