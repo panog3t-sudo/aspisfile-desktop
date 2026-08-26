@@ -375,6 +375,9 @@ function AppContent() {
   // and completeEnrolment() read it. State here would trip TS6133
   // because nothing references the reactive value.
   const pendingLinkRef = useRef<ViewerParams | null>(null);
+  // Per-token count of native passkey-sheet attempts this session — caps the OS
+  // cross-device QR so it can never loop (see the returning_authenticate branch).
+  const nativeAuthTriesRef = useRef<Record<string, number>>({});
   // Guards against the enrol session completing twice — the aspisfile://
   // deep link and the enrol-status poll can both report success; only the
   // first should replay the buffered file link.
@@ -513,7 +516,8 @@ function AppContent() {
       //     the recipient gets a fresh enrolment code email, and
       //     drop them into SignInScreen with the email pre-filled
       //     so they can enter the code without typing the email.
-      fetch(`${BASE}/api/v1/access/${params.token}/registration-token`)
+      const plat = await invoke<string>("get_platform").catch(() => "unknown");
+      fetch(`${BASE}/api/v1/access/${params.token}/registration-token?platform=${encodeURIComponent(plat)}`)
         .then(async (r) => {
           // "Verified first open" flagged file — the server refuses to mint a
           // codeless registration token (CODE_REQUIRED, 403). The recipient's
@@ -547,6 +551,17 @@ function AppContent() {
           // authenticatePasskey was never called anywhere, so every
           // session-less open went to enrolment and dead-ended on
           // register-verify's already-registered guard.
+          // Never LOOP the OS cross-device QR. After two native passkey attempts
+          // for this file that didn't land (e.g. a cross-ecosystem Google-PM
+          // passkey Apple can't use, if the server-side guard didn't catch it),
+          // stop re-summoning the sheet and go straight to mailbox-code
+          // re-enrolment (Andrew hit the QR 3× on 2026-08-26).
+          const tries = nativeAuthTriesRef.current[params.token] ?? 0;
+          if (tries >= 2) {
+            enterManualEnrol(undefined, params.token, true);
+            return;
+          }
+          nativeAuthTriesRef.current[params.token] = tries + 1;
           setBusy("Signing you in…"); // #7 — native Touch ID sheet is about to appear
           reportSigninPath('returning_authenticate', 'started');
           const outcome = await trySignInWithExistingPasskey(params.token);
