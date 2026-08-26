@@ -28,6 +28,7 @@ import {
   type PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/browser';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { saveRecipientSession } from './recipient-session';
 
 // Native passkey bridge — macOS (AuthenticationServices) AND Windows (Win32
@@ -45,9 +46,23 @@ async function hasNativeBridge(): Promise<boolean> {
   }
 }
 
+// Surface the viewer window before the native passkey dialog so the OS prompt
+// (Windows Hello / Touch ID) opens IN FRONT — not behind other windows or a
+// background/auto-locked viewer (reported: Hello prompt hidden behind Outlook,
+// Kobus 2026-08-26). Best-effort — focus is a UX nicety, never a hard gate.
+async function bringViewerToFront(): Promise<void> {
+  try {
+    const w = getCurrentWindow();
+    await w.show();
+    await w.unminimize();
+    await w.setFocus();
+  } catch { /* focus is a nicety; ignore */ }
+}
+
 async function bridgeRegister(
   options: PublicKeyCredentialCreationOptionsJSON,
 ): Promise<any> {
+  await bringViewerToFront();
   const responseJson = await invoke<string>('passkey_register', {
     optionsJson: JSON.stringify(options),
   });
@@ -57,6 +72,7 @@ async function bridgeRegister(
 async function bridgeAuthenticate(
   options: PublicKeyCredentialRequestOptionsJSON,
 ): Promise<any> {
+  await bringViewerToFront();
   const responseJson = await invoke<string>('passkey_authenticate', {
     optionsJson: JSON.stringify(options),
   });

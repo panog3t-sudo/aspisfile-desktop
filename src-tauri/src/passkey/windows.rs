@@ -174,6 +174,13 @@ fn main_hwnd(app: &AppHandle) -> Result<HWND, String> {
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "no 'main' window to anchor the passkey dialog".to_string())?;
+    // Bring the viewer to the foreground so the OS passkey dialog (anchored to
+    // this HWND below) surfaces IN FRONT — not behind other windows or a
+    // background/auto-locked viewer (reported: Hello prompt hidden behind
+    // Outlook, Kobus 2026-08-26). Best-effort; focus is a UX nicety.
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_focus();
     let raw = win.hwnd().map_err(|e| format!("window hwnd unavailable: {e}"))?;
     Ok(HWND(raw.0))
 }
@@ -273,7 +280,7 @@ pub async fn passkey_register(app: AppHandle, options_json: String) -> Result<St
 
     let mut make_opts = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS::default();
     make_opts.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION;
-    make_opts.dwTimeoutMilliseconds = 120_000; // cover a slow phone-QR ceremony
+    make_opts.dwTimeoutMilliseconds = 300_000; // 5 min — a no-Hello phone-QR create exceeds 2 min (Kobus 2026-08-26). Keep <= server CHALLENGE_TTL_SECONDS.
     make_opts.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY; // Hello + QR + key
     make_opts.bRequireResidentKey = TRUE; // discoverable — matches the proven spike
     make_opts.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
@@ -356,7 +363,7 @@ pub async fn passkey_authenticate(app: AppHandle, options_json: String) -> Resul
 
     let mut get_opts = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS::default();
     get_opts.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION;
-    get_opts.dwTimeoutMilliseconds = 120_000;
+    get_opts.dwTimeoutMilliseconds = 300_000; // 5 min — match register; cross-device sign-in is slow. Keep <= server CHALLENGE_TTL_SECONDS.
     get_opts.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY;
     get_opts.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
     // No allow-list → discoverable (resident) credential path, the returning-

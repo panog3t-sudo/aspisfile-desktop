@@ -356,6 +356,21 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
       return;
     }
 
+    // 1b. No-Hello Windows has no platform authenticator, so the in-window
+    //     dialog would only offer the fragile phone-QR path (which fails in
+    //     WebView2 — "In-window Touch ID didn't work", Kobus 2026-08-26). Skip
+    //     it and finish in the browser, where Edge drives the cross-device flow
+    //     far more reliably. The rt is already minted + valid.
+    if (platform === "windows") {
+      let helloAvailable = true;
+      try { helloAvailable = await invoke<boolean>("biometric_available"); }
+      catch { /* can't tell → try the bridge; it still offers the browser fallback on failure */ }
+      if (!helloAvailable) {
+        await openBrowserWith({ email: cleanEmail, rt: registrationToken });
+        return;
+      }
+    }
+
     // 2. Native bridge → in-window passkey dialog (macOS Touch ID / Windows
     //    Hello·QR·security key), then server verify.
     try {
@@ -626,11 +641,11 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
                 <button
                   onClick={handleResend}
                   disabled={resendState === "sending" || cooldown > 0}
-                  style={{ ...linkBtn, opacity: (resendState === "sending" || cooldown > 0) ? 0.5 : 1 }}
+                  style={{ ...btnSecondary, marginTop: 2, opacity: (resendState === "sending" || cooldown > 0) ? 0.5 : 1 }}
                 >
                   {resendState === "sending" ? "Sending…"
-                    : cooldown > 0 ? `Resend in ${cooldown}s`
-                    : resendState === "sent" ? "Send another code"
+                    : cooldown > 0 ? `Resend code (${cooldown}s)`
+                    : resendState === "sent" ? "Resend code"
                     : "Email me a code"}
                 </button>
               </div>

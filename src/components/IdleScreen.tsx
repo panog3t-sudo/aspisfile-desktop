@@ -19,7 +19,7 @@ type Props = {
   onOpenToken?: (token: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; opened?: boolean; reviewed?: boolean };
 type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
@@ -185,6 +185,13 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {d.name}
         </span>
+        {/* Status dots: green = opened, blue = you left a review. */}
+        {(d.opened || d.reviewed) && !expired && (
+          <span style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+            {d.opened && <span title="You've opened this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#22C55E" }} />}
+            {d.reviewed && <span title="You've left a review on this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#5C82EE" }} />}
+          </span>
+        )}
         {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
         {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
         {expired
