@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { registerPasskey, PasskeyError } from "../lib/passkey";
+import { registerPasskey, PasskeyError, reportSigninPath } from "../lib/passkey";
 import { saveRecipientSession } from "../lib/recipient-session";
 import { passkeyIsFrictiony } from "../lib/signin-hints";
 
@@ -366,6 +366,12 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
       try { helloAvailable = await invoke<boolean>("biometric_available"); }
       catch { /* can't tell → try the bridge; it still offers the browser fallback on failure */ }
       if (!helloAvailable) {
+        // Telemetry: this is the no-platform-authenticator cohort — the ONLY
+        // group Option B (app-held credential) would serve. error_name marks it
+        // so we can size the cohort (queryable in audit_events) before deciding
+        // whether to escalate beyond the interim fixes. See
+        // backend docs/windows-bulletproof-signin-design.md.
+        reportSigninPath("browser_fallback", "started", { platform: "windows", errorName: "no_platform_authenticator", email: cleanEmail });
         await openBrowserWith({ email: cleanEmail, rt: registrationToken });
         return;
       }
