@@ -78,6 +78,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>({});
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const [filesOpen, setFilesOpen] = useState(false);
+  const [expiredOpen, setExpiredOpen] = useState(false);
   // Sign-out confirmation — a mis-click here wipes the session and forces a full
   // re-sign-in, so gate it behind a small in-app Yes/No (window.confirm would
   // render an off-theme browser dialog inside the viewer).
@@ -471,9 +472,15 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           {/* Data rooms — collapsible → folders → docs; collapsed by default */}
           {home?.rooms.map(renderRoom)}
 
-          {/* Your files — collapsed by default */}
-          {home && home.files.length > 0 &&
-            section("__files__", "🗂️", "Your files", prep(home.files), q ? prep(home.files).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
+          {/* Your files — collapsed by default; expired links live in their
+              own section below so the working list stays clean (2026-09-03). */}
+          {home && home.files.filter(d => !d.expired).length > 0 &&
+            section("__files__", "🗂️", "Your files", prep(home.files.filter(d => !d.expired)), q ? prep(home.files.filter(d => !d.expired)).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
+
+          {/* Expired — collapsed by default; rows stay non-clickable with the
+              "ask the sender to re-share" hint. */}
+          {home && home.files.some(d => d.expired) &&
+            section("__expired__", "🕓", "Expired", prep(home.files.filter(d => !!d.expired)), q ? prep(home.files.filter(d => !!d.expired)).length > 0 : expiredOpen, () => setExpiredOpen(o => !o))}
 
           {/* No "different setup code" link here — the "Sign out" control in the
               header already lets a signed-in user switch to a different email. */}

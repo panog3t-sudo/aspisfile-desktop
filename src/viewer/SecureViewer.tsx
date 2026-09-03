@@ -166,6 +166,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [revoked, setRevoked]         = useState(false);
   const [revokeReason, setRevokeReason] = useState<string | undefined>();
+  // Opens & viewing limits (v2.0.4, spec 49ac0c32): from the session-start
+  // response. window_ends_at is server-authoritative — the chip only displays.
+  const [viewLimits, setViewLimits] = useState<{ max_opens: number | null; opens_used: number; session_view_minutes: number | null; window_ends_at: string | null } | null>(null);
+  const [limitSecondsLeft, setLimitSecondsLeft] = useState<number | null>(null);
   const [offline, setOffline]         = useState(false);
   const [error, setError]             = useState<FriendlyAccessError | null>(null);
   const [locked, setLocked]           = useState(false);
@@ -685,6 +689,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onSessionInvalid();
           return;
         }
+        // Opens & viewing limits: the server's 410 carries the true story
+        // ("maximum 3 times the sender allowed") — render it verbatim instead
+        // of the canned one-time copy (Pano's E2E finding, 2026-09-03).
+        if (body.code === 'opens_exhausted') {
+          setError({ title: 'Open limit reached', body: String(body.error || 'You have used all the opens the sender allowed.'), code: 'opens_exhausted' });
+          return;
+        }
         // Translate the raw server code into a friendly title + body
         // here so RevokedScreen just renders the pre-built shape.
         setError(translateAccessError(body.error || `Session start failed (${res.status})`));
@@ -692,6 +703,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       }
 
       const data = await res.json();
+
+      if (data.view_limits) setViewLimits(data.view_limits);
 
       // Suspicious-tier pre-approval gate (Brief §4) — recipient must
       // step up via OTP. StepUpScreen overlay calls /request-otp +
@@ -765,6 +778,27 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       }
     })().catch((e: Error) => setError(translateAccessError(e.message)));
   }, [legalAccepted, file, token, sig, env]);
+
+  // Viewing-window countdown (display only; the server enforces via
+  // expires_at on tiles + heartbeat). At zero we end locally for a snappy
+  // "Viewing time ended" instead of waiting up to a heartbeat interval.
+  useEffect(() => {
+    if (!viewLimits?.window_ends_at) return;
+    const end = new Date(viewLimits.window_ends_at).getTime();
+    const tick = () => {
+      const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+      setLimitSecondsLeft(left);
+      if (left <= 0) {
+        sessionStore.clear();
+        endReasonRef.current = 'session_expired';
+        setRevokeReason('view_time_ended');
+        setRevoked(true);
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [viewLimits?.window_ends_at]);
 
   // Sprint 3 — track unique pages seen for session_ended.pages_viewed_count.
   // recordPageView only fires when trackPages is true (Phase B); the Set
@@ -1286,7 +1320,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     }
   }, [pointerControlGranted, coViewingChannel, recipient]);
 
-  if (revoked)                        return <RevokedScreen reason={revokeReason} />;
+  if (revoked) {
+    // Time-limited sessions get honest, specific copy — never "contact the
+    // sender if this is an error" for a deliberate limit.
+    if (viewLimits?.session_view_minutes && (revokeReason === 'view_time_ended' || revokeReason === 'expired')) {
+      const maxO = viewLimits.max_opens;
+      const remaining = maxO !== null ? Math.max(0, maxO - viewLimits.opens_used) : null;
+      const opensLine = remaining === null
+        ? 'You can open it again any time.'
+        : remaining > 0
+          ? `You have ${remaining} more open${remaining === 1 ? '' : 's'} — you can open it again now.`
+          : 'That was the last allowed open.';
+      return <RevokedScreen friendly={{
+        title: 'Viewing time ended',
+        body: `This viewing was limited to ${viewLimits.session_view_minutes} minute${viewLimits.session_view_minutes === 1 ? '' : 's'} by the sender. ${opensLine}`,
+        code: 'view_time_ended',
+      }} />;
+    }
+    return <RevokedScreen reason={revokeReason} />;
+  }
   if (error)                          return <RevokedScreen friendly={error} />;
   if (!file || !recipient)            return <AuthLoadingScreen />;
   if (sourceExpired) {
@@ -1382,6 +1434,35 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
 
   return (
     <>
+      {/* Opens & viewing limits chip (v2.0.4): server-authoritative window,
+          display-only countdown. Red under 30s. Sits below the TileRenderer
+          toolbar, centered, never intercepts clicks. */}
+      {viewLimits && (viewLimits.session_view_minutes !== null || viewLimits.max_opens !== null) && (
+        <div style={{
+          position: 'fixed', top: presenterSession ? 96 : 52, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, pointerEvents: 'none', display: 'flex', gap: 8,
+        }}>
+          {viewLimits.max_opens !== null && (
+            <span style={{
+              fontFamily: "ui-monospace,Menlo,monospace", fontSize: 11, letterSpacing: '0.03em',
+              background: 'rgba(255,255,255,0.10)', border: '0.5px solid rgba(255,255,255,0.18)',
+              borderRadius: 20, padding: '3px 10px', color: '#CBD5E1', whiteSpace: 'nowrap',
+            }}>
+              Open <b style={{ color: '#fff' }}>{Math.min(viewLimits.opens_used, viewLimits.max_opens)} of {viewLimits.max_opens}</b>
+            </span>
+          )}
+          {viewLimits.session_view_minutes !== null && limitSecondsLeft !== null && (
+            <span style={{
+              fontFamily: "ui-monospace,Menlo,monospace", fontSize: 11, letterSpacing: '0.03em',
+              background: limitSecondsLeft <= 30 ? 'rgba(203,61,46,0.30)' : 'rgba(255,255,255,0.10)',
+              border: `0.5px solid ${limitSecondsLeft <= 30 ? 'rgba(203,61,46,0.55)' : 'rgba(255,255,255,0.18)'}`,
+              borderRadius: 20, padding: '3px 10px', color: limitSecondsLeft <= 30 ? '#FECACA' : '#CBD5E1', whiteSpace: 'nowrap',
+            }}>
+              ⏱ <b style={{ color: '#fff' }}>{Math.floor(limitSecondsLeft / 60)}:{String(limitSecondsLeft % 60).padStart(2, '0')}</b> left
+            </span>
+          )}
+        </div>
+      )}
       {coViewingBanner && !canPresent && !presenterSession && (
         <CoViewingBanner
           presenterName={coViewingBanner.presenterName}
