@@ -19,7 +19,7 @@ type Props = {
   onOpenToken?: (token: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; opened?: boolean; reviewed?: boolean };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; opened?: boolean; reviewed?: boolean; view_minutes?: number | null; opens_left?: number | null };
 type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
@@ -186,6 +186,16 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {d.name}
         </span>
+        {/* Opens & viewing limits — shown BEFORE opening so the click is an
+            informed act (spec 49ac0c32 transparency rule; Pano 2026-09-03). */}
+        {!expired && (d.view_minutes != null || d.opens_left != null) && (
+          <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, color: d.opens_left === 0 ? "#F87171" : "#94A3B8", whiteSpace: "nowrap", flexShrink: 0 }}>
+            {[
+              d.view_minutes != null ? `\u23F1 ${d.view_minutes} min` : null,
+              d.opens_left != null ? `${d.opens_left} open${d.opens_left === 1 ? "" : "s"} left` : null,
+            ].filter(Boolean).join(" \u00B7 ")}
+          </span>
+        )}
         {/* Status dots: green = opened, blue = you left a review. */}
         {(d.opened || d.reviewed) && !expired && (
           <span style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
@@ -216,7 +226,10 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           <span style={{ fontSize: 10, color: "#64748B", width: 10, display: "inline-block", transition: "transform 0.12s", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
           <span style={{ fontSize: 14 }}>{icon}</span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-          <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{docs.length} item{docs.length === 1 ? "" : "s"}</span>
+          <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>
+            {docs.length} item{docs.length === 1 ? "" : "s"}
+            {(() => { const n = docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: "#4ADE80" }}> · {n} new</span> : null; })()}
+          </span>
         </button>
         {open && (
           <div style={{ maxHeight: 320, overflowY: "auto" }}>
@@ -276,7 +289,10 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           <span style={{ fontSize: 10, color: "#64748B", width: 10, display: "inline-block", transition: "transform 0.12s", transform: roomOpen ? "rotate(90deg)" : "none" }}>▶</span>
           <span style={{ fontSize: 14 }}>📁</span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{room.name}</span>
-          <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>{room.docs.length} doc{room.docs.length === 1 ? "" : "s"}</span>
+          <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>
+            {room.docs.length} doc{room.docs.length === 1 ? "" : "s"}
+            {(() => { const n = room.docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: "#4ADE80" }}> · {n} new</span> : null; })()}
+          </span>
         </button>
         {roomOpen && (
           <div style={{ maxHeight: 440, overflowY: "auto", padding: folders.length ? "6px" : 0 }}>
@@ -466,6 +482,20 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
               >
                 {sortDir === "asc" ? "↑" : "↓"}
               </button>
+            </div>
+          )}
+
+          {/* Dot key — mobile-parity legend (Pano 2026-09-03); rendered only
+              when at least one dot is actually visible, so a fresh account
+              never sees an unexplained legend. */}
+          {home && [...home.files, ...home.rooms.flatMap(r => r.docs)].some(d => (d.opened || d.reviewed) && !d.expired) && (
+            <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "0 2px" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#94A3B8" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 4, background: "#22C55E", display: "inline-block" }} /> Opened
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#94A3B8" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 4, background: "#5C82EE", display: "inline-block" }} /> Reviewed
+              </span>
             </div>
           )}
 
