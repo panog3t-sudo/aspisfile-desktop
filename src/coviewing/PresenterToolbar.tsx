@@ -39,7 +39,6 @@ export function PresenterToolbar({
   sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail, controllerEmail,
 }: PresenterToolbarProps) {
   const [stopping,     setStopping]     = useState(false);
-  const [linkCopied,   setLinkCopied]   = useState(false);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Presenter heartbeat — keeps session alive if no page changes (free scroll mode)
@@ -68,13 +67,6 @@ export function PresenterToolbar({
       }).catch(() => {});
     }
   }, [sessionId, mode, pageCount, onPageChange]);
-
-  const copyLink = async () => {
-    const url = `${__API_BASE__}/session/${sessionId}`;
-    await navigator.clipboard.writeText(url).catch(() => {});
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
-  };
 
   const handleStop = async () => {
     setStopping(true);
@@ -197,14 +189,6 @@ export function PresenterToolbar({
           <circle cx="9" cy="7" r="3"/><path d="M3 21v-1a6 6 0 0 1 12 0v1"/><circle cx="17" cy="7" r="3"/><path d="M21 21v-1a6 6 0 0 0-3-5.2"/>
         </svg>
         Participants {panelOpen ? '▸' : '◂'}
-      </button>
-
-      {/* Copy link */}
-      <button
-        onClick={copyLink}
-        style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, background: 'rgba(255,255,255,0.08)', border: '0.5px solid rgba(255,255,255,0.15)', color: linkCopied ? '#86EFAC' : 'rgba(255,255,255,0.7)', cursor: 'pointer', fontFamily: FONT, flexShrink: 0 }}
-      >
-        {linkCopied ? 'Copied!' : 'Copy link'}
       </button>
 
       {/* Stop */}

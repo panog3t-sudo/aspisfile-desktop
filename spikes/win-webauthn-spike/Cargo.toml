@@ -1,0 +1,25 @@
+[package]
+name = "win-webauthn-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Empty [workspace] table = DETACH this crate from any parent Cargo workspace.
+# This is a throwaway feasibility spike; it must NOT be pulled into the Tauri
+# app build (src-tauri) or affect any release.
+[workspace]
+
+[dependencies]
+serde_json = "1"
+base64 = "0.22"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+
+# Win32 WebAuthn API + window handle. Windows-only; on macOS/Linux the crate
+# still compiles a stub main() so you can at least `cargo check` cross-platform.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Networking_WindowsWebServices",
+    "Win32_UI_WindowsAndMessaging",
+]

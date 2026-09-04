@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SecureViewer } from "./viewer/SecureViewer";
 import { IdleScreen } from "./components/IdleScreen";
@@ -70,6 +71,10 @@ function extractFromUrl(url: string): ViewerParams | null {
       if (r) {
         try { parsed = new URL(r); } catch { /* fall through, original parsed used */ }
       }
+      // No ?r — emails sent 2026-09-03/04 (server-side-redirect form). The
+      // dispatch sites pre-resolve those via resolveTrackingUrl() BEFORE
+      // calling extractFromUrl; reaching here without ?r means resolution
+      // failed, so returning null (below) is the honest outcome.
     }
 
     // Three URL shapes to recognise:
@@ -114,6 +119,29 @@ function extractFromUrl(url: string): ViewerParams | null {
   } catch {
     return null;
   }
+}
+
+// Token-less tracking link (emails sent 2026-09-03/04): the deliverability
+// rewrite dropped ?r from /api/v1/track/click/<id> links, so the URL itself
+// carries no /access token any more — the SERVER resolves the destination via
+// a redirect. Recover it the way a browser would: fetch the URL (plugin-http
+// follows redirects, no CORS) and read the final /access/<token> URL. URLs of
+// any other shape pass through untouched. 8s cap so a network stall can't
+// hold the deep-link dispatch hostage.
+async function resolveTrackingUrl(url: string): Promise<string> {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname.includes("/track/click/")) return url;
+    if (parsed.searchParams.get("r")) return url;   // legacy form — parsed locally
+    const res = await Promise.race([
+      httpFetch(url, { method: "GET" }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+    ]);
+    if (res && typeof res === "object" && "url" in res && (res as Response).url) {
+      return (res as Response).url;
+    }
+  } catch { /* fall through — extractFromUrl returns null and the app stays put */ }
+  return url;
 }
 
 // Phase 1 post-sprint fix — bring the Tauri window to the foreground
@@ -1094,7 +1122,7 @@ function AppContent() {
         if (tryHandleEnrolComplete(urls[0])) { debugLog('coview', 'getCurrent: matched enrol-complete'); completeEnrolment(); return; }
         { const sc = tryParseSetupCodeHandoff(urls[0]); if (sc) { debugLog('coview', 'getCurrent: matched setup-code'); const ew = enrolWaitRef.current; enterManualEnrol(sc.email ?? ew?.email ?? undefined, ew?.token); return; } }
         if (await tryHandleOAuthCallback(urls[0])) return;
-        const params = extractFromUrl(urls[0]);
+        const params = extractFromUrl(await resolveTrackingUrl(urls[0]));
         if (params) { debugLog('coview', 'getCurrent → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLinkRef.current?.(params); }
       })
       .catch(() => {});
@@ -1113,7 +1141,7 @@ function AppContent() {
       if (tryHandleEnrolComplete(urls[0])) { debugLog('coview', 'onOpenUrl: matched enrol-complete'); completeEnrolment(); return; }
       { const sc = tryParseSetupCodeHandoff(urls[0]); if (sc) { debugLog('coview', 'onOpenUrl: matched setup-code'); const ew = enrolWaitRef.current; enterManualEnrol(sc.email ?? ew?.email ?? undefined, ew?.token); return; } }
       if (await tryHandleOAuthCallback(urls[0])) return;
-      const params = extractFromUrl(urls[0]);
+      const params = extractFromUrl(await resolveTrackingUrl(urls[0]));
       if (params) { debugLog('coview', 'onOpenUrl → openLink', { coview: params.coview?.slice(0,8) ?? null }); openLinkRef.current?.(params); }
     });
 
