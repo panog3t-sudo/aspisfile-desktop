@@ -231,6 +231,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const endReasonRef         = useRef<'user_close' | 'revoked' | 'app_close' | 'session_expired'>('user_close');
   const uniquePagesRef       = useRef<Set<number>>(new Set());
   const fileOpenedFiredRef   = useRef(false);
+  const pendingClientOpenRef = useRef<{ sessionId: string; fingerprint: string; stepUp?: boolean } | null>(null);
+  const fireClientFileOpened = useCallback(() => {
+    const ctx = pendingClientOpenRef.current;
+    if (!ctx || fileOpenedFiredRef.current || !file) return;
+    fileOpenedFiredRef.current = true;
+    sendEvent({
+      event_type:    'file_opened',
+      file_id:       file.id,
+      session_id:    ctx.sessionId,
+      access_method: accessMethod,
+      payload:       { device_fingerprint: ctx.fingerprint, ...(ctx.stepUp ? { step_up: true } : {}) },
+    }, token).catch(() => {});
+    if (trackPages) startPageTracking(ctx.sessionId, file.id, token);
+  }, [file, token, accessMethod, trackPages]);
   const sessionEndedFiredRef = useRef(false);
 
   // Phase 1 Day 9 — applied by StepUpScreen and DelegationScreen
@@ -262,17 +276,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       setTotalPages(pagesData.count ?? 1);
     }
 
+    // Truthfulness fix 2026-09-07: stash the client file_opened context; it
+    // posts on the FIRST TILE (onFirstTileRendered), never on a session that
+    // ends at the guided screen without content.
     if (!fileOpenedFiredRef.current) {
-      fileOpenedFiredRef.current = true;
       sessionStartTsRef.current = Date.now();
-      await sendEvent({
-        event_type:    'file_opened',
-        file_id:       file.id,
-        session_id:    creds.session_id,
-        access_method: accessMethod,
-        payload:       { device_fingerprint: fingerprint, step_up: true },
-      }, token);
-      if (trackPages) startPageTracking(creds.session_id, file.id, token);
+      pendingClientOpenRef.current = { sessionId: creds.session_id, fingerprint, stepUp: true };
     }
   }, [file, token, accessMethod, trackPages]);
 
@@ -763,18 +772,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       // Fires once per viewer mount, after the session key has been
       // issued AND page count fetched (i.e., the viewer is genuinely
       // ready to render). Idempotent via fileOpenedFiredRef.
+      // Truthfulness fix 2026-09-07 — see the twin comment above: the audit
+      // event + page tracking now start on the FIRST TILE, not on metadata.
       if (!fileOpenedFiredRef.current) {
-        fileOpenedFiredRef.current = true;
         sessionStartTsRef.current = Date.now();
         const deviceFingerprint = await getDesktopFingerprint(platform);
-        await sendEvent({
-          event_type:    'file_opened',
-          file_id:       file.id,
-          session_id:    data.session_id,
-          access_method: accessMethod,
-          payload:       { device_fingerprint: deviceFingerprint },
-        }, token);
-        if (trackPages) startPageTracking(data.session_id, file.id, token);
+        pendingClientOpenRef.current = { sessionId: data.session_id, fingerprint: deviceFingerprint };
       }
     })().catch((e: Error) => setError(translateAccessError(e.message)));
   }, [legalAccepted, file, token, sig, env]);
@@ -1516,6 +1519,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             />
           )}
           <TileRenderer
+            onFirstTileRendered={fireClientFileOpened}
             sessionId={sessionId}
             fileId={file.id}
             file={file}

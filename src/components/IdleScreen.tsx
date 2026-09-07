@@ -19,7 +19,7 @@ type Props = {
   onOpenToken?: (token: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; opened?: boolean; reviewed?: boolean; view_minutes?: number | null; opens_left?: number | null };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; unavailable_reason?: 'revoked' | 'expired' | null; opened?: boolean; reviewed?: boolean; view_minutes?: number | null; opens_left?: number | null };
 type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
@@ -206,7 +206,10 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
         {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
         {expired
-          ? <span style={{ fontSize: 10.5, fontWeight: 600, color: "#FCA5A5", background: "rgba(148,29,29,0.28)", border: "0.5px solid rgba(252,165,165,0.35)", borderRadius: 999, padding: "3px 10px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap" }}>Expired</span>
+          /* Truthful state (found in pre-cutover M5 2026-09-07): revoked !=
+             expired — different message, different recovery. Older servers
+             omit unavailable_reason -> Expired. Brand v06: oxblood = done. */
+          ? <span style={{ fontSize: 10.5, fontWeight: 600, color: d.unavailable_reason === "revoked" ? "#F3DCD8" : "#FCA5A5", background: d.unavailable_reason === "revoked" ? "rgba(142,42,32,0.55)" : "rgba(148,29,29,0.28)", border: "0.5px solid rgba(252,165,165,0.35)", borderRadius: 999, padding: "3px 10px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap" }}>{d.unavailable_reason === "revoked" ? "Revoked" : "Expired"}</span>
           : <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: "#1D4ED8", borderRadius: 999, padding: "4px 12px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap", boxShadow: "0 1px 4px rgba(29,78,216,0.45)" }}>Open →</span>}
       </button>
     );
@@ -510,7 +513,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           {/* Expired — collapsed by default; rows stay non-clickable with the
               "ask the sender to re-share" hint. */}
           {home && home.files.some(d => d.expired) &&
-            section("__expired__", "🕓", "Expired", prep(home.files.filter(d => !!d.expired)), q ? prep(home.files.filter(d => !!d.expired)).length > 0 : expiredOpen, () => setExpiredOpen(o => !o))}
+            section("__expired__", "🕓", "Unavailable", prep(home.files.filter(d => !!d.expired)), q ? prep(home.files.filter(d => !!d.expired)).length > 0 : expiredOpen, () => setExpiredOpen(o => !o))}
 
           {/* No "different setup code" link here — the "Sign out" control in the
               header already lets a signed-in user switch to a different email. */}

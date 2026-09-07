@@ -22,6 +22,12 @@ type Props = {
   sessionId: string;
   fileId: string;
   file: FileInfo;
+  /** Fires once, on the FIRST successful tile fetch — the moment content
+   *  genuinely reached the screen. SecureViewer posts its client-side
+   *  file_opened audit here (2026-09-07 truthfulness fix: it used to fire
+   *  after the pages-METADATA fetch, which succeeds even when the content
+   *  is gone — refused source-expired opens logged a false client open). */
+  onFirstTileRendered?: () => void;
   recipient?: RecipientInfo;
   totalPages: number;
   onLock: () => void;
@@ -128,7 +134,8 @@ const toolbarBtnStyle = (disabled: boolean): React.CSSProperties => ({
 
 export function TileRenderer({
   sessionId, fileId, file, totalPages, onLock,
-  targetPage, onCurrentPageChange, onPresent, followMode,
+  targetPage, onCurrentPageChange, onFirstTileRendered,
+  onPresent, followMode,
   targetZoom, onCurrentZoomChange, onPublishScroll, subscribedScroll,
   onPublishCursor,
   onDownload, downloadState, onSend, onQA, qaUnread,
@@ -137,6 +144,9 @@ export function TileRenderer({
   drawMode, drawColor, drawThickness, drawTool, markups, onStrokeComplete,
   signMode, onPlaceSignature, signatures, onUpdateSignature,
 }: Props) {
+  const firstTileFiredRef = useRef(false);
+  const onFirstTileRenderedRef = useRef(onFirstTileRendered);
+  useEffect(() => { onFirstTileRenderedRef.current = onFirstTileRendered; }, [onFirstTileRendered]);
   const [currentPage, setCurrentPage] = useState(1);
   // Auto-lock status chip — mirrors the "Lock when idle" menu toggle. Read once
   // on mount, then update live when it's toggled from the menu (autolock-changed).
@@ -382,6 +392,10 @@ export function TileRenderer({
 
     if (!res.ok) return null;
     const blob = await res.blob();
+    if (!firstTileFiredRef.current) {
+      firstTileFiredRef.current = true;
+      try { onFirstTileRenderedRef.current?.(); } catch { /* never blocks a tile */ }
+    }
     return URL.createObjectURL(blob);
   }, [sessionId, fileId]);
 
