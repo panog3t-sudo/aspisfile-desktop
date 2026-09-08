@@ -1,3 +1,4 @@
+import { BrandWatermark } from "./BrandWatermark";
 // Staged security-pipeline feedback (2026-09-08, "black screen of doubt" fix):
 // the viewer deliberately paints nothing until every gate has cleared, but the
 // silence read as "broken". label tracks the real stage; overlay mode floats
@@ -18,6 +19,8 @@ export function AuthLoadingScreen({ label = "Authenticating…", sublabel, overl
         alignItems: "center",
         justifyContent: "center",
         background: "#0F172A",
+        position: overlay ? "absolute" as const : "relative",
+        overflow: "hidden",
         color: "#94A3B8",
         fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
         fontSize: 13,
@@ -25,6 +28,7 @@ export function AuthLoadingScreen({ label = "Authenticating…", sublabel, overl
       }}
     >
       {/* @keyframes scoped inline so we don't depend on any global CSS */}
+      <BrandWatermark />
       <style>{`@keyframes aspis-spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
       <svg
         width="36"

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { BrandWatermark } from "./BrandWatermark";
 import { supabase } from "../lib/supabase";
 import type { StepUpCreds } from "./StepUpScreen";
 
@@ -101,6 +102,7 @@ export function SenderApprovalWaitingScreen({
 
   return (
     <div style={containerStyle}>
+      <BrandWatermark />
       <div style={cardStyle}>
         {phase === "waiting" && (
           <>

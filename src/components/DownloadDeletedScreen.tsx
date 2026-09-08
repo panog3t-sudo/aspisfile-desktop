@@ -4,6 +4,7 @@
 // never succeed.
 
 import { Icon } from "./Icon";
+import { BrandWatermark } from "./BrandWatermark";
 
 export function DownloadDeletedScreen({ onClose }: { onClose: () => void }) {
   return (
@@ -16,6 +17,7 @@ export function DownloadDeletedScreen({ onClose }: { onClose: () => void }) {
       fontFamily: 'system-ui, -apple-system, sans-serif',
       padding: 32, textAlign: 'center',
     }}>
+      <BrandWatermark />
       <div style={{ lineHeight: 1, marginBottom: 4 }}><Icon name="trash" size={44} strokeWidth={1.5} /></div>
       <div style={{ fontSize: 20, fontWeight: 500 }}>This file has been deleted.</div>
       <div style={{ fontSize: 13, color: '#94A3B8', maxWidth: 360, lineHeight: 1.5 }}>

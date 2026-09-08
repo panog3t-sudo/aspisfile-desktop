@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { BrandWatermark } from "./BrandWatermark";
 import { saveRecipientSession } from "../lib/recipient-session";
 import { Icon } from "./Icon";
 
@@ -78,6 +79,7 @@ export function ReauthWaitingScreen({ token, email, verifyUrl, openFailed, onCom
 
   return (
     <div style={wrap}>
+      <BrandWatermark />
       <div style={card}>
         <div style={{ marginBottom: 14 }}>{mode === "invalid" ? <Icon name="alert-triangle" size={40} /> : <Icon name="key-round" size={40} />}</div>
 
@@ -141,6 +143,8 @@ const wrap: React.CSSProperties = {
   color: "#E2E8F0",
   fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
   padding: 32,
+  position: "relative",
+  overflow: "hidden",
 };
 
 const card: React.CSSProperties = {

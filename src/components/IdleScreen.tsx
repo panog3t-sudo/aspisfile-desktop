@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, type ReactElement } from "react";
+import { BrandWatermark } from "./BrandWatermark";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
 import { Icon } from "./Icon";
@@ -331,6 +332,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         overflowY: "auto",
       }}
     >
+      <BrandWatermark fixed />
       <div style={{ marginBottom: 4, marginTop: active ? 12 : 0 }}><Icon name="lock" size={28} /></div>
       <p style={{ fontSize: 15, fontWeight: 500, color: "#E2E8F0", margin: 0 }}>
         AspisFile Viewer

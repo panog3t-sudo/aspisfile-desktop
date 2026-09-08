@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BrandWatermark } from "./BrandWatermark";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
@@ -80,6 +81,7 @@ export function DelegationScreen({
 
   return (
     <div style={styles.overlay}>
+      <BrandWatermark />
       <div style={styles.card}>
         <div style={styles.iconAmber}>
           <span style={{ color: "#FCD34D" }}><Icon name="alert-triangle" size={24} /></span>

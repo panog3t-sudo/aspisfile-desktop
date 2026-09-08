@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { BrandWatermark } from "./BrandWatermark";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { registerPasskey, PasskeyError, reportSigninPath } from "../lib/passkey";
@@ -428,8 +429,11 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
         color: "#E2E8F0",
         fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
         padding: 32,
+        position: "relative",
+        overflow: "hidden",
       }}
     >
+      <BrandWatermark />
       <div
         style={{
           width: "100%",

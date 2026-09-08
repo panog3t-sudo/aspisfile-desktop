@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { BrandWatermark, BrandLogo } from "./BrandWatermark";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
@@ -293,6 +294,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         inset: 0,
         zIndex: 9999,
         background: "#000",
+        overflow: "hidden",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -304,9 +306,11 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         WebkitUserSelect: "none",
       } as React.CSSProperties}
     >
-      <span style={{ lineHeight: 1 }}><Icon name="lock" size={44} strokeWidth={1.5} /></span>
+      <BrandWatermark />
+      <BrandLogo size={56} />
 
-      <p style={{ color: "#F1F5F9", fontSize: 15, fontWeight: 500, margin: 0 }}>
+      <p style={{ color: "#F1F5F9", fontSize: 16, fontWeight: 600, margin: "8px 0 0", display: "flex", alignItems: "center", gap: 8 }}>
+        <Icon name="lock" size={16} strokeWidth={1.75} />
         {fileName ? 'Viewer locked' : 'AspisFile locked'}
       </p>
 

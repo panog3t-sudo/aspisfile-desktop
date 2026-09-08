@@ -4,6 +4,7 @@
 // — switching is a deliberate action the user takes here.
 
 import { Icon } from "./Icon";
+import { BrandWatermark } from "./BrandWatermark";
 
 type Props = {
   fileRecipient: string;   // who the file was sent to
@@ -28,9 +29,11 @@ export function WrongAccountScreen({ fileRecipient, boundEmail, onSwitch, onCanc
   return (
     <div style={{
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      position: "relative", overflow: "hidden",
       background: "#0F172A", color: "#E2E8F0",
       fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", padding: 32,
     }}>
+      <BrandWatermark />
       <div style={{
         maxWidth: 420, width: "100%", background: "rgba(255,255,255,0.03)",
         border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: 32,
