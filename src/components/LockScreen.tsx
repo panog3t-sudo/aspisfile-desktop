@@ -98,7 +98,13 @@ export function LockScreen({ fileName, onUnlock }: Props) {
     // last-resort below. Only Linux/other keeps the browser+poll path.
     let platform = "unknown";
     try { platform = await invoke<string>("get_platform"); } catch {}
-    if (platform === "macos" || platform === "windows") {
+    // No-Hello guard (HP/ASUS finding 2026-09-08): on a Windows machine with
+    // NO platform authenticator the Win32 dialog can only offer a USB security
+    // key (it cannot see browser-vault credentials), and a cancel kept the
+    // user on the lock screen forever — a hard dead end. Same rule as
+    // SignInScreen: no local authenticator → skip native, go straight to the
+    // system-browser assertion (origin aspisfile.com, where phone/QR works).
+    if (platform === "macos" || (platform === "windows" && biometricAvailable)) {
       try {
         await authenticatePasskey({ email: sess.email });
         recordBiometric();

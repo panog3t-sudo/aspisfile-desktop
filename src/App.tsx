@@ -255,6 +255,13 @@ type SignInOutcome = 'success' | 'cancelled' | 'failed' | 'reenroll';
 
 async function trySignInWithExistingPasskey(token: string): Promise<SignInOutcome> {
   try {
+    // No-Hello guard (2026-09-08): a Windows machine without a platform
+    // authenticator gets only the dead-end USB-key dialog from the native
+    // bridge — report 'failed' so the caller takes the code/browser path.
+    try {
+      const plat = await invoke<string>("get_platform");
+      if (plat === "windows" && !(await invoke<boolean>("biometric_available"))) return 'failed';
+    } catch { /* fall through to the normal attempt */ }
     const metaRes = await fetch(`${BASE}/api/v1/access/${token}/meta`);
     if (!metaRes.ok) return 'failed';
     const meta = await metaRes.json() as { recipient_email?: string };
@@ -914,6 +921,15 @@ function AppContent() {
     const s = getRecipientSession();
     if (!s?.email) return { ok: false, message: "No enrolled identity on this device." };
     try {
+      // No-Hello guard (2026-09-08): skip the doomed USB-key dialog and give
+      // the email-link guidance straight away.
+      const plat = await invoke<string>("get_platform").catch(() => "unknown");
+      if (plat === "windows" && !(await invoke<boolean>("biometric_available").catch(() => true))) {
+        return {
+          ok: false,
+          message: "This device can't sign you in from here. Open a file from your email or the web Inbox — it'll sign you in as it opens.",
+        };
+      }
       await authenticatePasskey({ email: s.email }); // saves the session on success
     } catch {
       return {
