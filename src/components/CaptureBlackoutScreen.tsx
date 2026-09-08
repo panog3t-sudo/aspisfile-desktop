@@ -1,3 +1,4 @@
+import { BrandWatermark } from "./BrandWatermark";
 // Shown when a dedicated screen-capture / recording tool (OBS, Loom,
 // Snagit, CleanShot, …) is detected running while a document is open.
 // The TileRenderer is unmounted behind this, so the tiles genuinely stop
@@ -16,6 +17,7 @@ export function ScreenshotPausedScreen() {
       padding: 32,
       fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
     }}>
+      <BrandWatermark />
       <p style={{ color: '#fff', fontSize: 18, fontWeight: 600, margin: '0 0 8px', textAlign: 'center' }}>
         Screenshot detected
       </p>
@@ -35,6 +37,7 @@ export function CaptureBlackoutScreen({ apps }: { apps: string[] }) {
       padding: 32,
       fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
     }}>
+      <BrandWatermark />
       <p style={{ color: '#fff', fontSize: 18, fontWeight: 600, margin: '0 0 8px', textAlign: 'center' }}>
         Viewing paused — screen recording detected
       </p>
