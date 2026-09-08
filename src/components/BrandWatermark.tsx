@@ -27,29 +27,19 @@ export function BrandWatermark({ fixed = false }: { fixed?: boolean } = {}) {
   );
 }
 
-// Rounded-square gradient logo tile (the app-icon look) for screen headers.
+// The OFFICIAL app-icon SVG (AFile Brand + Logos/App Icon/AspisFile App
+// Icon.svg), copied verbatim — Pano 2026-09-08: header logos must match the
+// standard icon exactly, no redrawn approximations.
+import appIcon from "../assets/aspisfile-icon.svg";
+
 export function BrandLogo({ size = 56 }: { size?: number }) {
   return (
-    <span
-      aria-label="AspisFile"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: Math.round(size * 0.24),
-        background: "linear-gradient(145deg,#4F79E8,#2743A8)",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        boxShadow: "0 6px 18px rgba(30,58,138,0.5)",
-      }}
-    >
-      <svg width={Math.round(size * 0.64)} height={Math.round(size * 0.64)} viewBox="0 0 280 280" aria-hidden="true">
-        <g transform="translate(140 140)">
-          <circle r="125" fill="#fff" />
-          <circle r="106" fill="#1B3AA8" />
-          <path d="M -52 58 L -16 -58 L 16 -58 L 52 58 L 28 58 L 4 -18 L -4 -18 L -28 58 Z" fill="#fff" />
-        </g>
-      </svg>
-    </span>
+    <img
+      src={appIcon}
+      alt="AspisFile"
+      width={size}
+      height={size}
+      style={{ boxShadow: "0 6px 18px rgba(30,58,138,0.5)", display: "block", borderRadius: Math.round(size * 0.25) }}
+    />
   );
 }

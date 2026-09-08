@@ -1,4 +1,5 @@
 import { FileInfo } from "../lib/desktopAuth";
+import { BrandWatermark } from "./BrandWatermark";
 
 export function LegalOverlay({
   file,
@@ -17,10 +18,13 @@ export function LegalOverlay({
         alignItems: "center",
         justifyContent: "center",
         background: "#0F172A",
+        position: "relative",
+        overflow: "hidden",
         fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
         padding: 24,
       }}
     >
+      <BrandWatermark />
       <div
         style={{
           background: "#1E293B",

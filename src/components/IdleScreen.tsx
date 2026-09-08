@@ -333,7 +333,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       }}
     >
       <BrandWatermark fixed />
-      <div style={{ marginBottom: 4, marginTop: active ? 12 : 0 }}><Icon name="lock" size={28} /></div>
+      <div style={{ marginBottom: 4, marginTop: active ? 12 : 0 }}><Icon name={active ? "lock-open" : "lock"} size={28} /></div>
       <p style={{ fontSize: 15, fontWeight: 500, color: "#E2E8F0", margin: 0 }}>
         AspisFile Viewer
       </p>
