@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { checkForUpdate, openDownload, type UpdateInfo } from "../lib/update-check";
+import { Icon } from "./Icon";
 
 const DISMISS_KEY = "ax_update_dismissed_version";
 
@@ -75,7 +76,7 @@ export default function UpdateBanner() {
         fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif",
       }}
     >
-      <span style={{ fontSize: 13, flexShrink: 0 }}>⬆️</span>
+      <span style={{ display: "inline-flex", flexShrink: 0, color: "#E2E8F0" }}><Icon name="arrow-up-circle" size={14} /></span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{ margin: 0, fontSize: 12.5, color: "#E2E8F0", fontWeight: 500 }}>
           Version {info.version} is available

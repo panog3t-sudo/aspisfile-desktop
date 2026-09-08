@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { supabase } from "../lib/supabase";
 import type { StepUpCreds } from "./StepUpScreen";
+import { Icon } from "./Icon";
 
 declare const __API_BASE__: string;
 
@@ -81,7 +82,7 @@ export function DelegationScreen({
     <div style={styles.overlay}>
       <div style={styles.card}>
         <div style={styles.iconAmber}>
-          <span style={{ fontSize: 24, color: "#FCD34D" }}>⚠︎</span>
+          <span style={{ color: "#FCD34D" }}><Icon name="alert-triangle" size={24} /></span>
         </div>
         <p style={styles.title}>Cross-device approval detected</p>
         <p style={styles.body}>

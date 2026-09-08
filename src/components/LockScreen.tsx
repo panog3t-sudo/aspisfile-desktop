@@ -7,6 +7,7 @@ import { getActiveSessionToken, getRecipientSession, clearAllRecipientState } fr
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { authenticatePasskey, PasskeyError } from "../lib/passkey";
+import { Icon } from "./Icon";
 
 declare const __API_BASE__: string;
 
@@ -303,7 +304,7 @@ export function LockScreen({ fileName, onUnlock }: Props) {
         WebkitUserSelect: "none",
       } as React.CSSProperties}
     >
-      <span style={{ fontSize: 44, lineHeight: 1 }}>🔒</span>
+      <span style={{ lineHeight: 1 }}><Icon name="lock" size={44} strokeWidth={1.5} /></span>
 
       <p style={{ color: "#F1F5F9", fontSize: 15, fontWeight: 500, margin: 0 }}>
         {fileName ? 'Viewer locked' : 'AspisFile locked'}

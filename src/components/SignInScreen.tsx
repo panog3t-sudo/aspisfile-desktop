@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { registerPasskey, PasskeyError, reportSigninPath } from "../lib/passkey";
 import { saveRecipientSession } from "../lib/recipient-session";
 import { passkeyIsFrictiony } from "../lib/signin-hints";
+import { Icon } from "./Icon";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -439,7 +440,7 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
           padding: 32,
         }}
       >
-        <div style={{ fontSize: 22, marginBottom: 8 }}>🔒</div>
+        <div style={{ marginBottom: 8 }}><Icon name="lock" size={40} /></div>
 
         {/* Gate — "Do you have a setup code?" Only shown with a token (file
             context); the idle path skips straight to entry. */}
@@ -486,7 +487,7 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
               <>
                 <div style={lockedEmailRow}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</span>
-                  <span aria-hidden style={{ fontSize: 12, color: "#64748B", flexShrink: 0 }}>🔒</span>
+                  <span aria-hidden style={{ color: "#64748B", flexShrink: 0 }}><Icon name="lock" size={12} strokeWidth={2} /></span>
                 </div>
                 <button onClick={() => setShowWrongAddr((v) => !v)} style={linkBtn}>Wrong address?</button>
                 {showWrongAddr && (
@@ -541,7 +542,7 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
                 </p>
                 <div style={lockedEmailRow}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</span>
-                  <span aria-hidden style={{ fontSize: 12, color: "#64748B", flexShrink: 0 }}>🔒</span>
+                  <span aria-hidden style={{ color: "#64748B", flexShrink: 0 }}><Icon name="lock" size={12} strokeWidth={2} /></span>
                 </div>
                 <button onClick={() => setShowWrongAddr((v) => !v)} style={linkBtn}>Wrong address?</button>
                 {showWrongAddr && (

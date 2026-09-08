@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { saveRecipientSession } from "../lib/recipient-session";
+import { Icon } from "./Icon";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -78,7 +79,7 @@ export function ReauthWaitingScreen({ token, email, verifyUrl, openFailed, onCom
   return (
     <div style={wrap}>
       <div style={card}>
-        <div style={{ fontSize: 22, marginBottom: 14 }}>{mode === "invalid" ? "⚠️" : "🔑"}</div>
+        <div style={{ marginBottom: 14 }}>{mode === "invalid" ? <Icon name="alert-triangle" size={40} /> : <Icon name="key-round" size={40} />}</div>
 
         {(mode === "waiting" || mode === "open_failed") && (
           <>

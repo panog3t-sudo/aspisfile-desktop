@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, type CSSProperties, type ReactNode } from "react";
+import { Icon } from "../components/Icon";
 
 // Recipient feedback — unified draft-then-send menu.
 //
@@ -20,10 +21,10 @@ type SentEntry =
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }
   | { kind: "markup"; id: string; page: number; created_at: string };
 
-const CHOICES: { key: Decision; label: string; color: string; bg: string; border: string; icon: string }[] = [
-  { key: "approved",          label: "Approve",         color: "#3FB980", bg: "#14311F", border: "#1F6B44", icon: "✓" },
+const CHOICES: { key: Decision; label: string; color: string; bg: string; border: string; icon: ReactNode }[] = [
+  { key: "approved",          label: "Approve",         color: "#3FB980", bg: "#14311F", border: "#1F6B44", icon: <Icon name="check" size={14} strokeWidth={2.5} /> },
   { key: "changes_requested", label: "Request changes", color: "#E0A54B", bg: "#332510", border: "#7A561D", icon: "!" },
-  { key: "rejected",          label: "Reject",          color: "#E96B5C", bg: "#331512", border: "#7C332A", icon: "✕" },
+  { key: "rejected",          label: "Reject",          color: "#E96B5C", bg: "#331512", border: "#7C332A", icon: <Icon name="x" size={14} strokeWidth={2.5} /> },
 ];
 const DEC_META: Record<Decision, { label: string; color: string; bg: string; icon: string }> = {
   approved:          { label: "Approved",          color: "#3FB980", bg: "#14311F", icon: "✓" },
@@ -165,7 +166,7 @@ export function FeedbackMenu(props: {
               {/* Respond (accordion) */}
               <div style={{ background: expanded === "respond" ? "#161c33" : "transparent", borderRadius: 11 }}>
                 <button onClick={() => setExpanded(expanded === "respond" ? null : "respond")} style={rowStyle}>
-                  <span style={iconBox}>✓</span>
+                  <span style={iconBox}><Icon name="check" size={15} strokeWidth={2} /></span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Respond</span>
                     <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>{draftDecision ? DEC_META[draftDecision.decision].label : "Approve, request a change, or reject"}</span>
@@ -196,7 +197,7 @@ export function FeedbackMenu(props: {
 
               {/* Comment (row) */}
               <button onClick={() => enterMode("comment")} style={rowStyle}>
-                <span style={iconBox}>💬</span>
+                <span style={iconBox}><Icon name="message-square" size={15} /></span>
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Comment</span>
                   <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Tap a spot on the page to add a note</span>
@@ -207,7 +208,7 @@ export function FeedbackMenu(props: {
               {/* Draw (accordion) */}
               <div style={{ background: expanded === "draw" ? "#161c33" : "transparent", borderRadius: 11 }}>
                 <button onClick={() => setExpanded(expanded === "draw" ? null : "draw")} style={rowStyle}>
-                  <span style={iconBox}>✎</span>
+                  <span style={iconBox}><Icon name="pen-line" size={15} /></span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Draw</span>
                     <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Freehand pen — colour &amp; thickness</span>
@@ -229,7 +230,7 @@ export function FeedbackMenu(props: {
               {/* Highlight (accordion) */}
               <div style={{ background: expanded === "highlight" ? "#161c33" : "transparent", borderRadius: 11 }}>
                 <button onClick={() => setExpanded(expanded === "highlight" ? null : "highlight")} style={rowStyle}>
-                  <span style={iconBox}>🖍</span>
+                  <span style={iconBox}><Icon name="highlighter" size={15} /></span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Highlight</span>
                     <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Marker across the page — colour &amp; width</span>
@@ -250,7 +251,7 @@ export function FeedbackMenu(props: {
 
               {/* Sign (row → SignaturePad: draw / type / upload) */}
               <button onClick={() => enterMode("sign")} style={rowStyle}>
-                <span style={iconBox}>✍️</span>
+                <span style={iconBox}><Icon name="pen-line" size={15} /></span>
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Sign</span>
                   <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Draw it, type it, or upload
@@ -277,7 +278,7 @@ export function FeedbackMenu(props: {
                     )}
                     {draftComments.map((c) => (
                       <div key={c.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #7A561D", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
-                        <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>💬 P{c.page}</span>
+                        <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}><Icon name="message-square" size={10} strokeWidth={2.25} style={{ verticalAlign: -1 }} /> P{c.page}</span>
                         <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{c.body}</span>
                         <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96", flexShrink: 0 }}>{fmtTime(c.at)}</span>
                         {del(() => removeDraftComment(c.tempId))}
@@ -285,14 +286,14 @@ export function FeedbackMenu(props: {
                     ))}
                     {draftMarkups.map((m) => (
                       <div key={m.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #7A561D", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
-                        <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}>✎ MARKUP · P{m.page}</span>
+                        <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}><Icon name="pen-line" size={10} strokeWidth={2.25} style={{ verticalAlign: -1 }} /> MARKUP · P{m.page}</span>
                         <span style={{ marginLeft: "auto", fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96" }}>{fmtTime(m.at)}</span>
                         {del(() => removeDraftMarkup(m.tempId))}
                       </div>
                     ))}
                     {draftSignatures.map((s) => (
                       <div key={s.tempId} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed #2E55D4", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
-                        <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>✍️ SIGN · P{s.page}</span>
+                        <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}><Icon name="pen-line" size={10} strokeWidth={2.25} style={{ verticalAlign: -1 }} /> SIGN · P{s.page}</span>
                         <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{s.signer_name}{s.style === "typed" ? "" : s.style === "uploaded" ? " · image" : " · drawn"}</span>
                         <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9.5, color: "#666E96", flexShrink: 0 }}>{fmtTime(s.at)}</span>
                         {del(() => removeDraftSignature(s.tempId))}
@@ -310,8 +311,8 @@ export function FeedbackMenu(props: {
                     {sent.map((e) => (
                       <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px solid #242B4C", borderRadius: 9, padding: "8px 10px", background: "#0E1228" }}>
                         {e.kind === "decision" ? <span style={{ ...chip, color: DEC_META[e.decision].color, background: DEC_META[e.decision].bg }}>{DEC_META[e.decision].icon} {DEC_META[e.decision].label}</span>
-                          : e.kind === "comment" ? <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}>💬 P{e.page}</span>
-                          : <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}>✎ P{e.page}</span>}
+                          : e.kind === "comment" ? <span style={{ ...chip, color: "#7C9CF5", background: "#1C2347" }}><Icon name="message-square" size={10} strokeWidth={2.25} style={{ verticalAlign: -1 }} /> P{e.page}</span>
+                          : <span style={{ ...chip, color: "#E0A54B", background: "#332510" }}><Icon name="pen-line" size={10} strokeWidth={2.25} style={{ verticalAlign: -1 }} /> P{e.page}</span>}
                         {e.kind === "decision" && e.is_current && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7C9CF5" }}>◀ CURRENT</span>}
                         {e.kind === "decision" && e.note && <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.note}</span>}
                         {e.kind === "comment" && <span style={{ fontSize: 12, color: "#C9CFEA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.body}</span>}

@@ -3,6 +3,8 @@
 // (cron cleanup after all recipients confirmed download); a retry will
 // never succeed.
 
+import { Icon } from "./Icon";
+
 export function DownloadDeletedScreen({ onClose }: { onClose: () => void }) {
   return (
     <div style={{
@@ -14,7 +16,7 @@ export function DownloadDeletedScreen({ onClose }: { onClose: () => void }) {
       fontFamily: 'system-ui, -apple-system, sans-serif',
       padding: 32, textAlign: 'center',
     }}>
-      <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 4 }}>🗑</div>
+      <div style={{ lineHeight: 1, marginBottom: 4 }}><Icon name="trash" size={44} strokeWidth={1.5} /></div>
       <div style={{ fontSize: 20, fontWeight: 500 }}>This file has been deleted.</div>
       <div style={{ fontSize: 13, color: '#94A3B8', maxWidth: 360, lineHeight: 1.5 }}>
         The encrypted copy on AspisFile's servers has been removed after all recipients confirmed download.

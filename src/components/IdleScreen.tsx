@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, type ReactElement } from "react";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
+import { Icon } from "./Icon";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -216,7 +217,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   };
 
   // A collapsible section (room or the standalone-files group).
-  const section = (key: string, icon: string, title: string, docs: HomeDoc[], open: boolean, toggle: () => void) => {
+  const section = (key: string, icon: ReactElement, title: string, docs: HomeDoc[], open: boolean, toggle: () => void) => {
     if (q && docs.length === 0) return null;
     return (
       <div key={key} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
@@ -274,7 +275,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           <button onClick={() => setExpandedFolders(p => ({ ...p, [folder.id]: !(p[folder.id] ?? true) }))} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 8px", borderRadius: 7, background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
             <span style={{ fontSize: 9, color: "#64748B", width: 9, display: "inline-block", transition: "transform 0.12s", transform: fOpen ? "rotate(90deg)" : "none" }}>▶</span>
             <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, fontWeight: 700, color: "#7DB1E8" }}>{number}</span>
-            <span style={{ fontSize: 13 }}>📁</span>
+            <span style={{ display: "inline-flex", color: "#94A3B8" }}><Icon name="folder" size={13} /></span>
             <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{folder.name}</span>
             <span style={{ fontSize: 10.5, color: "#64748B" }}>{subtreeDocCount(folder.id)}</span>
           </button>
@@ -290,7 +291,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       <div key={room.id} style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
         <button onClick={() => setExpandedRooms(p => ({ ...p, [room.id]: !p[room.id] }))} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "12px 14px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
           <span style={{ fontSize: 10, color: "#64748B", width: 10, display: "inline-block", transition: "transform 0.12s", transform: roomOpen ? "rotate(90deg)" : "none" }}>▶</span>
-          <span style={{ fontSize: 14 }}>📁</span>
+          <span style={{ display: "inline-flex", color: "#94A3B8" }}><Icon name="folder" size={14} /></span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{room.name}</span>
           <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>
             {room.docs.length} doc{room.docs.length === 1 ? "" : "s"}
@@ -330,7 +331,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         overflowY: "auto",
       }}
     >
-      <div style={{ fontSize: 28, marginBottom: 4, marginTop: active ? 12 : 0 }}>🔒</div>
+      <div style={{ marginBottom: 4, marginTop: active ? 12 : 0 }}><Icon name="lock" size={28} /></div>
       <p style={{ fontSize: 15, fontWeight: 500, color: "#E2E8F0", margin: 0 }}>
         AspisFile Viewer
       </p>
@@ -343,7 +344,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       {/* macOS Dock nudge — the native equivalent of a Windows desktop shortcut. */}
       {showDockTip && (
         <div style={{ width: "100%", maxWidth: 560, display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(29,78,216,0.10)", border: "0.5px solid rgba(29,78,216,0.35)", borderRadius: 10, padding: "11px 13px" }}>
-          <span aria-hidden style={{ fontSize: 15, lineHeight: 1.3 }}>📌</span>
+          <span aria-hidden style={{ lineHeight: 1, color: "#CBD5E1" }}><Icon name="pin" size={15} /></span>
           <div style={{ flex: 1, fontSize: 12.5, lineHeight: 1.5, color: "#CBD5E1" }}>
             <b style={{ color: "#E2E8F0" }}>Keep AspisFile in your Dock</b> for quick access — right-click the AspisFile icon in your Dock and choose <b>Options → Keep in Dock</b>.
           </div>
@@ -508,12 +509,12 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           {/* Your files — collapsed by default; expired links live in their
               own section below so the working list stays clean (2026-09-03). */}
           {home && home.files.filter(d => !d.expired).length > 0 &&
-            section("__files__", "🗂️", "Your files", prep(home.files.filter(d => !d.expired)), q ? prep(home.files.filter(d => !d.expired)).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
+            section("__files__", <Icon name="folder-open" size={14} style={{ color: "#94A3B8" }} />, "Your files", prep(home.files.filter(d => !d.expired)), q ? prep(home.files.filter(d => !d.expired)).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
 
           {/* Expired — collapsed by default; rows stay non-clickable with the
               "ask the sender to re-share" hint. */}
           {home && home.files.some(d => d.expired) &&
-            section("__expired__", "🕓", "Unavailable", prep(home.files.filter(d => !!d.expired)), q ? prep(home.files.filter(d => !!d.expired)).length > 0 : expiredOpen, () => setExpiredOpen(o => !o))}
+            section("__expired__", <Icon name="clock" size={14} style={{ color: "#94A3B8" }} />, "Unavailable", prep(home.files.filter(d => !!d.expired)), q ? prep(home.files.filter(d => !!d.expired)).length > 0 : expiredOpen, () => setExpiredOpen(o => !o))}
 
           {/* No "different setup code" link here — the "Sign out" control in the
               header already lets a signed-in user switch to a different email. */}

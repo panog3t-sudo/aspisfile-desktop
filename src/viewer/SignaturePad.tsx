@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Icon } from "../components/Icon";
 
 // Recipient e-signature capture — draw or type. Returns box-relative strokes
 // (0..1) for drawn, or the typed name. Purely a capture UI; the signature is
@@ -94,7 +95,7 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
 
         <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
           {(["draw", "type", "upload"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "8px", borderRadius: 9, border: `1px solid ${tab === t ? "#5C82EE" : "#2E3760"}`, background: tab === t ? "#1C2347" : "transparent", color: tab === t ? "#7C9CF5" : "#9098BC", cursor: "pointer", fontSize: 12.5, fontWeight: 640 }}>{t === "draw" ? "✍️ Draw" : t === "type" ? "⌨ Type" : "⬆ Upload"}</button>
+            <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "8px", borderRadius: 9, border: `1px solid ${tab === t ? "#5C82EE" : "#2E3760"}`, background: tab === t ? "#1C2347" : "transparent", color: tab === t ? "#7C9CF5" : "#9098BC", cursor: "pointer", fontSize: 12.5, fontWeight: 640 }}>{t === "draw" ? <><Icon name="pen-line" size={12} strokeWidth={2} style={{ verticalAlign: -2, marginRight: 5 }} />Draw</> : t === "type" ? <><Icon name="keyboard" size={12} strokeWidth={2} style={{ verticalAlign: -2, marginRight: 5 }} />Type</> : <><Icon name="upload" size={12} strokeWidth={2} style={{ verticalAlign: -2, marginRight: 5 }} />Upload</>}</button>
           ))}
         </div>
 
@@ -131,7 +132,7 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
             ) : (
               <label style={{ width: "100%", aspectRatio: `${PAD_W} / ${PAD_H}`, background: "#0E1228", borderRadius: 10, border: "1px dashed #3A426B", display: "grid", placeItems: "center", cursor: "pointer", color: "#9098BC", fontSize: 12.5, textAlign: "center", padding: 12 }}>
                 <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }} onChange={(e) => onFile(e.target.files?.[0])} />
-                <span>⬆ Click to choose a signature image<br /><span style={{ fontSize: 11, color: "#666E96" }}>PNG or JPG · max ~1.4&nbsp;MB</span></span>
+                <span><Icon name="upload" size={13} strokeWidth={2} style={{ verticalAlign: -2, marginRight: 5 }} />Click to choose a signature image<br /><span style={{ fontSize: 11, color: "#666E96" }}>PNG or JPG · max ~1.4&nbsp;MB</span></span>
               </label>
             )}
             <div style={{ display: "flex", alignItems: "center", marginTop: 6, minHeight: 18 }}>

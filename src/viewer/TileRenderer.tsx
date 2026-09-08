@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { fetch } from "@tauri-apps/plugin-http";
 import { sessionStore } from "../lib/sessionStore";
 import { FileInfo, RecipientInfo } from "../lib/desktopAuth";
+import { Icon } from "../components/Icon";
 
 declare const __API_BASE__: string;
 
@@ -566,7 +567,7 @@ export function TileRenderer({
             title="Lock viewer"
             style={toolbarBtnStyle(false)}
           >
-            🔒
+            <Icon name="lock" size={14} />
           </button>
           <span style={{ fontSize: 13, color: "#94A3B8", fontFamily: "system-ui", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {file.name}
@@ -680,7 +681,7 @@ export function TileRenderer({
                 fontFamily: 'system-ui', flexShrink: 0,
               }}
             >
-              ⇪ Send to device
+              <Icon name="monitor-up" size={13} /> Send to device
             </button>
           )}
           {onDownload && downloadState && (
@@ -976,7 +977,7 @@ export function TileRenderer({
                   background: "#E0A54B", color: "#fff", border: "2px solid #fff",
                   boxShadow: "0 3px 8px rgba(224,165,75,.6)", display: "grid", placeItems: "center",
                   fontSize: 12, fontWeight: 700,
-                }}>✎</div>
+                }}><Icon name="pen-line" size={12} strokeWidth={2.25} /></div>
               )}
             </div>
           ) : (

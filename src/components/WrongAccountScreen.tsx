@@ -3,6 +3,8 @@
 // a different recipient (see backend memory: feedback-viewer-identity-binding)
 // — switching is a deliberate action the user takes here.
 
+import { Icon } from "./Icon";
+
 type Props = {
   fileRecipient: string;   // who the file was sent to
   boundEmail:    string;   // who this viewer is signed in as
@@ -36,8 +38,8 @@ export function WrongAccountScreen({ fileRecipient, boundEmail, onSwitch, onCanc
         <div style={{
           width: 36, height: 36, borderRadius: 18, marginBottom: 16,
           background: "rgba(46,85,212,0.18)", color: "#9FB4F2",
-          display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
-        }}>🔒</div>
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}><Icon name="lock" size={18} /></div>
 
         <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 8px", color: "#F1F5F9" }}>
           This file is for a different account

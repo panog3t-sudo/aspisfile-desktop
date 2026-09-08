@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { fetch } from "@tauri-apps/plugin-http";
 import { getActiveSessionToken } from "../lib/recipient-session";
+import { Icon } from "../components/Icon";
 
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
@@ -83,7 +84,7 @@ export function QAPanel({ roomId, fileId, docName, onClose, onUnread }: {
             <button onClick={onClose} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>×</button>
           </div>
           <div style={{ fontSize: 11.5, color: "#7C9CF5", fontFamily: "ui-monospace,Menlo,monospace", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{docName}</div>
-          <div style={{ fontSize: 11, color: "#666E96", marginTop: 7 }}>🔒 Private — only you and the deal team can see these questions.</div>
+          <div style={{ fontSize: 11, color: "#666E96", marginTop: 7 }}><Icon name="lock" size={11} strokeWidth={2} style={{ verticalAlign: -1.5 }} /> Private — only you and the deal team can see these questions.</div>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "13px 14px" }}>

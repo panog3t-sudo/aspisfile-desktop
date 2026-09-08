@@ -29,6 +29,7 @@ import { DownloadModal } from "../components/DownloadModal";
 import { FeedbackMenu, type Decision, type DraftComment, type DraftMarkup, type DraftSignature } from "./FeedbackMenu";
 import { QAPanel } from "./QAPanel";
 import { SignaturePad, type SignatureData } from "./SignaturePad";
+import { Icon } from "../components/Icon";
 import { downloadAfsLink, DownloadError, friendlyDownloadError } from "../lib/download";
 import { CoViewingBanner }            from "../coviewing/CoViewingBanner";
 import { CoViewingRecipient }         from "../coviewing/CoViewingRecipient";
@@ -1461,7 +1462,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
               border: `0.5px solid ${limitSecondsLeft <= 30 ? 'rgba(203,61,46,0.55)' : 'rgba(255,255,255,0.18)'}`,
               borderRadius: 20, padding: '3px 10px', color: limitSecondsLeft <= 30 ? '#FECACA' : '#CBD5E1', whiteSpace: 'nowrap',
             }}>
-              ⏱ <b style={{ color: '#fff' }}>{Math.floor(limitSecondsLeft / 60)}:{String(limitSecondsLeft % 60).padStart(2, '0')}</b> left
+              <Icon name="timer" size={11} strokeWidth={2} style={{ verticalAlign: -1.5 }} /> <b style={{ color: '#fff' }}>{Math.floor(limitSecondsLeft / 60)}:{String(limitSecondsLeft % 60).padStart(2, '0')}</b> left
             </span>
           )}
         </div>
@@ -1793,7 +1794,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             style={{ width: "100%", maxWidth: 440, margin: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 16, padding: "15px 15px 17px",
               boxShadow: "0 24px 60px rgba(0,0,0,.6)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", color: "#EAEFFB" }}>
             <div style={{ display: "flex", alignItems: "center", marginBottom: 11 }}>
-              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 11, fontWeight: 700, color: "#7C9CF5", background: "#1C2347", padding: "3px 9px", borderRadius: 999 }}>💬 COMMENT · PAGE {pendingComment.page}</span>
+              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 11, fontWeight: 700, color: "#7C9CF5", background: "#1C2347", padding: "3px 9px", borderRadius: 999 }}><Icon name="message-square" size={11} strokeWidth={2.25} style={{ verticalAlign: -1.5 }} /> COMMENT · PAGE {pendingComment.page}</span>
               <button onClick={() => { setPendingComment(null); setPendingText(""); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
             </div>
             <textarea value={pendingText} onChange={(e) => setPendingText(e.target.value)} maxLength={1000} autoFocus placeholder="Your comment on this spot…"

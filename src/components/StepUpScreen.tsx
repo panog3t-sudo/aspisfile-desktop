@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { supabase } from "../lib/supabase";
+import { Icon } from "./Icon";
 
 // Phase 1 Day 12.5 — localStorage key threading approvalId across the
 // OAuth round-trip. StepUpScreen sets it before launching the
@@ -268,7 +269,7 @@ export function StepUpScreen({
       <div style={styles.overlay}>
         <div style={styles.card}>
           <div style={styles.iconBlue}>
-            <span style={{ fontSize: 24 }}>✉︎</span>
+            <span><Icon name="mail" size={24} /></span>
           </div>
           <p style={styles.title}>Enter the code</p>
           <p style={styles.body}>
@@ -324,7 +325,7 @@ export function StepUpScreen({
     <div style={styles.overlay}>
       <div style={styles.card}>
         <div style={styles.iconBlue}>
-          <span style={{ fontSize: 22 }}>🛡</span>
+          <span><Icon name="shield" size={22} /></span>
         </div>
         <p style={styles.title}>Additional verification required</p>
         <p style={styles.body}>
