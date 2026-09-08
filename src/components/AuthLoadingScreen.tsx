@@ -1,8 +1,18 @@
-export function AuthLoadingScreen() {
+// Staged security-pipeline feedback (2026-09-08, "black screen of doubt" fix):
+// the viewer deliberately paints nothing until every gate has cleared, but the
+// silence read as "broken". label tracks the real stage; overlay mode floats
+// the same treatment above the mounted TileRenderer until the first tile lands.
+export function AuthLoadingScreen({ label = "Authenticating…", sublabel, overlay = false }: {
+  label?: string;
+  sublabel?: string;
+  overlay?: boolean;
+}) {
   return (
     <div
       style={{
-        height: "100vh",
+        ...(overlay
+          ? { position: "absolute" as const, inset: 0, zIndex: 60 }
+          : { height: "100vh" }),
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -41,7 +51,10 @@ export function AuthLoadingScreen() {
           strokeDasharray="60 200"
         />
       </svg>
-      <span>Authenticating…</span>
+      <span>{label}</span>
+      {sublabel && (
+        <span style={{ fontSize: 11.5, color: "#64748B", maxWidth: 320, textAlign: "center", lineHeight: 1.5 }}>{sublabel}</span>
+      )}
     </div>
   );
 }

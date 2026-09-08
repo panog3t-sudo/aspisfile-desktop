@@ -232,6 +232,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const endReasonRef         = useRef<'user_close' | 'revoked' | 'app_close' | 'session_expired'>('user_close');
   const uniquePagesRef       = useRef<Set<number>>(new Set());
   const fileOpenedFiredRef   = useRef(false);
+  // "Black screen of doubt" overlay (2026-09-08): covers the mounted
+  // TileRenderer until the first tile lands. Safety timeout: if tiles never
+  // arrive (render failure underneath), dismiss so the page's own error
+  // surface is reachable rather than eternally covered.
+  const [firstTileRendered, setFirstTileRendered] = useState(false);
+  useEffect(() => {
+    if (firstTileRendered) return;
+    const tmr = setTimeout(() => setFirstTileRendered(true), 20_000);
+    return () => clearTimeout(tmr);
+  }, [firstTileRendered]);
   const pendingClientOpenRef = useRef<{ sessionId: string; fingerprint: string; stepUp?: boolean } | null>(null);
   const fireClientFileOpened = useCallback(() => {
     const ctx = pendingClientOpenRef.current;
@@ -1344,7 +1354,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return <RevokedScreen reason={revokeReason} />;
   }
   if (error)                          return <RevokedScreen friendly={error} />;
-  if (!file || !recipient)            return <AuthLoadingScreen />;
+  if (!file || !recipient)            return <AuthLoadingScreen label="Verifying your access…" />;
   if (sourceExpired) {
     // B+ guided purged-link message. Device labels come from the session-gated
     // held-status endpoint (never shown without a valid session).
@@ -1425,11 +1435,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       />
     );
   }
-  if (!sessionId || totalPages === 0) return <AuthLoadingScreen />;
+  if (!sessionId || totalPages === 0) return <AuthLoadingScreen label="Verifying your access…" sublabel="Your identity and this document's keys are being checked." />;
 
   // B5 flag on → wait for the .afs prime before rendering, so tiles come
   // from the re-supplied ciphertext rather than durable S3. (No-op when off.)
-  if (afsRenderEnabled && !afsPrimed) return <AuthLoadingScreen />;
+  if (afsRenderEnabled && !afsPrimed) return <AuthLoadingScreen label="Unlocking document…" />;
 
   // Screen-capture tool running → black out (unmounts the TileRenderer so
   // tiles stop rendering). Reverses when the poll above clears captureApps.
@@ -1520,7 +1530,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             />
           )}
           <TileRenderer
-            onFirstTileRendered={fireClientFileOpened}
+            onFirstTileRendered={() => { setFirstTileRendered(true); fireClientFileOpened(); }}
             sessionId={sessionId}
             fileId={file.id}
             file={file}
@@ -1595,6 +1605,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onFeedback={recipientFeedback ? () => setFeedbackOpen(true) : undefined}
             feedbackDraftCount={(draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length}
           />
+          {!firstTileRendered && (
+            <AuthLoadingScreen
+              overlay
+              label="Rendering pages…"
+              sublabel="This document is decrypted only for you — pages appear in a moment."
+            />
+          )}
         </div>
         {presenterSession && participantPanelOpen && (
           <PresenterParticipantPanel
