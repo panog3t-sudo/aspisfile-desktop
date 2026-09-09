@@ -917,20 +917,74 @@ function AppContent() {
   // natively AND there's no access token on the bare idle screen to drive the
   // browser reauth-status poll, so we return a clear message pointing them to
   // their email link (which does have the token → full Phase 2 browser reauth).
+  // Browser re-sign-in for no-authenticator Windows machines (2026-09-09):
+  // mint a nonce, run the ceremony in the system browser, poll for the
+  // session the server parked on the verified nonce. Full ceremony, single
+  // use, 5-min TTL — no gate weakened.
+  async function browserIdleSignIn(email: string): Promise<boolean> {
+    try {
+      const startRes = await fetch(`${BASE}/api/v1/recipient-passkeys/idle-signin/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const startJson = startRes.ok ? await startRes.json() : null;
+      const nonce = startJson?.nonce as string | undefined;
+      if (!nonce) return false;
+
+      await openUrl(`${BASE}/auth/desktop-verify?email=${encodeURIComponent(email)}&nonce=${encodeURIComponent(nonce)}`);
+
+      const deadline = Date.now() + 3 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2500));
+        try {
+          const res = await fetch(`${BASE}/api/v1/recipient-passkeys/idle-signin/claim`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nonce }),
+          });
+          const j = res.ok ? await res.json() : null;
+          if (j?.status === "ok" && j.session_token) {
+            saveRecipientSession({
+              email:     j.email ?? email,
+              token:     j.session_token,
+              passkeyId: j.passkey_id ?? "",
+              expiresIn: Number(j.expires_in) || 72 * 60 * 60,
+            });
+            return true;
+          }
+          if (j?.status === "expired") return false;
+        } catch { /* transient — keep polling until the deadline */ }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   async function handleIdleSignIn(): Promise<{ ok: boolean; message?: string }> {
     const s = getRecipientSession();
     if (!s?.email) return { ok: false, message: "No enrolled identity on this device." };
     try {
-      // No-Hello guard (2026-09-08): skip the doomed USB-key dialog and give
-      // the email-link guidance straight away.
+      // No-Hello guard (2026-09-08): skip the doomed USB-key dialog. Since
+      // 2026-09-09 this is no longer a dead end — the browser runs the full
+      // passkey ceremony at the real RP origin and hands the session back
+      // via a single-use nonce (idle-signin start → /auth/desktop-verify →
+      // claim). Approved: Windows-no-authenticator machines ONLY; macOS and
+      // Hello-equipped Windows keep the native ceremony below.
       const plat = await invoke<string>("get_platform").catch(() => "unknown");
       if (plat === "windows" && !(await invoke<boolean>("biometric_available").catch(() => true))) {
-        return {
-          ok: false,
-          message: "This device can't sign you in from here. Open a file from your email or the web Inbox — it'll sign you in as it opens.",
-        };
+        const got = await browserIdleSignIn(s.email);
+        if (!got) {
+          return {
+            ok: false,
+            message: "Verification didn't complete. Try again — or open a file from your email; it signs you in as it opens.",
+          };
+        }
+        // fall through to the shared signed-in tail below
+      } else {
+        await authenticatePasskey({ email: s.email }); // saves the session on success
       }
-      await authenticatePasskey({ email: s.email }); // saves the session on success
     } catch {
       return {
         ok: false,
