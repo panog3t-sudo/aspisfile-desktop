@@ -182,10 +182,25 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         onMouseEnter={e => { if (!expired) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
       >
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "#64748B", flexShrink: 0 }}>
-          <path d="M4 2h5l3 3v9H4z" stroke="currentColor" strokeWidth="1.2" />
-        </svg>
-        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {(() => {
+          /* Type badge — same palette as the mobile viewer (Pano 2026-09-09). */
+          const ext = (d.name.split(".").pop() ?? "").toLowerCase();
+          const TYPE: Record<string, { bg: string; fg: string; label: string }> = {
+            pdf:  { bg: "#FEE2E2", fg: "#A32D2D", label: "PDF" },
+            doc:  { bg: "#EFF6FF", fg: "#185FA5", label: "DOC" }, docx: { bg: "#EFF6FF", fg: "#185FA5", label: "DOC" },
+            xls:  { bg: "#ECFDF5", fg: "#065F46", label: "XLS" }, xlsx: { bg: "#ECFDF5", fg: "#065F46", label: "XLS" },
+            ppt:  { bg: "#FFF7ED", fg: "#854F0B", label: "PPT" }, pptx: { bg: "#FFF7ED", fg: "#854F0B", label: "PPT" },
+            png:  { bg: "#F5F3FF", fg: "#5B21B6", label: "PNG" }, jpg: { bg: "#F5F3FF", fg: "#5B21B6", label: "JPG" },
+            jpeg: { bg: "#F5F3FF", fg: "#5B21B6", label: "JPG" }, heic: { bg: "#F5F3FF", fg: "#5B21B6", label: "IMG" },
+          };
+          const c = TYPE[ext] ?? { bg: "rgba(148,163,184,0.18)", fg: "#94A3B8", label: (ext || "file").slice(0, 4).toUpperCase() };
+          return (
+            <span style={{ width: 32, height: 20, borderRadius: 4, background: c.bg, color: c.fg, fontSize: 8.5, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, letterSpacing: "0.04em" }}>
+              {c.label}
+            </span>
+          );
+        })()}
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: expired && d.unavailable_reason === "revoked" ? "#7B83A6" : "#E2E8F0", textDecoration: expired && d.unavailable_reason === "revoked" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {d.name}
         </span>
         {/* Opens & viewing limits — shown BEFORE opening so the click is an
@@ -205,13 +220,13 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             {d.reviewed && <span title="You've left a review on this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#5C82EE" }} />}
           </span>
         )}
-        {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 56, textAlign: "right" }}>{fmtDate(d.created_at)}</span> : null}
+        {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, whiteSpace: "nowrap", textAlign: "right" }}>Shared {fmtDate(d.created_at)}</span> : null}
         {d.file_size ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, minWidth: 52, textAlign: "right" }}>{fmtSize(d.file_size)}</span> : null}
         {expired
           /* Truthful state (found in pre-cutover M5 2026-09-07): revoked !=
              expired — different message, different recovery. Older servers
              omit unavailable_reason -> Expired. Brand v06: oxblood = done. */
-          ? <span style={{ fontSize: 10.5, fontWeight: 600, color: d.unavailable_reason === "revoked" ? "#F3DCD8" : "#FCA5A5", background: d.unavailable_reason === "revoked" ? "rgba(142,42,32,0.55)" : "rgba(148,29,29,0.28)", border: "0.5px solid rgba(252,165,165,0.35)", borderRadius: 999, padding: "3px 10px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap" }}>{d.unavailable_reason === "revoked" ? "Revoked" : "Expired"}</span>
+          ? <span style={{ fontSize: 10.5, fontWeight: 700, color: d.unavailable_reason === "revoked" ? "#EF4444" : "#94A3B8", background: d.unavailable_reason === "revoked" ? "rgba(239,68,68,0.14)" : "rgba(148,163,184,0.16)", border: d.unavailable_reason === "revoked" ? "0.5px solid rgba(239,68,68,0.4)" : "0.5px solid rgba(148,163,184,0.35)", borderRadius: 999, padding: "3px 10px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap" }}>{d.unavailable_reason === "revoked" ? "Revoked" : "Expired"}</span>
           : <span style={{ fontSize: 11, fontWeight: 600, color: "#fff", background: "#1D4ED8", borderRadius: 999, padding: "4px 12px", flexShrink: 0, lineHeight: 1, whiteSpace: "nowrap", boxShadow: "0 1px 4px rgba(29,78,216,0.45)" }}>Open →</span>}
       </button>
     );
@@ -230,7 +245,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
         >
           <span style={{ fontSize: 10, color: "#64748B", width: 10, display: "inline-block", transition: "transform 0.12s", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
           <span style={{ fontSize: 14 }}>{icon}</span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: title === "Unavailable" ? "#94A3B8" : "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
           <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>
             {docs.length} item{docs.length === 1 ? "" : "s"}
             {(() => { const n = docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: "#4ADE80" }}> · {n} new</span> : null; })()}
@@ -345,7 +360,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
 
       {/* macOS Dock nudge — the native equivalent of a Windows desktop shortcut. */}
       {showDockTip && (
-        <div style={{ width: "100%", maxWidth: 560, display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(29,78,216,0.10)", border: "0.5px solid rgba(29,78,216,0.35)", borderRadius: 10, padding: "11px 13px" }}>
+        <div style={{ width: "100%", maxWidth: 760, display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(29,78,216,0.10)", border: "0.5px solid rgba(29,78,216,0.35)", borderRadius: 10, padding: "11px 13px" }}>
           <span aria-hidden style={{ lineHeight: 1, color: "#CBD5E1" }}><Icon name="pin" size={15} /></span>
           <div style={{ flex: 1, fontSize: 12.5, lineHeight: 1.5, color: "#CBD5E1" }}>
             <b style={{ color: "#E2E8F0" }}>Keep AspisFile in your Dock</b> for quick access — right-click the AspisFile icon in your Dock and choose <b>Options → Keep in Dock</b>.
@@ -423,7 +438,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
       )}
 
       {active && (
-        <div style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
+        <div style={{ width: "100%", maxWidth: 760, display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
             <span style={{ fontSize: 12, color: "#94A3B8" }}>
               Signed in as <span style={{ color: "#E2E8F0", fontWeight: 500 }}>{session!.email}</span>
