@@ -196,19 +196,55 @@ pub async fn log_security_event(
 // shows up black in any shared/recorded stream). Dedicated capture tools,
 // by contrast, are only running when someone intends to capture — so
 // presence is a high-signal event worth blacking out + alerting on.
-const CAPTURE_APPS: &[(&str, &str)] = &[
-    ("obs", "OBS"),
-    ("snagit", "Snagit"),
-    ("sharex", "ShareX"),
-    ("loom", "Loom"),
-    ("cleanshot", "CleanShot"),
-    ("camtasia", "Camtasia"),
-    ("screenflow", "ScreenFlow"),
-    ("bandicam", "Bandicam"),
-    ("fraps", "Fraps"),
-    ("kap", "Kap"),
-    ("screenstudio", "Screen Studio"),
+/// (process-name needle, display name, definite)
+///
+/// `definite = true` marks the operating system's OWN capture UI. Those
+/// processes exist only while a capture is actually being taken, so their
+/// presence IS the capture action — the viewer ends the session, matching what
+/// the mobile viewer does off the iOS screenshot/recording callbacks.
+///
+/// `definite = false` marks third-party tools, which people legitimately leave
+/// running in the background for unrelated reasons. Presence there is
+/// suspicious, not proof, so the viewer only pauses reversibly and sends a soft
+/// alert — ending a real recipient's session on a background app would be a
+/// false positive that costs them an open.
+const CAPTURE_APPS: &[(&str, &str, bool)] = &[
+    // ── macOS built-ins (Cmd+Shift+3/4/5) ──
+    // `screencaptureui` backs the interactive overlay; `screencapture` is the
+    // one-shot binary. Listed separately because the anchored match treats
+    // "screencapture" + "ui" as a non-match (needle followed by a letter).
+    ("screencaptureui", "Screenshot", true),
+    ("screencapture", "Screenshot", true),
+    // ── Windows built-ins ──
+    // Win+Shift+S, and on Windows 11 the PrtSc key itself (the OS remaps it to
+    // Snipping Tool by default and swallows the keypress, so the WebView never
+    // receives a PrintScreen event — process presence is the only signal left).
+    ("snippingtool", "Snipping Tool", true),
+    ("screensketch", "Snip & Sketch", true),
+    ("screenclippinghost", "Snip & Sketch", true),
+    // ── Third-party capture / recording tools ──
+    ("obs", "OBS", false),
+    ("snagit", "Snagit", false),
+    ("sharex", "ShareX", false),
+    ("loom", "Loom", false),
+    ("cleanshot", "CleanShot", false),
+    ("camtasia", "Camtasia", false),
+    ("screenflow", "ScreenFlow", false),
+    ("bandicam", "Bandicam", false),
+    ("fraps", "Fraps", false),
+    ("kap", "Kap", false),
+    ("screenstudio", "Screen Studio", false),
 ];
+
+/// Result of one capture scan.
+///
+/// `apps` drives the reversible blackout; `definite` (a subset) drives session
+/// termination. Kept as two lists so the viewer decides policy, not the scanner.
+#[derive(serde::Serialize)]
+pub struct CaptureScan {
+    pub apps: Vec<String>,
+    pub definite: Vec<String>,
+}
 
 /// Scan running processes for dedicated screen-capture / recording tools.
 /// Returns the deduped display names of any detected. The JS viewer polls
@@ -251,22 +287,29 @@ fn process_matches(name_lower: &str, needle: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn detect_capture_processes() -> Vec<String> {
+pub fn detect_capture_processes() -> CaptureScan {
     use sysinfo::{ProcessRefreshKind, System};
 
     let mut sys = System::new();
     sys.refresh_processes_specifics(ProcessRefreshKind::new());
 
     let mut found = std::collections::BTreeSet::new();
+    let mut definite = std::collections::BTreeSet::new();
     for process in sys.processes().values() {
         let name = process.name().to_lowercase();
-        for (needle, display) in CAPTURE_APPS {
+        for (needle, display, is_definite) in CAPTURE_APPS {
             if process_matches(&name, needle) {
                 found.insert((*display).to_string());
+                if *is_definite {
+                    definite.insert((*display).to_string());
+                }
             }
         }
     }
-    found.into_iter().collect()
+    CaptureScan {
+        apps: found.into_iter().collect(),
+        definite: definite.into_iter().collect(),
+    }
 }
 
 #[cfg(test)]
@@ -279,6 +322,19 @@ mod capture_match_tests {
         assert!(process_matches("sharex.exe", "sharex"));
         assert!(process_matches("cleanshot x.exe", "cleanshot"));
         assert!(process_matches("screenstudio", "screenstudio"));
+    }
+    #[test]
+    fn matches_os_builtin_capture_ui() {
+        // macOS: the interactive overlay and the one-shot binary.
+        assert!(process_matches("screencaptureui", "screencaptureui"));
+        assert!(process_matches("screencapture", "screencapture"));
+        // "screencapture" must NOT swallow "screencaptureui" — the anchored
+        // match rejects needle+letter, which is why both are listed.
+        assert!(!process_matches("screencaptureui", "screencapture"));
+        // Windows: Win+Shift+S and the Win11 PrtSc remap.
+        assert!(process_matches("snippingtool.exe", "snippingtool"));
+        assert!(process_matches("screensketch.exe", "screensketch"));
+        assert!(process_matches("screenclippinghost.exe", "screenclippinghost"));
     }
     #[test]
     fn rejects_substring_false_positives() {

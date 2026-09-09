@@ -15,7 +15,7 @@ import {
 import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
-import { CaptureBlackoutScreen, ScreenshotPausedScreen } from "../components/CaptureBlackoutScreen";
+import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
 import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, generateSignedOutput, type HeldStatus } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
@@ -179,7 +179,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // violation is reported. Reversible — clears when the tool closes.
   const [captureApps, setCaptureApps] = useState<string[]>([]);
   // Brief pause + sender alert when a Print Screen keypress is detected.
-  const [screenshotPaused, setScreenshotPaused] = useState(false);
   // Phase B (B5) — flagged + additive. When the flag is on, prime the
   // server's render cache from the recipient's .afs before showing tiles;
   // default OFF keeps the durable-S3 tile path unchanged.
@@ -880,8 +879,32 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [sessionId, file, revoked, offline]);
 
+  // Ends the session on a CONFIRMED capture, mirroring the mobile viewer's
+  // handleSecurityEvent: destroy the in-memory session key, report the
+  // violation, then tell the recipient why. Guarded by a ref so the poll and
+  // the PrintScreen handler can't both fire it. The key is cleared before the
+  // network call — tiles must be dead even if the POST never lands.
+  const captureEndedRef = useRef(false);
+  const endSessionOnCapture = useCallback((
+    violationType: 'screenshot' | 'recording_detected',
+    metadata: Record<string, unknown>,
+  ) => {
+    if (captureEndedRef.current) return;
+    captureEndedRef.current = true;
+    sessionStore.clear();
+    if (file && sessionId) {
+      fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/violation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
+        body: JSON.stringify({ session_id: sessionId, violation_type: violationType, metadata }),
+      }).catch(() => {});
+    }
+    setRevokeReason('capture_detected');
+    setRevoked(true);
+  }, [file, sessionId]);
+
   // Screen-capture process detection. While viewing, poll the native
-  // process scan every 7s. On the transition into "detected", report a
+  // process scan. On the transition into "detected", report a
   // soft screen_share_detected violation (server records + alerts the
   // sender at Notable tier; it never strikes/revokes). The blackout
   // itself is driven by captureApps in the render guard below, and
@@ -891,13 +914,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     let cancelled = false;
     let wasDetected = false;
     const poll = async () => {
-      let apps: string[] = [];
+      let scan: { apps: string[]; definite: string[] };
       try {
-        apps = await invoke<string[]>('detect_capture_processes');
+        scan = await invoke<{ apps: string[]; definite: string[] }>('detect_capture_processes');
       } catch {
         return; // command unavailable (older shell) — fail open, don't blackout
       }
       if (cancelled) return;
+      const { apps, definite } = scan;
+
+      // Definite tier — the OS's own capture UI is on screen, so a capture is
+      // being taken right now. Treat it exactly as the mobile viewer treats an
+      // iOS screenshot/recording callback: end the session. This is the only
+      // signal desktop gets for Win+Shift+S and the Windows 11 PrtSc remap,
+      // both of which the OS swallows before the WebView sees a key event.
+      if (definite.length > 0) {
+        endSessionOnCapture('screenshot', { apps: definite, source: 'os_capture_ui' });
+        return;
+      }
+
       setCaptureApps(apps);
       const detected = apps.length > 0;
       if (detected && !wasDetected) {
@@ -918,70 +953,32 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       wasDetected = detected;
     };
     poll();
-    const timer = window.setInterval(poll, 7_000);
+    // 3s, not 7s: the OS capture UI is only on screen for a few seconds, so a
+    // slow poll misses the very event we most need to catch.
+    const timer = window.setInterval(poll, 3_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [isViewing, sessionId, file]);
+  }, [isViewing, sessionId, file, endSessionOnCapture]);
 
-  // Print Screen detection. The window's contentProtected flag already blanks
-  // the viewer in any capture, but a one-off PrtSc leaves no running process
-  // for the poll above to catch and sends no signal. Here we catch the key
-  // itself: clear the clipboard copy the OS just made, report a `screenshot`
-  // violation so the sender is notified, and show a brief on-screen notice.
+  // Print Screen detection. contentProtected already blanks the viewer in any
+  // capture, but a one-off PrtSc leaves no running process for the poll above
+  // to catch. Catch the key itself: clear the clipboard copy the OS just made,
+  // then end the session — same treatment as the OS capture UI, because a
+  // PrintScreen keypress over an open document is an unambiguous capture.
   //
-  // Timing of the notice is the subtle part on Windows 11: PrtSc there opens
-  // the Snipping Tool region overlay, which sits ABOVE every app window (ours
-  // included) until the user dismisses it, so a notice shown at keypress time
-  // is hidden behind it and the 4s timer often elapses before they return.
-  // So we show it immediately (covers the silent-clipboard PrtSc case) AND
-  // re-show it once when the window next regains focus (i.e. after the snip
-  // overlay closes), so the confirmation is actually seen. Detection + sender
-  // notification always fire immediately, independent of the notice timing.
-  // Reversible — resumes after a few seconds. (Win+Shift+S / Snip is an OS
-  // shortcut that doesn't reach the WebView; contentProtected still blanks it.)
+  // Windows 11 caveat: the OS remaps PrtSc to Snipping Tool by DEFAULT and
+  // swallows the keypress, so this handler never fires there. That path is
+  // covered by the definite tier of the process poll above (SnippingTool /
+  // ScreenSketch), which is why both mechanisms exist.
   useEffect(() => {
     if (!isViewing || !sessionId || !file) return;
-    let cancelled = false;
-    let resumeTimer = 0;
-    let pendingReshow = false;   // a PrtSc fired that the OS overlay may be hiding
-    let reshowDeadline = 0;      // don't re-show for an unrelated later refocus
-    const showNotice = () => {
-      if (cancelled) return;
-      setScreenshotPaused(true);
-      window.clearTimeout(resumeTimer);
-      resumeTimer = window.setTimeout(() => { if (!cancelled) setScreenshotPaused(false); }, 4000);
-    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'PrintScreen' && e.code !== 'PrintScreen') return;
       try { navigator.clipboard.writeText(''); } catch { /* best-effort */ }
-      fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/violation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
-        body: JSON.stringify({ session_id: sessionId, violation_type: 'screenshot', metadata: { key: 'PrintScreen' } }),
-      }).catch(() => {});
-      showNotice();
-      pendingReshow = true;
-      reshowDeadline = Date.now() + 30000;
-    };
-    // First focus-return after a PrtSc → the snip overlay has closed; re-show
-    // the notice so it's visible now. Cleared after one re-show so an unrelated
-    // alt-tab back doesn't retrigger it.
-    const onFocusBack = () => {
-      if (document.visibilityState === 'hidden') return;
-      if (!pendingReshow) return;
-      pendingReshow = false;
-      if (Date.now() <= reshowDeadline) showNotice();
+      endSessionOnCapture('screenshot', { key: 'PrintScreen' });
     };
     window.addEventListener('keyup', onKey);
-    window.addEventListener('focus', onFocusBack);
-    document.addEventListener('visibilitychange', onFocusBack);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(resumeTimer);
-      window.removeEventListener('keyup', onKey);
-      window.removeEventListener('focus', onFocusBack);
-      document.removeEventListener('visibilitychange', onFocusBack);
-    };
-  }, [isViewing, sessionId, file]);
+    return () => window.removeEventListener('keyup', onKey);
+  }, [isViewing, sessionId, file, endSessionOnCapture]);
 
   // Phase B (B5) — prime the server-transient render from the recipient's
   // .afs when the flag is on. Fetch + re-supply once per session; on success
@@ -1335,6 +1332,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [pointerControlGranted, coViewingChannel, recipient]);
 
   if (revoked) {
+    // Capture-ended sessions get their own copy: say what happened, and say
+    // plainly that the capture itself is blank — the recipient should not be
+    // left thinking they successfully took a copy of the document.
+    if (revokeReason === 'capture_detected') {
+      return <RevokedScreen friendly={{
+        title: 'Viewing ended — screen capture detected',
+        body: 'A screenshot or screen recording was detected while this document was open, so the session was ended and the sender has been notified. The capture itself is blank — it contains no document content.',
+        code: 'capture_detected',
+      }} />;
+    }
     // Time-limited sessions get honest, specific copy — never "contact the
     // sender if this is an error" for a deliberate limit.
     if (viewLimits?.session_view_minutes && (revokeReason === 'view_time_ended' || revokeReason === 'expired')) {
@@ -1444,7 +1451,6 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Screen-capture tool running → black out (unmounts the TileRenderer so
   // tiles stop rendering). Reverses when the poll above clears captureApps.
   if (captureApps.length > 0) return <CaptureBlackoutScreen apps={captureApps} />;
-  if (screenshotPaused) return <ScreenshotPausedScreen />;
 
   return (
     <>
