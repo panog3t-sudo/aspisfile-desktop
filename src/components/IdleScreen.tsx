@@ -4,6 +4,12 @@ import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, Rec
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
 import { Icon } from "./Icon";
 
+// Amber = not opened yet. Distinct from the green 'opened' dot and the blue
+// 'reviewed' dot; the "N new" counts reuse it so the word and the dot always
+// mean the same thing (Pano 2026-09-10).
+const NEW_DOT = "#FBBF24";
+
+
 declare const __API_BASE__: string;
 const BASE = (typeof __API_BASE__ !== "undefined" && __API_BASE__) || "https://aspisfile.com";
 
@@ -216,9 +222,13 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             ].filter(Boolean).join(" \u00B7 ")}
           </span>
         )}
-        {/* Status dots: green = opened, blue = you left a review. */}
-        {(d.opened || d.reviewed) && !expired && (
+        {/* Status dots: amber = not opened yet, green = opened, blue = you left
+            a review. "New" was green like "opened", which read as the same
+            state (Pano 2026-09-10) — amber is unambiguous against both the
+            green and blue dots, and the "N new" counts use the same amber. */}
+        {!expired && (
           <span style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+            {!d.opened && <span title="You haven't opened this file yet" style={{ width: 7, height: 7, borderRadius: 4, background: NEW_DOT }} />}
             {d.opened && <span title="You've opened this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#22C55E" }} />}
             {d.reviewed && <span title="You've left a review on this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#5C82EE" }} />}
           </span>
@@ -251,7 +261,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: title === "Unavailable" ? "#94A3B8" : "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
           <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>
             {docs.length} item{docs.length === 1 ? "" : "s"}
-            {(() => { const n = docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: "#4ADE80" }}> · {n} new</span> : null; })()}
+            {(() => { const n = docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: NEW_DOT }}> · {n} new</span> : null; })()}
           </span>
         </button>
         {open && (
@@ -314,7 +324,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: "#F1F5F9", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{room.name}</span>
           <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0 }}>
             {room.docs.length} doc{room.docs.length === 1 ? "" : "s"}
-            {(() => { const n = room.docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: "#4ADE80" }}> · {n} new</span> : null; })()}
+            {(() => { const n = room.docs.filter(d => !d.opened && !d.expired).length; return n > 0 ? <span style={{ color: NEW_DOT }}> · {n} new</span> : null; })()}
           </span>
         </button>
         {roomOpen && (
@@ -457,8 +467,28 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             <button
               onClick={loadHome}
               disabled={homeLoading}
-              style={{ background: "transparent", border: "none", color: "#7DB1E8", fontSize: 12, cursor: homeLoading ? "default" : "pointer", fontFamily: "inherit" }}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                background: "transparent", border: "none", color: "#7DB1E8", fontSize: 12,
+                cursor: homeLoading ? "default" : "pointer", fontFamily: "inherit", padding: 0,
+              }}
             >
+              {/* Circular-arrow glyph; spins while loading so the button itself
+                  reports progress instead of only the label changing. Keyframes
+                  are declared here rather than reused from the sign-in branch
+                  above, which isn't mounted when the file list is showing.
+                  <style> is display:none in the UA sheet, so it adds no layout. */}
+              <style>{`@keyframes aspis-spin { to { transform: rotate(360deg); } }
+                @media (prefers-reduced-motion: reduce) { .aspis-refresh-spin { animation: none !important; } }`}</style>
+              <span
+                className={homeLoading ? "aspis-refresh-spin" : undefined}
+                style={{
+                  display: "inline-flex",
+                  animation: homeLoading ? "aspis-spin 0.9s linear infinite" : undefined,
+                }}
+              >
+                <Icon name="refresh-cw" size={13} />
+              </span>
               {homeLoading ? "Refreshing…" : "Refresh"}
             </button>
           </div>
@@ -512,8 +542,11 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           {/* Dot key — mobile-parity legend (Pano 2026-09-03); rendered only
               when at least one dot is actually visible, so a fresh account
               never sees an unexplained legend. */}
-          {home && [...home.files, ...home.rooms.flatMap(r => r.docs)].some(d => (d.opened || d.reviewed) && !d.expired) && (
+          {home && [...home.files, ...home.rooms.flatMap(r => r.docs)].some(d => !d.expired) && (
             <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "0 2px" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#94A3B8" }}>
+                <span style={{ width: 7, height: 7, borderRadius: 4, background: NEW_DOT, display: "inline-block" }} /> New
+              </span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#94A3B8" }}>
                 <span style={{ width: 7, height: 7, borderRadius: 4, background: "#22C55E", display: "inline-block" }} /> Opened
               </span>
