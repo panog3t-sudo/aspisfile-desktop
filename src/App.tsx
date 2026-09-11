@@ -934,15 +934,47 @@ function AppContent() {
 
       await openUrl(`${BASE}/auth/desktop-verify?email=${encodeURIComponent(email)}&nonce=${encodeURIComponent(nonce)}`);
 
+      // Wait for the next tick OR for this window to come back to the front,
+      // whichever happens first. Returning from the browser IS the signal that
+      // the ceremony finished, so the session gets claimed immediately instead
+      // of after up to another full tick. Listeners are always torn down, so a
+      // long sign-in can't leak handlers.
+      const waitOrFocus = (ms: number) => new Promise<void>(resolve => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          window.removeEventListener("focus", onFocus);
+          document.removeEventListener("visibilitychange", onVisible);
+          resolve();
+        };
+        const timer = setTimeout(finish, ms);
+        const onFocus = () => finish();
+        const onVisible = () => { if (document.visibilityState === "visible") finish(); };
+        window.addEventListener("focus", onFocus);
+        document.addEventListener("visibilitychange", onVisible);
+      });
+
       const deadline = Date.now() + 3 * 60_000;
+      let waitMs = 2500;
       while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2500));
+        await waitOrFocus(waitMs);
         try {
           const res = await fetch(`${BASE}/api/v1/recipient-passkeys/idle-signin/claim`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ nonce }),
           });
+          // 429 → back off rather than poll straight through it. Hammering a
+          // sliding-window limiter keeps it saturated, which is exactly how a
+          // completed ceremony ended up never being claimed (2026-09-10).
+          if (res.status === 429) {
+            const retryAfter = Number(res.headers.get("Retry-After")) || 0;
+            waitMs = Math.min(Math.max(retryAfter * 1000, waitMs * 2), 15_000);
+            continue;
+          }
+          waitMs = 2500;   // healthy response — back to a responsive cadence
           const j = res.ok ? await res.json() : null;
           if (j?.status === "ok" && j.session_token) {
             saveRecipientSession({
