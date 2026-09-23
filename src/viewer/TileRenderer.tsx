@@ -5,6 +5,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { sessionStore } from "../lib/sessionStore";
 import { FileInfo, RecipientInfo } from "../lib/desktopAuth";
 import { Icon } from "../components/Icon";
+import { primeAfsRender } from "../lib/afs-render";
 
 declare const __API_BASE__: string;
 
@@ -374,6 +375,27 @@ export function TileRenderer({
     };
   }, []);
 
+  // Cold-instance self-heal (2026-09-23). The server renders from a PER-INSTANCE
+  // in-memory cache primed by /supply. Once the relay object has expired (7-day
+  // lifecycle) a tile that lands on an instance the supply never reached has no
+  // ciphertext source left and returns 500 RENDER_FAILED — previously a dead end
+  // ("Failed to load page."). We hold the .afs locally, so re-supply and retry
+  // once. SINGLE-FLIGHT: the prefetcher runs 4 workers, so a cold instance fails
+  // several tiles at once; one re-supply, everyone waits on it. Keyed to the
+  // session so a stale promise from a previous session is never reused. Nothing
+  // is ever stored server-side by this — ciphertext transits, key split untouched.
+  const resupplyRef = useRef<{ sessionId: string; p: Promise<boolean> } | null>(null);
+  const healColdInstance = useCallback((): Promise<boolean> => {
+    const cur = resupplyRef.current;
+    if (cur && cur.sessionId === sessionId) return cur.p;
+    const p = primeAfsRender({ fileId, sessionId, fingerprint: fingerprintRef.current })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => { if (resupplyRef.current?.p === p) resupplyRef.current = null; });
+    resupplyRef.current = { sessionId, p };
+    return p;
+  }, [fileId, sessionId]);
+
   const fetchTile = useCallback(async (page: number): Promise<string | null> => {
     const key = sessionStore.getKey();
     if (!key) return null;
@@ -386,10 +408,16 @@ export function TileRenderer({
     const ds = sessionStore.getDeviceShare();
     if (ds) headers["X-Device-Share"] = ds;
 
-    const res = await fetch(
-      `${__API_BASE__}/api/v1/viewer/${fileId}/tile?session=${sessionId}&page=${page}`,
-      { headers }
-    );
+    const url = `${__API_BASE__}/api/v1/viewer/${fileId}/tile?session=${sessionId}&page=${page}`;
+    let res = await fetch(url, { headers });
+
+    // 500 = the instance has no bytes for this session (see healColdInstance).
+    // Any other non-OK (403 revoked, 410 blob deleted, …) is a real answer — do
+    // not re-supply for those.
+    if (res.status === 500) {
+      const healed = await healColdInstance();
+      if (healed) res = await fetch(url, { headers });
+    }
 
     if (!res.ok) return null;
     const blob = await res.blob();
@@ -398,7 +426,7 @@ export function TileRenderer({
       try { onFirstTileRenderedRef.current?.(); } catch { /* never blocks a tile */ }
     }
     return URL.createObjectURL(blob);
-  }, [sessionId, fileId]);
+  }, [sessionId, fileId, healColdInstance]);
 
   // Synchronous mirrors so loaders can dedup without re-subscribing to
   // state (which would re-fire effects on every prefetched tile).
