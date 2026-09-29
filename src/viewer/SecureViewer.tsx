@@ -41,6 +41,8 @@ import { SessionEndedScreen }         from "../coviewing/SessionEndedScreen";
 import { broadcastScroll, broadcastZoom, type ScrollChangePayload } from "../lib/coviewing-realtime";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
+declare const __APP_VERSION__: string;
+
 const IDLE_MS   = 2 * 60 * 1000; // lock after 2 min inactivity
 // Phase 1 Day 9 — bumped from 30s to 60s to match mobile and the brief's
 // "uniform auth model" guidance. Brief 60s threshold balances "person
@@ -668,6 +670,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           "Content-Type": "application/json",
           "X-App-Platform": "desktop",
           "X-Desktop-OS": platform,
+          // 2026-09-29: the server writes the single truthful file_opened row at
+          // session grant and reads the app version from this header; audit.ts
+          // already sends it on event posts, the session-start call did not.
+          "X-App-Version": __APP_VERSION__,
           "User-Agent": navigator.userAgent,
           ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
