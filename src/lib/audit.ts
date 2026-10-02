@@ -19,7 +19,7 @@ const PAGE_BATCH_INTERVAL_MS = 30_000;
 export type AccessMethod = 'link' | 'afs_local';
 
 export type AuditEvent = {
-  event_type:    'file_opened' | 'session_ended' | 'page_views_batch';
+  event_type:    'file_opened' | 'session_ended' | 'page_views_batch' | 'tile_cold_instance' | 'viewer_render_failed';
   file_id:       string;
   session_id?:   string;
   access_method: AccessMethod;

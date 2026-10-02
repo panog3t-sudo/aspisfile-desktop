@@ -5,6 +5,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { sessionStore } from "../lib/sessionStore";
 import { FileInfo, RecipientInfo } from "../lib/desktopAuth";
 import { Icon } from "../components/Icon";
+import { sendEvent, type AccessMethod } from "../lib/audit";
 import { primeAfsRender } from "../lib/afs-render";
 
 declare const __API_BASE__: string;
@@ -21,6 +22,9 @@ async function getDesktopFingerprint(): Promise<string> {
 }
 
 type Props = {
+  /** 2026-10-02: for the cold-instance diagnostics posted to /api/v1/audit/event. */
+  accessToken?: string;
+  accessMethod?: AccessMethod;
   sessionId: string;
   fileId: string;
   file: FileInfo;
@@ -145,6 +149,7 @@ export function TileRenderer({
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawThickness, drawTool, markups, onStrokeComplete,
   signMode, onPlaceSignature, signatures, onUpdateSignature,
+  accessToken, accessMethod,
 }: Props) {
   const firstTileFiredRef = useRef(false);
   const onFirstTileRenderedRef = useRef(onFirstTileRendered);
@@ -384,6 +389,8 @@ export function TileRenderer({
   // several tiles at once; one re-supply, everyone waits on it. Keyed to the
   // session so a stale promise from a previous session is never reused. Nothing
   // is ever stored server-side by this — ciphertext transits, key split untouched.
+  const MAX_HEAL_CYCLES = 3;
+  const coldReportedRef = useRef(false);   // one diagnostic per session, not per tile
   const resupplyRef = useRef<{ sessionId: string; p: Promise<boolean> } | null>(null);
   const healColdInstance = useCallback((): Promise<boolean> => {
     const cur = resupplyRef.current;
@@ -414,9 +421,26 @@ export function TileRenderer({
     // 500 = the instance has no bytes for this session (see healColdInstance).
     // Any other non-OK (403 revoked, 410 blob deleted, …) is a real answer — do
     // not re-supply for those.
-    if (res.status === 500) {
+    // 2026-10-02: up to three heal cycles, not one. Right after a deploy several
+    // instances are alive and only the ones that received our copy can render;
+    // each cycle primes one more, so the odds of the retry landing on a cold one
+    // fall from ~1 in 3 to ~1 in 30. One diagnostic per session is posted so the
+    // timeline shows how often this still bites real recipients.
+    let heals = 0;
+    while (res.status === 500 && heals < MAX_HEAL_CYCLES) {
+      heals++;
+      if (heals > 1) await new Promise((r) => setTimeout(r, 300 * heals));
       const healed = await healColdInstance();
-      if (healed) res = await fetch(url, { headers });
+      if (!healed) break;
+      res = await fetch(url, { headers });
+    }
+    if (heals > 0 && accessToken && !coldReportedRef.current) {
+      coldReportedRef.current = true;
+      sendEvent({
+        event_type: res.ok ? 'tile_cold_instance' : 'viewer_render_failed',
+        file_id: fileId, session_id: sessionId, access_method: accessMethod ?? 'afs_local',
+        payload: { page, heal_cycles: heals, final_status: res.status },
+      }, accessToken).catch(() => {});
     }
 
     if (!res.ok) return null;
@@ -1009,9 +1033,18 @@ export function TileRenderer({
               )}
             </div>
           ) : (
-            <span style={{ color: "#EF4444", fontSize: 13, fontFamily: "system-ui" }}>
-              Failed to load page.
-            </span>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "#EF4444", fontSize: 13, fontFamily: "system-ui" }}>
+                This page could not be loaded.
+              </span>
+              <button
+                type="button"
+                onClick={() => { inflightRef.current.delete(currentPage); setLoading(true); loadPage(currentPage).then(() => setLoading(false)); }}
+                style={{ fontFamily: "system-ui", fontSize: 13, fontWeight: 600, color: "#fff", background: "#2E55D4", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}
+              >
+                Try again
+              </button>
+            </div>
           )}
         </div>
       </div>

@@ -1543,6 +1543,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           )}
           <TileRenderer
             onFirstTileRendered={() => { setFirstTileRendered(true); fireClientFileOpened(); }}
+            accessToken={token}
+            accessMethod={accessMethod}
             sessionId={sessionId}
             fileId={file.id}
             file={file}
