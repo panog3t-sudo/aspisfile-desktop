@@ -24,14 +24,26 @@ type Props = {
   onSignIn?: () => Promise<{ ok: boolean; message?: string }>;
   // VDR viewer-home — open a chosen file/room-doc by its access token,
   // exactly as if a deep link had arrived. App wires this to openLink.
-  onOpenToken?: (token: string) => void;
+  // `coview` is set only by the live-presentation banner, so Join lands the
+  // recipient INSIDE the session rather than just opening the document.
+  onOpenToken?: (token: string, coview?: string) => void;
 };
 
 type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; unavailable_reason?: 'revoked' | 'expired' | null; opened?: boolean; reviewed?: boolean; view_minutes?: number | null; opens_left?: number | null };
 type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
+type LivePresentation = {
+  session_id: string; file_id: string; file_name: string;
+  room_id: string | null; presenter_name: string; token: string;
+};
 type SortKey  = "name" | "date" | "size";
+
+// Home refresh while the viewer home is on screen. 30s is fast enough that a
+// presentation starting after the recipient arrives still feels immediate, and
+// slow enough that a viewer left open all day costs ~120 requests, not thousands.
+const HOME_POLL_MS = 30_000;
+const HOME_POLL_MAX_MS = 5 * 60_000;
 
 function fmtSize(n: number): string {
   if (!n) return "";
@@ -78,6 +90,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
   const [home, setHome] = useState<HomeData | null>(null);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeErr, setHomeErr] = useState("");
+  const [live, setLive] = useState<LivePresentation[]>([]);
 
   // Home controls — collapsed sections by default, name filter, sort.
   const [query, setQuery] = useState("");
@@ -98,17 +111,23 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
     setNeedsSignIn(!!s && !getActiveSessionToken());
   };
 
-  const loadHome = useCallback(async () => {
+  const loadHome = useCallback(async (): Promise<boolean> => {
     const token = getActiveSessionToken();
-    if (!token) return;
+    if (!token) return false;
     setHomeLoading(true); setHomeErr("");
     try {
       const res = await fetch(`${BASE}/api/v1/viewer/home`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) { setHomeErr("Couldn't load your files. Tap refresh to try again."); return; }
+      if (!res.ok) { setHomeErr("Couldn't load your files. Tap refresh to try again."); return false; }
       const d = await res.json().catch(() => null);
       if (d) setHome({ rooms: Array.isArray(d.rooms) ? d.rooms : [], files: Array.isArray(d.files) ? d.files : [] });
+      // Live presentations this recipient was INVITED to. Additive: absent on
+      // an older server, and absent while the PRESENTATION_HOME_BANNER flag is
+      // off, so this degrades to no banner rather than an error.
+      setLive(Array.isArray(d?.live_presentations) ? d.live_presentations : []);
+      return true;
     } catch {
       setHomeErr("Couldn't reach AspisFile. Check your connection and tap refresh.");
+      return false;
     } finally {
       setHomeLoading(false);
     }
@@ -125,10 +144,31 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
     };
   }, []);
 
-  // Once we have an active session (enrolled + not expired), pull the home list.
+  // Once we have an active session (enrolled + not expired), pull the home
+  // list — then keep it fresh while the recipient sits here, so a presentation
+  // that starts a minute after they arrive appears without them reopening the
+  // app. Backs off on failure and resets on the first success.
   useEffect(() => {
-    if (session && !needsSignIn) loadHome();
-    else setHome(null);
+    if (!session || needsSignIn) { setHome(null); setLive([]); return; }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = HOME_POLL_MS;
+
+    const tick = async () => {
+      const ok = await loadHome();
+      if (cancelled) return;
+      delay = ok ? HOME_POLL_MS : Math.min(delay * 2, HOME_POLL_MAX_MS);
+      timer = setTimeout(tick, delay);
+    };
+
+    loadHome().then(ok => {
+      if (cancelled) return;
+      delay = ok ? HOME_POLL_MS : Math.min(HOME_POLL_MS * 2, HOME_POLL_MAX_MS);
+      timer = setTimeout(tick, delay);
+    });
+
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [session, needsSignIn, loadHome]);
 
   async function doSignIn() {
@@ -492,6 +532,42 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
               {homeLoading ? "Refreshing…" : "Refresh"}
             </button>
           </div>
+
+          {/* Live presentation — the invitation WAITS here, instead of needing a
+              realtime broadcast to arrive while this exact document was already
+              open. Deliberately says "Live now" and not how long it has been
+              running: elapsed time would tell a recipient the session ran
+              without them, which in a deal signals who was in earlier. */}
+          {live.map(p => (
+            <div
+              key={p.session_id}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                background: "#10291F", border: "0.5px solid #2F7A5C", borderRadius: 10,
+                padding: "11px 13px", marginBottom: 12,
+              }}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: "#3DD68C", flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: "#EAF6F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p.presenter_name} is presenting
+                </div>
+                <div style={{ fontSize: 12, color: "#8FBFA8", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p.file_name} · Live now
+                </div>
+              </div>
+              <button
+                onClick={() => onOpenToken?.(p.token, p.session_id)}
+                style={{
+                  background: "#2F7A5C", border: "none", borderRadius: 8,
+                  padding: "8px 16px", color: "#fff", fontSize: 12.5, fontWeight: 600,
+                  cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
+                }}
+              >
+                Join
+              </button>
+            </div>
+          ))}
 
           {homeLoading && !home && (
             <p style={{ fontSize: 13, color: "#64748B", textAlign: "center", margin: "18px 0" }}>Loading your documents…</p>

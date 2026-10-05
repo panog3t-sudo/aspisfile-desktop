@@ -1420,7 +1420,10 @@ function AppContent() {
         onLink={(url) => { const p = extractFromUrl(url); if (p) openLink(p); }}
         onEnrol={(cold?: boolean) => enterManualEnrol(undefined, undefined, cold ?? true)}
         onSignIn={handleIdleSignIn}
-        onOpenToken={(token) => openLinkRef.current?.({ token, sig: null, env: null, present: false, coview: null, rt: null })}
+        // `coview` carries a live presentation the home banner offered: the
+        // viewer's auto-join effect needs the session id, otherwise Join would
+        // merely open the document and leave the recipient outside the session.
+        onOpenToken={(token, coview) => openLinkRef.current?.({ token, sig: null, env: null, present: false, coview: coview ?? null, rt: null })}
       />
       {busy && <BusyOverlay message={busy} />}
     </>
