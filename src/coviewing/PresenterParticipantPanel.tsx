@@ -26,6 +26,7 @@ interface ParticipantRow {
   joined_at:       string;
   access_type:     'permanent' | 'session_only';
   last_seen_page:  number;
+  following?:                  boolean;   // server-backed (migration 163) — fallback when presence has no answer
   free_scroll_granted:      boolean;
   free_scroll_requested_at: string | null;
   pointer_control_granted:      boolean;
@@ -322,7 +323,10 @@ export function PresenterParticipantPanel({
       joinedAt:                    r.joined_at,
       accessType:                  r.access_type,
       page:                        pres?.page ?? r.last_seen_page,
-      following:                   pres?.following,
+      // Presence first; the server-backed column second (the phone reports it
+      // with its 10 s poll). Andrew's phone said Follow and the panel kept
+      // saying Free on 8 Oct — two independent paths to the same fact now.
+      following:                   pres?.following ?? r.following,
       isLive,
       goneAt,
       isFlashing:                  !!flashAt && Date.now() - flashAt < 3000,
@@ -422,6 +426,13 @@ export function PresenterParticipantPanel({
               pointerControlGranted={r.pointerControlGranted}
               pointerControlRequestedAt={r.pointerControlRequestedAt}
               onSetPermission={(type, granted) => setPermission(r.email, type, granted)}
+              onPullBack={() => {
+                if (r.pointerControlGranted) setPermission(r.email, 'pointer_control', false);
+                if (r.freeScrollGranted)     setPermission(r.email, 'free_scroll', false);
+                // Free with no grant on record (phone dropped follow): a revoke
+                // broadcast still makes the viewer re-follow.
+                if (!r.pointerControlGranted && !r.freeScrollGranted) setPermission(r.email, 'free_scroll', false);
+              }}
             />
           ))
         )}
@@ -445,6 +456,7 @@ function RowView({
   pointerControlGranted,
   pointerControlRequestedAt,
   onSetPermission,
+  onPullBack,
 }: {
   email:                       string;
   joinedAt:                    string;
@@ -460,6 +472,7 @@ function RowView({
   pointerControlGranted:       boolean;
   pointerControlRequestedAt:   string | null;
   onSetPermission:             (type: PermType, granted: boolean) => void;
+  onPullBack?:                 () => void;
 }) {
   const initials  = email.slice(0, 2).toUpperCase();
   const bg        = colorFromEmail(email);
@@ -551,6 +564,15 @@ function RowView({
               <span style={{ color: following ? '#93C5FD' : 'rgba(255,255,255,0.5)' }}>
                 {' · '}{following ? 'Following' : 'Free'}
               </span>
+            )}
+            {/* Pull back (2026-10-08): take a free or controlling viewer back into
+                sync. Revoking the grant is what both viewers already react to by
+                re-following; this is simply the button the presenter lacked. */}
+            {isLive && (freeScrollGranted || pointerControlGranted || following === false) && onPullBack && (
+              <button onClick={(e) => { e.stopPropagation(); onPullBack(); }} title="Take this viewer back into sync with you"
+                style={{ marginLeft: 8, fontSize: 10, padding: '1px 7px', borderRadius: 4, border: '0.5px solid rgba(147,197,253,0.6)', background: 'transparent', color: '#93C5FD', cursor: 'pointer', fontFamily: 'inherit' }}>
+                Pull back
+              </button>
             )}
           </>
         )}
