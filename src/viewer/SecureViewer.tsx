@@ -1611,7 +1611,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // .afs copy exists locally (canSend). Owners don't see it (no
             // recipient device context); recipients can send a copy to their
             // other enrolled devices.
-            onSend={canSend && !file.is_owner ? handleSendToDevice : undefined}
+            // Not inside a co-viewing session either (2026-10-08): a guest's session
+            // runs on a 24-hour guest token, and the server now embeds the SESSION's
+            // token in the saved .afs — a copy saved mid-session would die with it.
+            // A genuine recipient can save their copy from a normal open instead.
+            onSend={canSend && !file.is_owner && !activeCoViewSessionId && !coviewSessionId ? handleSendToDevice : undefined}
             onQA={file.collection_id && file.qa_enabled ? () => setShowQA(true) : undefined}
             qaUnread={qaUnread}
             // Recipient Feedback launcher (centered blue toolbar button). Same
