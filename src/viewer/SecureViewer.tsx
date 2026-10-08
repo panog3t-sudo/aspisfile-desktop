@@ -1125,9 +1125,15 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     return () => { supabase.removeChannel(channel); };
   }, [recipient?.email, file?.id, activeCoViewSessionId]);
 
-  // Auto-open presenter modal when arriving from a "Present this file" deep link
+  // Auto-open presenter modal when arriving from a "Present this file" deep
+  // link — ONCE. It used to re-fire whenever presenterSession went back to
+  // null, i.e. the moment the presenter pressed Stop, so the prompt reappeared
+  // on top of the document (Pano, 8 Oct 2026). Stopping now closes the
+  // viewer (see onStop); a new presentation starts from the dashboard.
+  const presentPromptedRef = useRef(false);
   useEffect(() => {
-    if (present && canPresent && !presenterSession) {
+    if (present && canPresent && !presenterSession && !presentPromptedRef.current) {
+      presentPromptedRef.current = true;
       setShowStartModal(true);
     }
   }, [present, canPresent, presenterSession]);
@@ -1664,7 +1670,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           currentPage={currentPage}
           pageCount={totalPages}
           onPageChange={setCurrentPage}
-          onStop={() => setPresenterSession(null)}
+          // Stop = the presentation is over: close the viewer rather than leave
+          // the document open with the present prompt re-appearing. The next
+          // presentation starts from the dashboard (Pano, 8 Oct 2026).
+          onStop={() => { setPresenterSession(null); onClose(); }}
           panelOpen={participantPanelOpen}
           onTogglePanel={() => setParticipantPanelOpen(o => !o)}
           presenterEmail={recipient?.email}
