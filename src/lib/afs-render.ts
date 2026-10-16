@@ -1,5 +1,5 @@
 import { fetch } from '@tauri-apps/plugin-http';
-import { writeFile, readFile, exists, mkdir, BaseDirectory } from '@tauri-apps/plugin-fs';
+import { writeFile, readFile, exists, mkdir, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { sessionStore } from './sessionStore';
 
 declare const __API_BASE__: string;
@@ -58,6 +58,28 @@ function authHeaders(fingerprint: string): Record<string, string> {
 // fall back to fetching from /afs, so persistence can never block viewing.
 const AFS_DIR = 'afs';
 const afsFile = (fileId: string) => `${AFS_DIR}/${fileId}.afs`;
+
+// Clensys 3.5 (2026-10-16) — the held .afs is inert ciphertext, but a revoked
+// file's copy must not linger on the device. Called from every revoke path
+// (heartbeat, realtime broadcast, and a revoked answer on the next open).
+export async function deleteStoredAfs(fileId: string): Promise<void> {
+  try {
+    if (await exists(afsFile(fileId), { baseDir: BaseDirectory.AppData })) {
+      await remove(afsFile(fileId), { baseDir: BaseDirectory.AppData });
+    }
+  } catch { /* best-effort; a failed delete never blocks the dark screen */ }
+}
+
+// The first access call on a revoked link answers "Access revoked" with no
+// file id, so the viewer remembers which held copy belongs to which link at
+// hold time and can still delete it on that answer.
+const TOKEN_KEY = (token: string) => `aspisfile_held_${token}`;
+export function rememberHeldToken(token: string, fileId: string): void {
+  try { localStorage.setItem(TOKEN_KEY(token), fileId); } catch { /* ignore */ }
+}
+export function heldFileIdForToken(token: string): string | null {
+  try { return localStorage.getItem(TOKEN_KEY(token)); } catch { return null; }
+}
 
 async function loadStoredAfs(fileId: string): Promise<Uint8Array | null> {
   try {

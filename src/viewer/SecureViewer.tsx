@@ -16,7 +16,7 @@ import { TileRenderer } from "./TileRenderer";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
-import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, generateSignedOutput, type HeldStatus } from "../lib/afs-render";
+import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, generateSignedOutput, deleteStoredAfs, rememberHeldToken, heldFileIdForToken, type HeldStatus } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
@@ -636,7 +636,16 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setRecipient(r);
         if (r.legal_accepted) setLegalAccepted(true);
       })
-      .catch((e: Error) => setError(translateAccessError(e.message)));
+      .catch((e: Error) => {
+        // Clensys 3.5 — revoked (or deleted) since we last held it: drop the
+        // local copy now; this answer carries no file id, so use the one
+        // remembered at hold time.
+        if (e.message === 'Access revoked' || e.message === 'File unavailable') {
+          const heldId = heldFileIdForToken(token);
+          if (heldId) void deleteStoredAfs(heldId);
+        }
+        setError(translateAccessError(e.message));
+      });
   }, [token, sig, env]);
 
   // Step 2: start session after legal acceptance — uses mobile/desktop token-auth route
@@ -721,6 +730,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           setError({ title: 'Open limit reached', body: String(body.error || 'You have used all the opens the sender allowed.'), code: 'opens_exhausted' });
           return;
         }
+        // Clensys 3.5 — revoked/deleted at session start: drop the held copy.
+        if (body.error === 'Access revoked' || body.error === 'File unavailable') void deleteStoredAfs(file.id);
         // Translate the raw server code into a friendly title + body
         // here so RevokedScreen just renders the pre-built shape.
         setError(translateAccessError(body.error || `Session start failed (${res.status})`));
@@ -874,6 +885,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         endReasonRef.current = 'revoked';
         setRevokeReason(body.reason ?? body.status);
         setRevoked(true);
+        // Clensys 3.5 — a genuine revoke (file or recipient) also removes the
+        // held .afs. Session TTL expiry and an unknown session do NOT: the
+        // copy is still legitimately the recipient's.
+        if (body.status === 'file_revoked' || body.status === 'recipient_revoked') void deleteStoredAfs(file.id);
       } catch {
         if (cancelled) return;
         missCountRef.current += 1;
@@ -1013,6 +1028,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       try {
         const [held, hs] = await Promise.all([hasStoredAfs(file.id), getHeldStatus(file.id, sessionId, fp)]);
         if (!cancelled) { setCanSend(held); setHeldStatus(prev => prev ?? hs); }
+        if (held) rememberHeldToken(token, file.id);
       } catch { /* button/prompt just won't show */ }
       if (!cancelled) setAfsPrimed(true);
     })();
@@ -1025,8 +1041,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // lets the recipient send a copy at any time).
   const handleSendToDevice = useCallback(async () => {
     if (!file) return;
-    await exportAfs(file.id, file.name);
-  }, [file]);
+    const ok = await exportAfs(file.id, file.name);
+    // Clensys 3.1 — a completed export is evidence on the file timeline
+    // (`afs_exported`, anchored like every other event). A cancelled save
+    // dialog records nothing. Content-free payload.
+    if (ok) {
+      void sendEvent({
+        event_type:    'afs_exported',
+        file_id:       file.id,
+        session_id:    sessionId ?? undefined,
+        access_method: accessMethod,
+        payload:       { method: 'save_dialog' },
+      }, token);
+    }
+  }, [file, sessionId, token]);
 
   // Sprint 3 — session_ended audit event. Fires once on unmount. The
   // endReasonRef is mutated by the paths that lead to teardown —
@@ -1091,6 +1119,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         endReasonRef.current = 'revoked';
         setRevoked(true);
         sessionStore.clear();
+        void deleteStoredAfs(file.id);   // Clensys 3.5
       })
       .subscribe();
 
@@ -1621,7 +1650,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             // runs on a 24-hour guest token, and the server now embeds the SESSION's
             // token in the saved .afs — a copy saved mid-session would die with it.
             // A genuine recipient can save their copy from a normal open instead.
-            onSend={canSend && !file.is_owner && !activeCoViewSessionId && !coviewSessionId ? handleSendToDevice : undefined}
+            // Clensys 3.1 (2026-10-16): export honours the SAME permissions as
+            // Download — the sender's file-level and per-recipient allow_download.
+            // Every path that puts a copy on a device is now the sender's call.
+            onSend={canSend && !file.is_owner && file.allow_download && !!recipient?.recipient_allow_download && !activeCoViewSessionId && !coviewSessionId ? handleSendToDevice : undefined}
             onQA={file.collection_id && file.qa_enabled ? () => setShowQA(true) : undefined}
             qaUnread={qaUnread}
             // Recipient Feedback launcher (centered blue toolbar button). Same

@@ -23,7 +23,6 @@ export type FileInfo = {
   file_type: string;
   file_size: number;
   allow_download: boolean;
-  allow_print: boolean;
   watermark: boolean;
   one_time: boolean;
   personal_message: string | null;
