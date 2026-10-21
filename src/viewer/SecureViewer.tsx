@@ -13,6 +13,8 @@ import {
   type AccessMethod,
 } from "../lib/audit";
 import { TileRenderer } from "./TileRenderer";
+import { SignatureRequestBanner } from "./SignatureRequestBanner";
+import { SignatureFieldsPanel } from "./SignatureFieldsPanel";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
@@ -155,12 +157,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [highlightThickness, setHighlightThickness] = useState(2);
   const [sentComments, setSentComments] = useState<Array<{ id: string; page: number; x: number; y: number; body: string; recipient_email?: string }>>([]);
   const [sentMarkups, setSentMarkups] = useState<Array<{ id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; thickness?: number | null; recipient_email?: string; kind?: "pen" | "highlight" }>>([]);
-  const [sentSignatures, setSentSignatures] = useState<Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string }>>([]);
+  const [sentSignatures, setSentSignatures] = useState<Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string; field_id?: string | null }>>([]);
   const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
   const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
   const [draftMarkups, setDraftMarkups] = useState<DraftMarkup[]>([]);
   const [draftSignatures, setDraftSignatures] = useState<DraftSignature[]>([]);
-  const [pendingSignature, setPendingSignature] = useState<{ page: number; x: number; y: number } | null>(null);
+  // w/h/field_id present when the tap was on an owner-placed field (stage 2):
+  // the signature is fitted INTO that box and carries the field reference.
+  const [pendingSignature, setPendingSignature] = useState<{ page: number; x: number; y: number; w?: number; h?: number; field_id?: string } | null>(null);
   const [pendingComment, setPendingComment] = useState<{ page: number; x: number; y: number } | null>(null);
   const [pendingText, setPendingText] = useState("");
   const [sending, setSending] = useState(false);
@@ -311,7 +315,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         setSentMarkups(entries.filter((e: { kind: string }) => e.kind === "markup")
           .map((e: { id: string; page: number; points: Array<{ x: number; y: number }>; color?: string | null; thickness?: number | null; recipient_email?: string; tool?: "pen" | "highlight" }) => ({ id: e.id, page: e.page, points: e.points, color: e.color, thickness: e.thickness, recipient_email: e.recipient_email, kind: e.tool })));
         setSentSignatures(entries.filter((e: { kind: string }) => e.kind === "signature")
-          .map((e: { id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, w: e.w, h: e.h, style: e.style, points: e.points, typed_name: e.typed_name, image_data: e.image_data, recipient_email: e.recipient_email })));
+          .map((e: { id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; recipient_email?: string; field_id?: string | null }) => ({ id: e.id, page: e.page, x: e.x, y: e.y, w: e.w, h: e.h, style: e.style, points: e.points, typed_name: e.typed_name, image_data: e.image_data, recipient_email: e.recipient_email, field_id: e.field_id ?? null })));
       }
     } catch { /* keep last */ }
   }, [sessionId, file]);
@@ -360,12 +364,12 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     // the page's portrait aspect (~0.72 = width/height) to derive h from the
     // image's own aspect. The recipient can still drag the corner to resize.
     const PAGE_ASPECT = 0.72;
-    let w = SIG_W, h = SIG_H;
-    if (s.style === "uploaded" && s.aspect && s.aspect > 0) {
+    let w = ps.w ?? SIG_W, h = ps.h ?? SIG_H;
+    if (!ps.field_id && s.style === "uploaded" && s.aspect && s.aspect > 0) {
       h = Math.min(0.4, Math.max(0.03, (w * PAGE_ASPECT) / s.aspect));
     }
     const y = Math.min(1 - h, ps.y);   // re-clamp in case h grew past the default
-    const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y, w, h, signer_name: s.signer_name, at: new Date().toISOString() };
+    const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y, w, h, signer_name: s.signer_name, at: new Date().toISOString(), ...(ps.field_id ? { field_id: ps.field_id } : {}) };
     const draft: DraftSignature = s.style === "drawn"
       ? { ...base, style: "drawn", points: s.points }
       : s.style === "uploaded"
@@ -379,6 +383,71 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Reposition/resize a draft signature box (before send).
   const updateDraftSignature = useCallback((id: string, patch: { x?: number; y?: number; w?: number; h?: number }) =>
     setDraftSignatures((d) => d.map((s) => (s.tempId === id ? { ...s, ...patch } : s))), []);
+
+  // ── Signature requests (stage 2, 2026-10-21) — owner-placed fields ──
+  // Recipient: fields arrive on the access payload; tapping a ghost box opens
+  // the pad and the signature is fitted into the field (no manual placement).
+  // Owner: a toolbar button enters placement mode; page clicks add draft
+  // fields, saved through the viewer-session owner route.
+  type FieldView = NonNullable<FileInfo["signature_fields"]>[number];
+  const [fields, setFields] = useState<FieldView[]>([]);
+  useEffect(() => { setFields(file?.signature_fields ?? []); }, [file?.id, file?.signature_fields]);
+  const canPlaceFields = !!file?.is_owner && file?.signature_fields !== undefined;
+  const [placingFields, setPlacingFields] = useState(false);
+  const [fieldDrafts, setFieldDrafts] = useState<Array<{ tempId: string; page: number; x: number; y: number; w: number; h: number; recipient_id: string | null }>>([]);
+  const [fieldRecipients, setFieldRecipients] = useState<Array<{ id: string; email: string }>>([]);
+  const [savingFields, setSavingFields] = useState(false);
+  const refreshFields = useCallback(async () => {
+    if (!sessionId || !file) return;
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/signature-fields?session=${encodeURIComponent(sessionId)}`, { headers: { "X-App-Platform": "desktop" } });
+      if (!res.ok) return;
+      const d = await res.json();
+      setFields((d.fields ?? []).map((f: any) => ({ id: f.id, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, label: f.label, required: f.required, recipient_id: f.recipient_id, recipient_email: f.recipient_email, signed: (f.fills ?? []).length > 0, signed_by: (f.fills ?? []).map((x: any) => x.recipient_email) })));
+      setFieldRecipients(d.recipients ?? []);
+    } catch { /* keep last */ }
+  }, [sessionId, file]);
+  useEffect(() => { if (placingFields) refreshFields(); }, [placingFields, refreshFields]);
+  const onPlaceField = useCallback((page: number, x: number, y: number) => {
+    const px = Math.min(1 - SIG_W, Math.max(0, x - SIG_W / 2));
+    const py = Math.min(1 - SIG_H, Math.max(0, y - SIG_H / 2));
+    setFieldDrafts((d) => [...d, { tempId: "f" + (++tempIdRef.current), page, x: px, y: py, w: SIG_W, h: SIG_H, recipient_id: null }]);
+  }, []);
+  const updateFieldDraft = useCallback((id: string, patch: { x?: number; y?: number; w?: number; h?: number }) =>
+    setFieldDrafts((d) => d.map((f) => (f.tempId === id ? { ...f, ...patch } : f))), []);
+  const assignFieldDraft = useCallback((id: string, recipientId: string | null) =>
+    setFieldDrafts((d) => d.map((f) => (f.tempId === id ? { ...f, recipient_id: recipientId } : f))), []);
+  const removeFieldDraft = useCallback((id: string) => setFieldDrafts((d) => d.filter((f) => f.tempId !== id)), []);
+  const saveFields = useCallback(async () => {
+    if (!sessionId || !file || !fieldDrafts.length) return;
+    setSavingFields(true);
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/signature-fields`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
+        body: JSON.stringify({ session_id: sessionId, fields: fieldDrafts.map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, recipient_id: f.recipient_id })) }),
+      });
+      if (res.ok) { setFieldDrafts([]); await refreshFields(); }
+    } catch { /* leave drafts in place */ }
+    setSavingFields(false);
+  }, [sessionId, file, fieldDrafts, refreshFields]);
+  const deleteField = useCallback(async (id: string) => {
+    if (!sessionId || !file) return;
+    try {
+      await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/signature-fields?session=${encodeURIComponent(sessionId)}&field_id=${encodeURIComponent(id)}`, { method: "DELETE", headers: { "X-App-Platform": "desktop" } });
+      await refreshFields();
+    } catch { /* ignore */ }
+  }, [sessionId, file, refreshFields]);
+  // Recipient taps a ghost box → the pad opens; the result fills THAT box.
+  const onFieldClick = useCallback((f: { id: string; page: number; x: number; y: number; w: number; h: number }) => {
+    setPendingSignature({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, field_id: f.id });
+  }, []);
+  // Sent signatures carry field_id → mark those fields signed (no refetch needed).
+  useEffect(() => {
+    const done = new Set(sentSignatures.map((s) => s.field_id).filter((v): v is string => !!v));
+    if (done.size) setFields((prev) => prev.map((f) => (done.has(f.id) && !f.signed ? { ...f, signed: true } : f)));
+  }, [sentSignatures]);
+  const draftedFieldIds = new Set(draftSignatures.map((s) => s.field_id).filter((v): v is string => !!v));
+  const outstandingFields = recipientFeedback ? fields.filter((f) => f.required && !f.signed && !draftedFieldIds.has(f.id)) : [];
 
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
   const sendBatch = useCallback(async (): Promise<boolean> => {
@@ -394,7 +463,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
           comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
           markups:  draftMarkups.length  ? draftMarkups.map((m) => ({ page: m.page, points: m.points, color: m.color, thickness: m.thickness, kind: m.kind })) : undefined,
-          signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, image_data: s.image_data, signer_name: s.signer_name })) : undefined,
+          signatures: draftSignatures.length ? draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, image_data: s.image_data, signer_name: s.signer_name, ...(s.field_id ? { field_id: s.field_id } : {}) })) : undefined,
         }),
       });
       setSending(false);
@@ -1524,6 +1593,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           )}
         </div>
       )}
+      {outstandingFields.length > 0 && !locked && !coViewingBanner && (
+        <SignatureRequestBanner count={outstandingFields.length} page={Math.min(...outstandingFields.map((f) => f.page))} />
+      )}
       {coViewingBanner && !canPresent && !presenterSession && (
         <CoViewingBanner
           presenterName={coViewingBanner.presenterName}
@@ -1601,8 +1673,21 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             signMode={fbMode === "sign"}
             onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}
-            signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, image_data: d.image_data, draft: true }))]}
+            signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, image_data: d.image_data, draft: true, fixed: !!d.field_id }))]}
             onUpdateSignature={recipientFeedback ? updateDraftSignature : undefined}
+            // Signature requests (stage 2): ghost boxes for recipients (their own
+            // fields, minus the ones they have drafted), every field + drafts for
+            // the owner in placement mode.
+            fields={[
+              ...fields.filter((f) => !draftedFieldIds.has(f.id)).map((f) => ({ id: f.id, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, label: f.label ?? null, signed: f.signed, assignee: canPlaceFields ? (f.recipient_email ?? "anyone") : undefined })),
+              ...fieldDrafts.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, label: null, signed: false, draft: true, assignee: fieldRecipients.find((r) => r.id === d.recipient_id)?.email ?? "anyone" })),
+            ]}
+            fieldMode={placingFields}
+            onPlaceField={placingFields ? onPlaceField : undefined}
+            onUpdateField={placingFields ? updateFieldDraft : undefined}
+            onFieldClick={recipientFeedback && !placingFields ? onFieldClick : undefined}
+            onPlaceFields={canPlaceFields && !presenterSession ? () => setPlacingFields((v) => !v) : undefined}
+            fieldCount={fields.length}
             // Owner-only entry point for co-viewing. Hidden while a
             // presenter session is already active (PresenterToolbar
             // takes over in the top overlay).
@@ -1830,6 +1915,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
           >×</button>
         </div>
+      )}
+
+      {/* Owner placement panel (stage 2). */}
+      {placingFields && !locked && (
+        <SignatureFieldsPanel
+          saved={fields.map((f) => ({ id: f.id, page: f.page, recipient_email: f.recipient_email ?? null, signed: f.signed, signed_by: f.signed_by }))}
+          drafts={fieldDrafts.map((d) => ({ tempId: d.tempId, page: d.page, recipient_id: d.recipient_id }))}
+          recipients={fieldRecipients} saving={savingFields}
+          onAssign={assignFieldDraft} onRemoveDraft={removeFieldDraft} onDeleteSaved={deleteField}
+          onSave={saveFields} onClose={() => { setPlacingFields(false); setFieldDrafts([]); }}
+        />
       )}
 
       {/* Recipient feedback — unified draft-then-send menu. Overlay only; never

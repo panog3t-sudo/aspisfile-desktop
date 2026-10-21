@@ -15,7 +15,7 @@ declare const __API_BASE__: string;
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
 export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; thickness?: number; kind?: "pen" | "highlight"; at: string };
-export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name: string; at: string };
+export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name: string; at: string; field_id?: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }

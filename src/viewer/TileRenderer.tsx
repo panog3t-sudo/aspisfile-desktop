@@ -103,9 +103,20 @@ type Props = {
   // E-signature — tap to place, render drawn/typed signatures in a box.
   signMode?:         boolean;
   onPlaceSignature?: (page: number, x: number, y: number) => void;
-  signatures?:       Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name?: string; draft?: boolean }>;
+  signatures?:       Array<{ id: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name?: string; draft?: boolean; fixed?: boolean }>;
   // Reposition/resize a DRAFT signature box before send (page-fraction patch).
+  // `fixed` = the draft fills an owner-placed field: never draggable.
   onUpdateSignature?: (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void;
+  // Signature requests (stage 2, 2026-10-21) — owner-placed fields. Ghost boxes
+  // over the page: a recipient taps one to sign INTO it (no manual placement);
+  // the owner, in fieldMode, clicks the page to add a draft field and drags it.
+  fields?:          Array<{ id: string; page: number; x: number; y: number; w: number; h: number; label?: string | null; signed: boolean; draft?: boolean; assignee?: string }>;
+  fieldMode?:       boolean;
+  onPlaceField?:    (page: number, x: number, y: number) => void;
+  onUpdateField?:   (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void;
+  onFieldClick?:    (field: { id: string; page: number; x: number; y: number; w: number; h: number }) => void;
+  onPlaceFields?:   () => void;   // owner toolbar button (toggles fieldMode)
+  fieldCount?:      number;
 };
 
 // Stable per-recipient pin colour (owner review shows several recipients).
@@ -149,6 +160,7 @@ export function TileRenderer({
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawThickness, drawTool, markups, onStrokeComplete,
   signMode, onPlaceSignature, signatures, onUpdateSignature,
+  fields, fieldMode, onPlaceField, onUpdateField, onFieldClick, onPlaceFields, fieldCount,
   accessToken, accessMethod,
 }: Props) {
   const firstTileFiredRef = useRef(false);
@@ -272,6 +284,14 @@ export function TileRenderer({
 
   const onOverlayClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (commentMode) return onCommentClick(e);
+    if (fieldMode && onPlaceField) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const x = (e.clientX - rect.left) / rect.width, y = (e.clientY - rect.top) / rect.height;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      onPlaceField(currentPage, x, y);
+      return;
+    }
     if (signMode && onPlaceSignature) {
       const rect = e.currentTarget.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return;
@@ -280,7 +300,7 @@ export function TileRenderer({
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
       onPlaceSignature(currentPage, x, y);
     }
-  }, [commentMode, onCommentClick, signMode, onPlaceSignature, currentPage]);
+  }, [commentMode, onCommentClick, signMode, onPlaceSignature, fieldMode, onPlaceField, currentPage]);
 
   // Phase 4 — freehand markup capture. Same page-fraction math per point.
   const drawingRef = useRef(false);
@@ -341,6 +361,28 @@ export function TileRenderer({
     window.removeEventListener("mousemove", onSigMove);
     window.removeEventListener("mouseup", onSigUp);
   }, [onSigMove]);
+  // Owner-placed field drafts: same move/resize mechanics as signature drafts.
+  const onUpdateFieldRef = useRef(onUpdateField);
+  onUpdateFieldRef.current = onUpdateField;
+  const fieldDragRef = useRef<null | { id: string; mode: "move" | "resize"; sx: number; sy: number; ox: number; oy: number; ow: number; oh: number; cw: number; ch: number }>(null);
+  const onFieldMove = useCallback((e: MouseEvent) => {
+    const d = fieldDragRef.current; const upd = onUpdateFieldRef.current;
+    if (!d || !upd) return;
+    const dx = (e.clientX - d.sx) / d.cw, dy = (e.clientY - d.sy) / d.ch;
+    if (d.mode === "move") upd(d.id, { x: Math.min(1 - d.ow, Math.max(0, d.ox + dx)), y: Math.min(1 - d.oh, Math.max(0, d.oy + dy)) });
+    else { const nw = Math.min(1 - d.ox, Math.max(0.06, d.ow + dx)); upd(d.id, { w: nw, h: Math.min(1 - d.oy, Math.max(0.02, d.oh * (nw / d.ow))) }); }
+  }, []);
+  const onFieldUp = useCallback(() => { fieldDragRef.current = null; window.removeEventListener("mousemove", onFieldMove); window.removeEventListener("mouseup", onFieldUp); }, [onFieldMove]);
+  const beginFieldDrag = useCallback((e: React.MouseEvent<HTMLDivElement>, f: { id: string; x: number; y: number; w: number; h: number; draft?: boolean }, mode: "move" | "resize") => {
+    if (!onUpdateFieldRef.current || !f.draft) return;
+    e.stopPropagation(); e.preventDefault();
+    const container = (e.currentTarget as HTMLElement).offsetParent as HTMLElement | null;
+    const rect = container?.getBoundingClientRect();
+    if (!rect) return;
+    fieldDragRef.current = { id: f.id, mode, sx: e.clientX, sy: e.clientY, ox: f.x, oy: f.y, ow: f.w, oh: f.h, cw: rect.width, ch: rect.height };
+    window.addEventListener("mousemove", onFieldMove); window.addEventListener("mouseup", onFieldUp);
+  }, [onFieldMove, onFieldUp]);
+
   const beginSigDrag = useCallback((e: React.MouseEvent<HTMLDivElement>, s: { id: string; x: number; y: number; w: number; h: number; draft?: boolean }, mode: "move" | "resize") => {
     if (!onUpdateSigRef.current || !s.draft) return;
     e.stopPropagation(); e.preventDefault();
@@ -605,6 +647,26 @@ export function TileRenderer({
             Review
             {(feedbackDraftCount ?? 0) > 0 && (
               <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 800, color: "#fff", background: "#E5484D", borderRadius: 999, minWidth: 18, textAlign: "center", padding: "1px 6px", boxShadow: "0 1px 3px rgba(0,0,0,.35)" }}>{feedbackDraftCount}</span>
+            )}
+          </button>
+        )}
+        {/* Owner: place signature fields (stage 2). Only when the server sent
+            field data for an owner session — absent otherwise. */}
+        {onPlaceFields && !followMode && (
+          <button
+            onClick={onPlaceFields}
+            title="Place the boxes where recipients must sign"
+            style={{
+              flexShrink: 0, marginRight: 6, zIndex: 3,
+              display: "flex", alignItems: "center", gap: 7,
+              height: 28, padding: "0 14px", borderRadius: 999,
+              border: fieldMode ? "0.5px solid #E0A54B" : "0.5px solid #2E3760", background: fieldMode ? "#B7791F" : "rgba(255,255,255,0.06)",
+              color: "#fff", cursor: "pointer", fontSize: 12.5, fontWeight: 600, lineHeight: 1, fontFamily: "system-ui",
+            }}
+          >
+            {fieldMode ? "Placing fields — click the page" : "Signature fields"}
+            {(fieldCount ?? 0) > 0 && !fieldMode && (
+              <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 800, color: "#3A2A00", background: "#F4BF4F", borderRadius: 999, minWidth: 18, textAlign: "center", padding: "2px 5px" }}>{fieldCount}</span>
             )}
           </button>
         )}
@@ -973,8 +1035,37 @@ export function TileRenderer({
                     fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10, fontWeight: 700, cursor: "pointer",
                   }}>{c.draft ? "•" : i + 1}</div>
               ))}
+              {/* Owner-placed signature fields — ghost boxes (stage 2). */}
+              {(fields ?? []).filter((f) => f.page === currentPage).map((f) => {
+                const editable  = !!f.draft && !!onUpdateField;
+                const clickable = !!onFieldClick && !f.signed && !f.draft;
+                const text = f.signed ? "Signed" : (f.label || "Sign here");
+                return (
+                <div key={f.id}
+                  onMouseDown={editable ? (e) => beginFieldDrag(e, f, "move") : undefined}
+                  onClick={clickable ? (e) => { e.stopPropagation(); onFieldClick!(f); } : undefined}
+                  style={{
+                    position: "absolute", left: `${f.x * 100}%`, top: `${f.y * 100}%`,
+                    width: `${f.w * 100}%`, height: `${f.h * 100}%`, zIndex: editable ? 6 : 5,
+                    border: f.signed ? "1px solid rgba(27,138,87,.55)" : f.draft ? "1.5px dashed #2E55D4" : "1.5px dashed #E0A54B",
+                    background: f.signed ? "rgba(27,138,87,.06)" : f.draft ? "rgba(46,85,212,.10)" : "rgba(224,165,75,.13)",
+                    borderRadius: 3, containerType: "size", boxSizing: "border-box",
+                    cursor: clickable ? "pointer" : editable ? "move" : "default",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  } as React.CSSProperties}>
+                  <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: "min(26cqh, 7.5cqw)", fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
+                    color: f.signed ? "#156F46" : f.draft ? "#1B3AA8" : "#8F5E12", pointerEvents: "none", whiteSpace: "nowrap", overflow: "hidden", maxWidth: "94%" }}>
+                    {text}{f.assignee ? ` · ${f.assignee}` : ""}
+                  </span>
+                  {editable && (
+                    <div onMouseDown={(e) => beginFieldDrag(e, f, "resize")}
+                      style={{ position: "absolute", right: -7, bottom: -7, width: 14, height: 14, background: "#2E55D4", border: "2px solid #fff", borderRadius: 3, boxShadow: "0 1px 4px rgba(0,0,0,.4)", cursor: "nwse-resize" }} />
+                  )}
+                </div>
+                );
+              })}
               {(signatures ?? []).filter((s) => s.page === currentPage).map((s) => {
-                const editable = !!s.draft && !!onUpdateSignature;
+                const editable = !!s.draft && !!onUpdateSignature && !s.fixed;
                 return (
                 <div key={s.id}
                   onMouseDown={editable ? (e) => beginSigDrag(e, s, "move") : undefined}
@@ -995,7 +1086,7 @@ export function TileRenderer({
                     <img src={s.image_data ?? ""} alt="" draggable={false}
                       style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none", userSelect: "none" }} />
                   ) : (
-                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", color: "#0E1130", fontSize: "58cqh", overflow: "hidden", whiteSpace: "nowrap", lineHeight: 1, pointerEvents: "none" }}>{s.typed_name}</div>
+                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe Script','Brush Script MT','Snell Roundhand',cursive", color: "#0E1130", fontSize: `min(58cqh, ${(192 / Math.max(1, (s.typed_name ?? "").length)).toFixed(1)}cqw)`, overflow: "hidden", whiteSpace: "nowrap", lineHeight: 1, pointerEvents: "none" }}>{s.typed_name}</div>
                   )}
                   {editable && (
                     <div onMouseDown={(e) => beginSigDrag(e, s, "resize")}
