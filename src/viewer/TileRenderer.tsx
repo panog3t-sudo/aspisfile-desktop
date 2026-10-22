@@ -1039,7 +1039,8 @@ export function TileRenderer({
               {(fields ?? []).filter((f) => f.page === currentPage).map((f) => {
                 const editable  = !!f.draft && !!onUpdateField;
                 const clickable = !!onFieldClick && !f.signed && !f.draft;
-                const text = f.signed ? "Signed" : (f.label || "Sign here");
+                // Recipient: the box says the ACTION; owner: the request + assignee.
+                const text = f.signed ? "Signed" : clickable ? "Tap to sign" : (f.label || "Sign here");
                 return (
                 <div key={f.id}
                   onMouseDown={editable ? (e) => beginFieldDrag(e, f, "move") : undefined}

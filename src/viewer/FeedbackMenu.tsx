@@ -71,13 +71,18 @@ export function FeedbackMenu(props: {
   removeDraftSignature: (tempId: string) => void;
   onSend: () => Promise<boolean>;
   sending: boolean;
+  // Signature requests (stage 2): how many drafts fill owner-placed fields,
+  // and how many requested fields are still unsigned (for the confirm copy).
+  fieldDraftCount?: number;
+  fieldsLeft?: number;
+  fileName?: string;
   // Open state is controlled by the parent — the launcher now lives in the
   // top toolbar (TileRenderer) for consistency with Q&A / Download, so the
   // viewer owns the open flag and this component just renders the menu.
   open: boolean;
   setOpen: (b: boolean) => void;
 }) {
-  const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen } = props;
+  const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen , fieldDraftCount, fieldsLeft, fileName} = props;
   const [confirm, setConfirm] = useState(false);
   const [sent, setSent] = useState<SentEntry[]>([]);
   const [note, setNote] = useState(draftDecision?.note ?? "");
@@ -139,7 +144,7 @@ export function FeedbackMenu(props: {
         display: "flex", alignItems: "center", gap: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 999,
         padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
         <span style={{ color: "#9098BC", fontSize: 12.5 }}>
-          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? "Tap where you want to place your signature" : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
+          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? ((fieldsLeft ?? 0) > 0 ? "Tap a “Tap to sign” box, or tap anywhere else to place a signature" : "Tap where you want to place your signature") : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
         </span>
         <button onClick={() => { setMode("none"); setOpen(true); }}
           style={{ background: "#2E55D4", color: "#fff", border: "none", borderRadius: 999, padding: "7px 15px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>Done</button>
@@ -338,9 +343,23 @@ export function FeedbackMenu(props: {
         <div style={{ position: "fixed", inset: 0, zIndex: 10002, background: "rgba(4,6,14,.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div style={{ width: "100%", maxWidth: 360, background: "#141830", border: "1px solid #2E3760", borderRadius: 14, padding: 20, boxShadow: "0 24px 60px rgba(0,0,0,.7)", color: "#EAEFFB", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
             <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 660 }}>{draftSignatures.length ? "Sign & send?" : "Send to the sender?"}</h3>
+            {(fieldDraftCount ?? 0) > 0 ? (
+              <>
+                <p style={{ margin: "0 0 10px", fontSize: 13, color: "#C9D2F0", lineHeight: 1.5 }}>
+                  You are signing <b style={{ color: "#fff" }}>{fieldDraftCount} requested {fieldDraftCount === 1 ? "place" : "places"}</b>{fileName ? ` on ${fileName}` : ""}. The sender is notified the moment you send.
+                </p>
+                <div style={{ margin: "0 0 12px", fontSize: 12.5, color: "#F3D08A", background: "rgba(224,165,75,.12)", border: "1px solid rgba(224,165,75,.45)", borderRadius: 8, padding: "7px 9px", lineHeight: 1.45 }}>
+                  This cannot be undone. Your signatures are recorded with your passkey, the time and your session.
+                </div>
+                {(fieldsLeft ?? 0) > fieldDraftCount! && (
+                  <p style={{ margin: "-4px 0 12px", fontSize: 12, color: "#9098BC", lineHeight: 1.5 }}>{(fieldsLeft ?? 0) - fieldDraftCount!} requested {(fieldsLeft ?? 0) - fieldDraftCount! === 1 ? "place is" : "places are"} still unsigned — you can sign {(fieldsLeft ?? 0) - fieldDraftCount! === 1 ? "it" : "them"} later.</p>
+                )}
+              </>
+            ) : (
             <p style={{ margin: "0 0 16px", fontSize: 13, color: "#9098BC", lineHeight: 1.5 }}>
               This sends {draftCount} item{draftCount !== 1 ? "s" : ""} to the sender. <b style={{ color: "#E0A54B" }}>You can’t change or delete them after sending.</b> (You can still add more later.)
             </p>
+            )}
             {draftSignatures.length > 0 && (
               <p style={{ margin: "-8px 0 16px", fontSize: 12, color: "#7C9CF5", lineHeight: 1.5, background: "#141C3D", border: "1px solid #2E3760", borderRadius: 9, padding: "9px 11px" }}>
                 By sending, you adopt {draftSignatures.length > 1 ? "these signatures" : "this signature"} as your electronic signature on this document, verified with your passkey and timestamped.

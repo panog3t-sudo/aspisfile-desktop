@@ -22,7 +22,15 @@ export function SignatureFieldsPanel({ saved, drafts, recipients, saving, onAssi
         <span style={{ fontSize: 13.5, fontWeight: 660 }}>Signature fields</span>
         <button onClick={onClose} style={{ ...x, marginLeft: 'auto' }}>×</button>
       </div>
-      <div style={{ fontSize: 11.5, color: '#9098BC', marginBottom: 8 }}>Click on the page where a recipient should sign. Drag a box to move it, drag its corner to resize.</div>
+      <div style={{ background: '#1A2038', border: '1px solid #26305A', borderRadius: 9, padding: '8px 10px', fontSize: 11.5, lineHeight: 1.45, color: '#C9D2F0', margin: '6px 0 8px' }}>
+        <b style={{ color: '#fff' }}>Where should people sign?</b>
+        <ol style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+          <li>Click the page once for each signature box.</li>
+          <li>Drag a box to move it, drag its corner to resize. Boxes keep a signature&rsquo;s shape.</li>
+          <li>Pick who signs each box, or leave it for anyone.</li>
+          <li>Press <b style={{ color: '#fff' }}>Save</b>. Nobody is notified until you request the signatures.</li>
+        </ol>
+      </div>
       {saved.length > 0 && (
         <div style={{ marginTop: 4 }}>
           <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#666E96', margin: '6px 0 2px' }}>Placed</div>
@@ -58,7 +66,7 @@ export function SignatureFieldsPanel({ saved, drafts, recipients, saving, onAssi
         </button>
         <button onClick={onClose} style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid #2E3760', background: 'transparent', color: '#EAEFFB', fontSize: 13, cursor: 'pointer' }}>Done</button>
       </div>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: '#666E96', marginTop: 9, textAlign: 'center' }}>Recipients are asked to sign from your dashboard.</div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: '#666E96', marginTop: 9, textAlign: 'center' }}>Signatures are requested from the file&rsquo;s page in your dashboard.</div>
     </div>
   );
 }

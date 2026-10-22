@@ -426,7 +426,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         method: "POST", headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
         body: JSON.stringify({ session_id: sessionId, fields: fieldDrafts.map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, recipient_id: f.recipient_id })) }),
       });
-      if (res.ok) { setFieldDrafts([]); await refreshFields(); }
+      if (res.ok) { const n = fieldDrafts.length; setFieldDrafts([]); await refreshFields(); setSavedBanner(n); }
     } catch { /* leave drafts in place */ }
     setSavingFields(false);
   }, [sessionId, file, fieldDrafts, refreshFields]);
@@ -448,6 +448,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [sentSignatures]);
   const draftedFieldIds = new Set(draftSignatures.map((s) => s.field_id).filter((v): v is string => !!v));
   const outstandingFields = recipientFeedback ? fields.filter((f) => f.required && !f.signed && !draftedFieldIds.has(f.id)) : [];
+  // Prompts (22 Oct 2026): fixed banners/pills, never hover cards.
+  const [sentBanner, setSentBanner] = useState(false);
+  const [savedBanner, setSavedBanner] = useState<number>(0);
+  const fieldsLeftTotal = recipientFeedback ? fields.filter((f) => f.required && !f.signed).length : 0;
+  const showFirstField = useCallback(() => {
+    const first = outstandingFields.slice().sort((a, b) => a.page - b.page || a.y - b.y)[0];
+    if (first) setCurrentPage(first.page);
+  }, [outstandingFields]);
 
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
   const sendBatch = useCallback(async (): Promise<boolean> => {
@@ -468,8 +476,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       });
       setSending(false);
       if (!res.ok) return false;
+      const sentFieldDrafts = draftSignatures.some((s) => s.field_id);
       setDraftDecision(null); setDraftComments([]); setDraftMarkups([]); setDraftSignatures([]);
       await fetchFeedback();
+      if (sentFieldDrafts) { setSentBanner(true); window.setTimeout(() => setSentBanner(false), 8000); }
       // Post-cutover: regenerate the owner's stored signed PDF from our local
       // .afs so the download still works after the original ciphertext is
       // purged. Fire-and-forget; no-ops server-side if there are no signatures.
@@ -1593,8 +1603,24 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           )}
         </div>
       )}
-      {outstandingFields.length > 0 && !locked && !coViewingBanner && (
-        <SignatureRequestBanner count={outstandingFields.length} page={Math.min(...outstandingFields.map((f) => f.page))} />
+      {!locked && !coViewingBanner && (
+        sentBanner ? <SignatureRequestBanner state={{ kind: "sent", senderName: file.sender?.full_name || "The sender" }} />
+        : outstandingFields.length > 0 ? <SignatureRequestBanner state={{ kind: "outstanding", count: outstandingFields.length, page: Math.min(...outstandingFields.map((f) => f.page)), drafted: draftedFieldIds.size, onShow: showFirstField }} />
+        : savedBanner > 0 && canPlaceFields ? <SignatureRequestBanner state={{ kind: "saved", count: savedBanner, onDismiss: () => setSavedBanner(0) }} />
+        : null
+      )}
+      {/* Draft pill (recipient): a field signature sits in its box, not yet sent. */}
+      {recipientFeedback && draftedFieldIds.size > 0 && fbMode === "none" && !feedbackOpen && !locked && (
+        <div style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 998, display: "flex", alignItems: "center", gap: 12,
+          background: "#141830", border: "1px solid #2E3760", borderRadius: 999, padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", whiteSpace: "nowrap" }}>
+          <span style={{ color: "#9098BC", fontSize: 12.5 }}>
+            <b style={{ color: "#EAEFFB", fontWeight: 600 }}>{draftedFieldIds.size === 1 ? "Signature placed as a draft." : `${draftedFieldIds.size} signatures placed as drafts.`}</b>{" "}
+            {outstandingFields.length > 0 ? `Sign the other ${outstandingFields.length} ${outstandingFields.length === 1 ? "box" : "boxes"}, then press Send.` : "Press Send to finish."}
+          </span>
+          <button onClick={() => setFeedbackOpen(true)} style={{ background: "#2E55D4", color: "#fff", border: "none", borderRadius: 999, padding: "7px 15px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>
+            {outstandingFields.length > 0 ? "Send now" : "Send"}
+          </button>
+        </div>
       )}
       {coViewingBanner && !canPresent && !presenterSession && (
         <CoViewingBanner
@@ -1945,6 +1971,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           draftMarkups={draftMarkups} removeDraftMarkup={removeDraftMarkup}
           draftSignatures={draftSignatures} removeDraftSignature={removeDraftSignature}
           onSend={sendBatch} sending={sending}
+          fieldDraftCount={draftedFieldIds.size} fieldsLeft={fieldsLeftTotal} fileName={file.name}
           open={feedbackOpen} setOpen={setFeedbackOpen}
         />
       )}
