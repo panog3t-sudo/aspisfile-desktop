@@ -12,6 +12,7 @@ import { Icon } from "../components/Icon";
 
 declare const __API_BASE__: string;
 
+import { FloatingPanel } from "../components/FloatingPanel";
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
 export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; thickness?: number; kind?: "pen" | "highlight"; at: string };
@@ -84,6 +85,8 @@ export function FeedbackMenu(props: {
 }) {
   const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen , fieldDraftCount, fieldsLeft, fileName} = props;
   const [confirm, setConfirm] = useState(false);
+  const [minimised, setMinimised] = useState(false);
+  useEffect(() => { if (!open) setMinimised(false); }, [open]);
   const [sent, setSent] = useState<SentEntry[]>([]);
   const [note, setNote] = useState(draftDecision?.note ?? "");
   // Which accordion section is expanded (only one at a time).
@@ -158,16 +161,13 @@ export function FeedbackMenu(props: {
     <>
       {/* Launcher moved to the top toolbar (TileRenderer). This component now
           only renders the menu overlay + the in-mode "Done" hint bar. */}
+      {open && !minimised && (
+        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "transparent" }} />
+      )}
       {open && (
-        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10001, background: "transparent" }}>
-          {/* Top-left dropdown, anchored under the Review launcher in the toolbar. */}
-          <div onClick={(e) => e.stopPropagation()} style={{ position: "fixed", top: 50, left: 12, width: 340, maxWidth: "calc(100vw - 24px)", background: "#0F1424", border: "1px solid #2E3760", borderRadius: 14,
-            padding: "10px 10px 12px", boxShadow: "0 24px 64px rgba(0,0,0,.6)", maxHeight: "82vh", display: "flex", flexDirection: "column",
-            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", color: "#EAEFFB" }}>
-            <div style={{ display: "flex", alignItems: "center", marginBottom: 13 }}>
-              <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 660 }}>Review</h3>
-              <button onClick={() => setOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
-            </div>
+        <FloatingPanel title="Review" pill={`Review${draftCount ? ` · ${draftCount} draft${draftCount === 1 ? "" : "s"}` : ""}`} corner="top-left" zIndex={10001} maxHeight="82vh"
+          onClose={() => setOpen(false)} minimised={minimised} onMinimisedChange={setMinimised} pillSlot={1}>
+          <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column" }}>
 
             <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
               {/* Respond (accordion) */}
@@ -337,7 +337,7 @@ export function FeedbackMenu(props: {
               {draftCount ? `Send ${draftCount} item${draftCount !== 1 ? "s" : ""} to sender` : "Nothing to send yet"}
             </button>
           </div>
-        </div>
+        </FloatingPanel>
       )}
 
       {/* Are-you-sure */}

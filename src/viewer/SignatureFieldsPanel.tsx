@@ -2,6 +2,7 @@
 // the owner is placing fields on their own document: click the page to add a
 // box, assign each to a recipient (or anyone), save. Saved fields are listed
 // with their signed state and can be deleted.
+import { FloatingPanel } from '../components/FloatingPanel';
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif";
 const MONO = "ui-monospace,Menlo,monospace";
 
@@ -19,11 +20,7 @@ export function SignatureFieldsPanel({ saved, drafts, recipients, saving, reques
   const sel: React.CSSProperties = { flex: 1, minWidth: 0, background: '#080A14', color: '#EAEFFB', border: '1px solid #2E3760', borderRadius: 7, padding: '5px 7px', fontSize: 12, fontFamily: FONT };
   const x: React.CSSProperties = { background: 'none', border: 'none', color: '#9098BC', cursor: 'pointer', fontSize: 15, lineHeight: 1, padding: '0 2px' };
   return (
-    <div style={{ position: 'fixed', right: 16, bottom: 18, width: 340, maxHeight: '70vh', overflowY: 'auto', zIndex: 998, background: '#141830', border: '1px solid #2E3760', borderRadius: 14, padding: '14px 14px 12px', boxShadow: '0 16px 40px rgba(0,0,0,.55)', fontFamily: FONT, color: '#EAEFFB' }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 660 }}>Signature fields</span>
-        <button onClick={onClose} style={{ ...x, marginLeft: 'auto' }}>×</button>
-      </div>
+    <FloatingPanel title="Signature fields" pill={`Signature fields${drafts.length ? ` · ${drafts.length} unsaved` : saved.length ? ` · ${saved.length} placed` : ''}`} corner="bottom-right" onClose={onClose}>
       <div style={{ background: '#1A2038', border: '1px solid #26305A', borderRadius: 9, padding: '8px 10px', fontSize: 11.5, lineHeight: 1.45, color: '#C9D2F0', margin: '6px 0 8px' }}>
         <b style={{ color: '#fff' }}>Where should people sign?</b>
         <ol style={{ margin: '4px 0 0', paddingLeft: 16 }}>
@@ -88,6 +85,6 @@ export function SignatureFieldsPanel({ saved, drafts, recipients, saving, reques
         <button onClick={onClose} style={{ padding: '10px 14px', borderRadius: 10, border: '1px solid #2E3760', background: 'transparent', color: '#EAEFFB', fontSize: 13, cursor: 'pointer' }}>Done</button>
       </div>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: '#666E96', marginTop: 9, textAlign: 'center' }}>Each person gets an email with a link to sign. Reminders live on the file&rsquo;s page in your dashboard.</div>
-    </div>
+    </FloatingPanel>
   );
 }
