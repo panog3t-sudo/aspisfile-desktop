@@ -395,7 +395,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const canPlaceFields = !!file?.is_owner && file?.signature_fields !== undefined;
   const [placingFields, setPlacingFields] = useState(false);
   const [fieldDrafts, setFieldDrafts] = useState<Array<{ tempId: string; page: number; x: number; y: number; w: number; h: number; recipient_id: string | null }>>([]);
-  const [fieldRecipients, setFieldRecipients] = useState<Array<{ id: string; email: string }>>([]);
+  const [fieldRecipients, setFieldRecipients] = useState<Array<{ id: string; email: string; outstanding?: number; requested_at?: string | null }>>([]);
+  const [requesting, setRequesting] = useState(false);
+  const [requestedEmails, setRequestedEmails] = useState<string[] | null>(null);
   const [savingFields, setSavingFields] = useState(false);
   const refreshFields = useCallback(async () => {
     if (!sessionId || !file) return;
@@ -430,6 +432,21 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     } catch { /* leave drafts in place */ }
     setSavingFields(false);
   }, [sessionId, file, fieldDrafts, refreshFields]);
+  // Request signatures from inside the viewer (22 Oct 2026) — same server
+  // logic as the dashboard card, through the owner-session route.
+  const requestSignatures = useCallback(async () => {
+    if (!sessionId || !file) return;
+    setRequesting(true);
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/signature-fields`, {
+        method: "PUT", headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) { setRequestedEmails(d.sent ?? []); setSavedBanner(0); await refreshFields(); }
+    } catch { /* leave the banner offering the request */ }
+    setRequesting(false);
+  }, [sessionId, file, refreshFields]);
   const deleteField = useCallback(async (id: string) => {
     if (!sessionId || !file) return;
     try {
@@ -1606,7 +1623,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       {!locked && !coViewingBanner && (
         sentBanner ? <SignatureRequestBanner state={{ kind: "sent", senderName: file.sender?.full_name || "The sender" }} />
         : outstandingFields.length > 0 ? <SignatureRequestBanner state={{ kind: "outstanding", count: outstandingFields.length, page: Math.min(...outstandingFields.map((f) => f.page)), drafted: draftedFieldIds.size, onShow: showFirstField }} />
-        : savedBanner > 0 && canPlaceFields ? <SignatureRequestBanner state={{ kind: "saved", count: savedBanner, onDismiss: () => setSavedBanner(0) }} />
+        : requestedEmails ? <SignatureRequestBanner state={{ kind: "requested", emails: requestedEmails, onDismiss: () => setRequestedEmails(null) }} />
+        : savedBanner > 0 && canPlaceFields ? <SignatureRequestBanner state={{ kind: "saved", count: savedBanner, people: fieldRecipients.filter((r) => (r.outstanding ?? 0) > 0).length, busy: requesting, onRequest: requestSignatures, onDismiss: () => setSavedBanner(0) }} />
         : null
       )}
       {/* Draft pill (recipient): a field signature sits in its box, not yet sent. */}
@@ -1949,6 +1967,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           saved={fields.map((f) => ({ id: f.id, page: f.page, recipient_email: f.recipient_email ?? null, signed: f.signed, signed_by: f.signed_by }))}
           drafts={fieldDrafts.map((d) => ({ tempId: d.tempId, page: d.page, recipient_id: d.recipient_id }))}
           recipients={fieldRecipients} saving={savingFields}
+          requesting={requesting} onRequest={requestSignatures}
           onAssign={assignFieldDraft} onRemoveDraft={removeFieldDraft} onDeleteSaved={deleteField}
           onSave={saveFields} onClose={() => { setPlacingFields(false); setFieldDrafts([]); }}
         />
