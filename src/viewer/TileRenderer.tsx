@@ -117,6 +117,10 @@ type Props = {
   onFieldClick?:    (field: { id: string; page: number; x: number; y: number; w: number; h: number }) => void;
   onPlaceFields?:   () => void;   // owner toolbar button (toggles fieldMode)
   fieldCount?:      number;
+  // Scroll a field into view (banner "Show me", and the next field after a
+  // signature). `seq` changes on every request so the same field can be
+  // focused twice.
+  focusField?:      { id: string; page: number; y: number; seq: number } | null;
 };
 
 // Stable per-recipient pin colour (owner review shows several recipients).
@@ -160,7 +164,7 @@ export function TileRenderer({
   commentMode, comments, draftPin, onPlaceComment,
   drawMode, drawColor, drawThickness, drawTool, markups, onStrokeComplete,
   signMode, onPlaceSignature, signatures, onUpdateSignature,
-  fields, fieldMode, onPlaceField, onUpdateField, onFieldClick, onPlaceFields, fieldCount,
+  fields, fieldMode, onPlaceField, onUpdateField, onFieldClick, onPlaceFields, fieldCount, focusField,
   accessToken, accessMethod,
 }: Props) {
   const firstTileFiredRef = useRef(false);
@@ -190,6 +194,25 @@ export function TileRenderer({
   const [zoomIndex, setZoomIndex] = useState(2); // 100% default
   const fingerprintRef    = useRef<string>("");
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  // Focus an owner-placed field: switch page, then (once the tile is laid out)
+  // scroll so the box sits in the middle of the viewport and flash it.
+  const [pulseFieldId, setPulseFieldId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusField) return;
+    if (focusField.page !== currentPage) setCurrentPage(focusField.page);
+    let tries = 0;
+    const go = () => {
+      const sc = scrollContainerRef.current;
+      const box = sc?.querySelector<HTMLElement>(`[data-field-id="${focusField.id}"]`);
+      if (!sc || !box) { if (tries++ < 20) window.setTimeout(go, 100); return; }
+      const sr = sc.getBoundingClientRect(), br = box.getBoundingClientRect();
+      sc.scrollTo({ top: sc.scrollTop + (br.top - sr.top) - sr.height / 2 + br.height / 2, behavior: "smooth" });
+      setPulseFieldId(focusField.id);
+      window.setTimeout(() => setPulseFieldId((v) => (v === focusField.id ? null : v)), 1800);
+    };
+    window.setTimeout(go, 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusField?.seq]);
 
   // Follow-mode scroll lock — attach wheel + touchmove as non-passive
   // native listeners. React 17+ treats JSX onWheel / onTouchMove as
@@ -1042,7 +1065,7 @@ export function TileRenderer({
                 // Recipient: the box says the ACTION; owner: the request + assignee.
                 const text = f.signed ? "Signed" : clickable ? "Tap to sign" : (f.label || "Sign here");
                 return (
-                <div key={f.id}
+                <div key={f.id} data-field-id={f.id}
                   onMouseDown={editable ? (e) => beginFieldDrag(e, f, "move") : undefined}
                   onClick={clickable ? (e) => { e.stopPropagation(); onFieldClick!(f); } : undefined}
                   style={{
@@ -1051,6 +1074,7 @@ export function TileRenderer({
                     border: f.signed ? "1px solid rgba(27,138,87,.55)" : f.draft ? "1.5px dashed #2E55D4" : "1.5px dashed #E0A54B",
                     background: f.signed ? "rgba(27,138,87,.06)" : f.draft ? "rgba(46,85,212,.10)" : "rgba(224,165,75,.13)",
                     borderRadius: 3, containerType: "size", boxSizing: "border-box",
+                    boxShadow: pulseFieldId === f.id ? "0 0 0 4px rgba(224,165,75,.55), 0 0 18px 4px rgba(224,165,75,.45)" : "none", transition: "box-shadow .3s",
                     cursor: clickable ? "pointer" : editable ? "move" : "default",
                     display: "flex", alignItems: "center", justifyContent: "center",
                   } as React.CSSProperties}>

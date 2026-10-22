@@ -469,10 +469,23 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [sentBanner, setSentBanner] = useState(false);
   const [savedBanner, setSavedBanner] = useState<number>(0);
   const fieldsLeftTotal = recipientFeedback ? fields.filter((f) => f.required && !f.signed).length : 0;
+  const [focusField, setFocusField] = useState<{ id: string; page: number; y: number; seq: number } | null>(null);
+  const focusSeq = useRef(0);
+  const focusOn = useCallback((f: { id: string; page: number; y: number } | undefined) => {
+    if (!f) return;
+    setFocusField({ id: f.id, page: f.page, y: f.y, seq: ++focusSeq.current });
+    setCurrentPage(f.page);
+  }, []);
   const showFirstField = useCallback(() => {
-    const first = outstandingFields.slice().sort((a, b) => a.page - b.page || a.y - b.y)[0];
-    if (first) setCurrentPage(first.page);
-  }, [outstandingFields]);
+    focusOn(outstandingFields.slice().sort((a, b) => a.page - b.page || a.y - b.y)[0]);
+  }, [outstandingFields, focusOn]);
+  // After a signature lands in a field, move on to the next unsigned one.
+  const lastDraftedCount = useRef(0);
+  useEffect(() => {
+    if (draftedFieldIds.size > lastDraftedCount.current) focusOn(outstandingFields.slice().sort((a, b) => a.page - b.page || a.y - b.y)[0]);
+    lastDraftedCount.current = draftedFieldIds.size;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftedFieldIds.size]);
 
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
   const sendBatch = useCallback(async (): Promise<boolean> => {
@@ -1727,6 +1740,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
               ...fieldDrafts.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, label: null, signed: false, draft: true, assignee: fieldRecipients.find((r) => r.id === d.recipient_id)?.email ?? "anyone" })),
             ]}
             fieldMode={placingFields}
+            focusField={focusField}
             onPlaceField={placingFields ? onPlaceField : undefined}
             onUpdateField={placingFields ? updateFieldDraft : undefined}
             onFieldClick={recipientFeedback && !placingFields ? onFieldClick : undefined}
