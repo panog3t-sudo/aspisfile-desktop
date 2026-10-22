@@ -28,12 +28,22 @@ function saveSavedSig(email: string, strokes: Strokes) {
   try { localStorage.setItem(SIG_KEY(email), JSON.stringify(strokes)); } catch { /* quota / unavailable */ }
 }
 function clearSavedSig(email: string) { try { localStorage.removeItem(SIG_KEY(email)); } catch { /* */ } }
+// Uploaded signature image (data URL + aspect), same per-device reuse as the drawing.
+const IMG_KEY = (email: string) => `aspis_saved_sigimg_v1:${email}`;
+function loadSavedImg(email: string): { dataUrl: string; aspect: number } | null {
+  if (!email) return null;
+  try { const s = localStorage.getItem(IMG_KEY(email)); const p = s ? JSON.parse(s) : null; return p && typeof p.dataUrl === "string" && p.dataUrl.startsWith("data:image/") ? p : null; } catch { return null; }
+}
+function saveSavedImg(email: string, img: { dataUrl: string; aspect: number }) { if (!email) return; try { localStorage.setItem(IMG_KEY(email), JSON.stringify(img)); } catch { /* quota */ } }
+function clearSavedImg(email: string) { try { localStorage.removeItem(IMG_KEY(email)); } catch { /* */ } }
 
 export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () => void; onDone: (s: SignatureData) => void; defaultName?: string }) {
   const emailKey = (defaultName ?? "").trim().toLowerCase();
   const [tab, setTab] = useState<"draw" | "type" | "upload">("draw");
   const [typed, setTyped] = useState("");
-  const [upImg, setUpImg] = useState<{ dataUrl: string; aspect: number } | null>(null);
+  const [upImg, setUpImg] = useState<{ dataUrl: string; aspect: number } | null>(() => loadSavedImg(emailKey));
+  const [hasSavedImg, setHasSavedImg] = useState(() => !!loadSavedImg(emailKey));
+  const [saveImg, setSaveImg] = useState(true);   // remember the uploaded image on this device
   const [upErr, setUpErr] = useState<string | null>(null);
   const [strokes, setStrokes] = useState<Strokes>(() => loadSavedSig(emailKey) ?? []);
   const [hasSaved, setHasSaved] = useState(() => !!loadSavedSig(emailKey));
@@ -81,6 +91,7 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
     } else if (tab === "type") {
       onDone({ style: "typed", typed_name: typed.trim(), signer_name: typed.trim() });
     } else if (upImg) {
+      if (saveImg) saveSavedImg(emailKey, upImg);
       onDone({ style: "uploaded", image_data: upImg.dataUrl, aspect: upImg.aspect, signer_name: drawnName });
     }
   };
@@ -136,9 +147,17 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
               </label>
             )}
             <div style={{ display: "flex", alignItems: "center", marginTop: 6, minHeight: 18 }}>
-              {upErr ? <span style={{ color: "#E96B5C", fontSize: 11.5 }}>{upErr}</span> : <span />}
+              {upErr ? <span style={{ color: "#E96B5C", fontSize: 11.5 }}>{upErr}</span>
+                : hasSavedImg ? <button onClick={() => { clearSavedImg(emailKey); setHasSavedImg(false); setSaveImg(false); setUpImg(null); }} style={{ background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 12 }}>Forget saved image</button>
+                : <span />}
               {upImg && <button onClick={() => { setUpImg(null); setUpErr(null); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 12 }}>Choose another</button>}
             </div>
+            {upImg && (
+              <button onClick={() => setSaveImg((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", cursor: "pointer", padding: "8px 0 0", textAlign: "left" }}>
+                <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${saveImg ? "#5C82EE" : "#3A426B"}`, background: saveImg ? "#2E55D4" : "transparent", color: "#fff", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>{saveImg ? "✓" : ""}</span>
+                <span style={{ fontSize: 12, color: "#9098BC" }}>{hasSavedImg ? "Update the signature image saved on this device" : "Save this signature image on this device for reuse"}</span>
+              </button>
+            )}
           </>
         )}
         {tab === "type" && (

@@ -102,7 +102,9 @@ export function FeedbackMenu(props: {
 
   const draftCount = (draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length;
   const enterMode = (m: "comment" | "draw" | "sign") => { setMode(m); setOpen(false); };
-  const doSend = async () => { const ok = await onSend(); if (ok) { setConfirm(false); setNote(""); await load(); } };
+  // After a successful send the menu closes so the page (green boxes, the
+  // "Signed and sent" banner) is what the person sees — not "Nothing to send yet".
+  const doSend = async () => { const ok = await onSend(); if (ok) { setConfirm(false); setNote(""); setOpen(false); } };
 
   // ── Accordion shared styles + colour/thickness pickers ──
   const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "10px 10px", background: "none", border: "none", color: "#EAEFFB", cursor: "pointer", fontFamily: "inherit", textAlign: "left", borderRadius: 11 };
