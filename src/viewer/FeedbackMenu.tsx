@@ -166,7 +166,7 @@ export function FeedbackMenu(props: {
       )}
       {open && (
         <FloatingPanel title="Review" pill={`Review${draftCount ? ` · ${draftCount} draft${draftCount === 1 ? "" : "s"}` : ""}`} corner="top-left" zIndex={10001} maxHeight="82vh"
-          onClose={() => setOpen(false)} minimised={minimised} onMinimisedChange={setMinimised} pillSlot={1}>
+          onClose={() => setOpen(false)} minimised={minimised} onMinimisedChange={setMinimised}>
           <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column" }}>
 
             <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>

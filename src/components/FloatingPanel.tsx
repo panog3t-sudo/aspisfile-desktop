@@ -9,24 +9,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // and the title bar drags the panel anywhere. Position is per panel, per
 // session; the default corner is the panel's own.
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif";
-const PILL_SLOT = 36;   // vertical pitch between stacked pills
 
-export function FloatingPanel({ title, pill, corner, width = 340, maxHeight = "70vh", zIndex = 998, onClose, children, pillSlot = 0, minimised, onMinimisedChange }: {
+export function FloatingPanel({ title, pill, corner, width = 340, maxHeight = "70vh", zIndex = 998, onClose, children, minimised, onMinimisedChange }: {
   title: string;
   pill: string;                                 // label on the minimised pill, e.g. "Signature fields · 1 unsaved"
   corner: "bottom-right" | "top-left";
   width?: number; maxHeight?: string; zIndex?: number;
   onClose: () => void;
   children: React.ReactNode;
-  pillSlot?: number;                            // 0 = lowest pill, 1 = the one above it …
   minimised?: boolean; onMinimisedChange?: (m: boolean) => void;   // controlled, optional
 }) {
   const [innerMin, setInnerMin] = useState(false);
-  const min = minimised ?? innerMin;
-  const setMin = useCallback((m: boolean) => { setInnerMin(m); onMinimisedChange?.(m); }, [onMinimisedChange]);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);   // null = default corner
   const dragRef = useRef<null | { sx: number; sy: number; ox: number; oy: number }>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const min = minimised ?? innerMin;
+  const setMin = useCallback((m: boolean) => {
+    // Freeze the current position so the pill (and the restored panel) stay exactly where the panel was.
+    if (m && !pos) { const r = panelRef.current?.getBoundingClientRect(); if (r) setPos({ left: r.left, top: r.top }); }
+    setInnerMin(m); onMinimisedChange?.(m);
+  }, [onMinimisedChange, pos]);
 
   const onMove = useCallback((e: MouseEvent) => {
     const d = dragRef.current; if (!d) return;
@@ -45,21 +47,23 @@ export function FloatingPanel({ title, pill, corner, width = 340, maxHeight = "7
 
   const ctl: React.CSSProperties = { background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 17, lineHeight: 1, width: 24, height: 24, borderRadius: 6, display: "grid", placeItems: "center" };
 
-  if (min) {
-    return (
-      <button onClick={() => setMin(false)} title="Restore"
-        style={{ position: "fixed", left: 16, bottom: 18 + pillSlot * PILL_SLOT, zIndex, display: "flex", alignItems: "center", gap: 8,
-          background: "#141830", border: "1px solid #2E3760", borderRadius: 999, padding: "6px 8px 6px 12px", color: "#EAEFFB", fontFamily: FONT, fontSize: 12, fontWeight: 600,
-          boxShadow: "0 8px 22px rgba(0,0,0,.45)", cursor: "pointer", whiteSpace: "nowrap" }}>
-        {pill}
-        <span style={{ width: 20, height: 20, borderRadius: 999, background: "#2E55D4", color: "#fff", display: "grid", placeItems: "center", fontSize: 14, lineHeight: 1 }}>+</span>
-      </button>
-    );
-  }
-
+  // Minimised: collapse IN PLACE to a title-bar pill (Pano, 22 Oct: a jump to
+  // a fixed corner was confusing). The pill drags too, and expands where it is.
   const place: React.CSSProperties = pos
     ? { left: pos.left, top: pos.top }
     : corner === "bottom-right" ? { right: 16, bottom: 18 } : { top: 50, left: 12 };
+  if (min) {
+    return (
+      <div ref={panelRef} onMouseDown={beginDrag} title="Drag to move"
+        style={{ position: "fixed", ...place, zIndex, display: "flex", alignItems: "center", gap: 6, maxWidth: "calc(100vw - 24px)",
+          background: "#141830", border: "1px solid #2E3760", borderRadius: 999, padding: "6px 6px 6px 14px", color: "#EAEFFB", fontFamily: FONT, fontSize: 12.5, fontWeight: 600,
+          boxShadow: "0 8px 22px rgba(0,0,0,.45)", cursor: "move", userSelect: "none", whiteSpace: "nowrap" }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{pill}</span>
+        <button onClick={() => setMin(false)} title="Expand" style={{ ...ctl, background: "#2E55D4", color: "#fff", borderRadius: 999, width: 22, height: 22, fontSize: 15 }}>+</button>
+        <button onClick={onClose} title="Close" style={ctl}>×</button>
+      </div>
+    );
+  }
 
   return (
     <div ref={panelRef} style={{ position: "fixed", ...place, width, maxWidth: "calc(100vw - 24px)", maxHeight, zIndex, display: "flex", flexDirection: "column",
