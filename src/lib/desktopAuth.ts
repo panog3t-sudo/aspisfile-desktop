@@ -32,6 +32,17 @@ export type FileInfo = {
   // per-document Q&A button (only when in a room AND Q&A is enabled).
   collection_id?: string | null;
   qa_enabled?: boolean;
+  // Signature requests (stage 2, 2026-10-21) — owner-placed fields. A
+  // recipient gets the fields addressed to them (+ open ones) with their own
+  // signed state; the owner gets every field with who filled it. Absent when
+  // the server flag is off → no ghost boxes, no banner, no owner button.
+  signature_fields?: SignatureFieldInfo[];
+};
+
+export type SignatureFieldInfo = {
+  id: string; page: number; x: number; y: number; w: number; h: number;
+  label?: string | null; required: boolean; signed: boolean;
+  recipient_id?: string | null; recipient_email?: string | null; signed_by?: string[];
 };
 
 export type RecipientInfo = {

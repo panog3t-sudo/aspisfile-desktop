@@ -12,10 +12,11 @@ import { Icon } from "../components/Icon";
 
 declare const __API_BASE__: string;
 
+import { FloatingPanel } from "../components/FloatingPanel";
 export type Decision = "approved" | "changes_requested" | "rejected";
 export type DraftComment = { tempId: string; page: number; x: number; y: number; body: string; at: string };
 export type DraftMarkup  = { tempId: string; page: number; points: Array<{ x: number; y: number }>; color?: string; thickness?: number; kind?: "pen" | "highlight"; at: string };
-export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name: string; at: string };
+export type DraftSignature = { tempId: string; page: number; x: number; y: number; w: number; h: number; style: "drawn" | "typed" | "uploaded"; points?: Array<Array<{ x: number; y: number }>>; typed_name?: string; image_data?: string; signer_name: string; at: string; field_id?: string };
 type SentEntry =
   | { kind: "decision"; id: string; decision: Decision; note: string | null; created_at: string; is_current: boolean }
   | { kind: "comment"; id: string; page: number; body: string; created_at: string }
@@ -71,14 +72,21 @@ export function FeedbackMenu(props: {
   removeDraftSignature: (tempId: string) => void;
   onSend: () => Promise<boolean>;
   sending: boolean;
+  // Signature requests (stage 2): how many drafts fill owner-placed fields,
+  // and how many requested fields are still unsigned (for the confirm copy).
+  fieldDraftCount?: number;
+  fieldsLeft?: number;
+  fileName?: string;
   // Open state is controlled by the parent — the launcher now lives in the
   // top toolbar (TileRenderer) for consistency with Q&A / Download, so the
   // viewer owns the open flag and this component just renders the menu.
   open: boolean;
   setOpen: (b: boolean) => void;
 }) {
-  const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen } = props;
+  const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen , fieldDraftCount, fieldsLeft, fileName} = props;
   const [confirm, setConfirm] = useState(false);
+  const [minimised, setMinimised] = useState(false);
+  useEffect(() => { if (!open) setMinimised(false); }, [open]);
   const [sent, setSent] = useState<SentEntry[]>([]);
   const [note, setNote] = useState(draftDecision?.note ?? "");
   // Which accordion section is expanded (only one at a time).
@@ -97,7 +105,9 @@ export function FeedbackMenu(props: {
 
   const draftCount = (draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length;
   const enterMode = (m: "comment" | "draw" | "sign") => { setMode(m); setOpen(false); };
-  const doSend = async () => { const ok = await onSend(); if (ok) { setConfirm(false); setNote(""); await load(); } };
+  // After a successful send the menu closes so the page (green boxes, the
+  // "Signed and sent" banner) is what the person sees — not "Nothing to send yet".
+  const doSend = async () => { const ok = await onSend(); if (ok) { setConfirm(false); setNote(""); setOpen(false); } };
 
   // ── Accordion shared styles + colour/thickness pickers ──
   const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "10px 10px", background: "none", border: "none", color: "#EAEFFB", cursor: "pointer", fontFamily: "inherit", textAlign: "left", borderRadius: 11 };
@@ -139,7 +149,7 @@ export function FeedbackMenu(props: {
         display: "flex", alignItems: "center", gap: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 999,
         padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
         <span style={{ color: "#9098BC", fontSize: 12.5 }}>
-          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? "Tap where you want to place your signature" : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
+          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? ((fieldsLeft ?? 0) > 0 ? "Tap a “Tap to sign” box, or tap anywhere else to place a signature" : "Tap where you want to place your signature") : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
         </span>
         <button onClick={() => { setMode("none"); setOpen(true); }}
           style={{ background: "#2E55D4", color: "#fff", border: "none", borderRadius: 999, padding: "7px 15px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>Done</button>
@@ -151,16 +161,13 @@ export function FeedbackMenu(props: {
     <>
       {/* Launcher moved to the top toolbar (TileRenderer). This component now
           only renders the menu overlay + the in-mode "Done" hint bar. */}
+      {open && !minimised && (
+        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "transparent" }} />
+      )}
       {open && (
-        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10001, background: "transparent" }}>
-          {/* Top-left dropdown, anchored under the Review launcher in the toolbar. */}
-          <div onClick={(e) => e.stopPropagation()} style={{ position: "fixed", top: 50, left: 12, width: 340, maxWidth: "calc(100vw - 24px)", background: "#0F1424", border: "1px solid #2E3760", borderRadius: 14,
-            padding: "10px 10px 12px", boxShadow: "0 24px 64px rgba(0,0,0,.6)", maxHeight: "82vh", display: "flex", flexDirection: "column",
-            fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", color: "#EAEFFB" }}>
-            <div style={{ display: "flex", alignItems: "center", marginBottom: 13 }}>
-              <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 660 }}>Review</h3>
-              <button onClick={() => setOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9098BC", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
-            </div>
+        <FloatingPanel title="Review" pill={`Review${draftCount ? ` · ${draftCount} draft${draftCount === 1 ? "" : "s"}` : ""}`} corner="top-left" zIndex={10001} maxHeight="82vh"
+          onClose={() => setOpen(false)} minimised={minimised} onMinimisedChange={setMinimised}>
+          <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column" }}>
 
             <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
               {/* Respond (accordion) */}
@@ -330,7 +337,7 @@ export function FeedbackMenu(props: {
               {draftCount ? `Send ${draftCount} item${draftCount !== 1 ? "s" : ""} to sender` : "Nothing to send yet"}
             </button>
           </div>
-        </div>
+        </FloatingPanel>
       )}
 
       {/* Are-you-sure */}
@@ -338,9 +345,23 @@ export function FeedbackMenu(props: {
         <div style={{ position: "fixed", inset: 0, zIndex: 10002, background: "rgba(4,6,14,.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div style={{ width: "100%", maxWidth: 360, background: "#141830", border: "1px solid #2E3760", borderRadius: 14, padding: 20, boxShadow: "0 24px 60px rgba(0,0,0,.7)", color: "#EAEFFB", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
             <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 660 }}>{draftSignatures.length ? "Sign & send?" : "Send to the sender?"}</h3>
+            {(fieldDraftCount ?? 0) > 0 ? (
+              <>
+                <p style={{ margin: "0 0 10px", fontSize: 13, color: "#C9D2F0", lineHeight: 1.5 }}>
+                  You are signing <b style={{ color: "#fff" }}>{fieldDraftCount} requested {fieldDraftCount === 1 ? "place" : "places"}</b>{fileName ? ` on ${fileName}` : ""}. The sender is notified the moment you send.
+                </p>
+                <div style={{ margin: "0 0 12px", fontSize: 12.5, color: "#F3D08A", background: "rgba(224,165,75,.12)", border: "1px solid rgba(224,165,75,.45)", borderRadius: 8, padding: "7px 9px", lineHeight: 1.45 }}>
+                  This cannot be undone. Your signatures are recorded with your passkey, the time and your session.
+                </div>
+                {(fieldsLeft ?? 0) > fieldDraftCount! && (
+                  <p style={{ margin: "-4px 0 12px", fontSize: 12, color: "#9098BC", lineHeight: 1.5 }}>{(fieldsLeft ?? 0) - fieldDraftCount!} requested {(fieldsLeft ?? 0) - fieldDraftCount! === 1 ? "place is" : "places are"} still unsigned — you can sign {(fieldsLeft ?? 0) - fieldDraftCount! === 1 ? "it" : "them"} later.</p>
+                )}
+              </>
+            ) : (
             <p style={{ margin: "0 0 16px", fontSize: 13, color: "#9098BC", lineHeight: 1.5 }}>
               This sends {draftCount} item{draftCount !== 1 ? "s" : ""} to the sender. <b style={{ color: "#E0A54B" }}>You can’t change or delete them after sending.</b> (You can still add more later.)
             </p>
+            )}
             {draftSignatures.length > 0 && (
               <p style={{ margin: "-8px 0 16px", fontSize: 12, color: "#7C9CF5", lineHeight: 1.5, background: "#141C3D", border: "1px solid #2E3760", borderRadius: 9, padding: "9px 11px" }}>
                 By sending, you adopt {draftSignatures.length > 1 ? "these signatures" : "this signature"} as your electronic signature on this document, verified with your passkey and timestamped.
