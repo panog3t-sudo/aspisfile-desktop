@@ -36,7 +36,9 @@ export function LegalOverlay({
           textAlign: "center",
         }}
       >
-        <p style={{ fontSize: 16, fontWeight: 500, color: "#E2E8F0", margin: "0 0 6px" }}>
+        {/* 2026-11-11 — a long unbroken filename (no spaces to break on) ran
+            straight past the 440px card. Wrap anywhere; nothing else changes. */}
+        <p style={{ fontSize: 16, fontWeight: 500, color: "#E2E8F0", margin: "0 0 6px", overflowWrap: "anywhere" }}>
           {file.name}
         </p>
         <p style={{ fontSize: 12, color: "#64748B", margin: "0 0 24px" }}>
