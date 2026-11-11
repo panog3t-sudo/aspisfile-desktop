@@ -726,6 +726,22 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         fileName:   file.name,
         senderName: file.sender?.full_name ?? file.sender?.email ?? null,
       });
+      // 2026-11-11 — tell the server. This save is built entirely on the
+      // client (no fetch in downloadAfsLink), so until now a recipient could
+      // press Download and the sender's file page would never learn it: the
+      // "downloaded" count read 0 for five months. Same shape as the
+      // afs_exported post in handleSendToDevice: fire-and-forget, content-free,
+      // never on the cancel path (downloadAfsLink throws USER_CANCELLED before
+      // this line), and the save never depends on it — sendEvent drops silently
+      // without a token and discards any 4xx. `kind: 'link'` because what was
+      // written is the v1 link container, not the sealed document.
+      void sendEvent({
+        event_type:    'afs_saved',
+        file_id:       file.id,
+        session_id:    sessionId ?? undefined,
+        access_method: accessMethod,
+        payload:       { method: 'save_dialog', kind: 'link' },
+      }, token);
       setSavedFileName(file.name + '.afs');
       setDownloadState('confirmed');
       setDownloadModalOpen(true);
