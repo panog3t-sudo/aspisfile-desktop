@@ -77,6 +77,11 @@ export function FeedbackMenu(props: {
   fieldDraftCount?: number;
   fieldsLeft?: number;
   fileName?: string;
+  // Signature completion (Release A): the OWNER countersigning. Only the Sign
+  // row and Send exist — an owner session may post signatures and nothing else
+  // (the server refuses anything more with a 400), and sending completes and
+  // locks the document.
+  ownerSigning?: boolean;
   // Open state is controlled by the parent — the launcher now lives in the
   // top toolbar (TileRenderer) for consistency with Q&A / Download, so the
   // viewer owns the open flag and this component just renders the menu.
@@ -84,6 +89,7 @@ export function FeedbackMenu(props: {
   setOpen: (b: boolean) => void;
 }) {
   const { mode, setMode, drawTool, setDrawTool, drawColor, setDrawColor, drawThickness, setDrawThickness, highlightColor, setHighlightColor, highlightThickness, setHighlightThickness, draftDecision, setDraftDecision, draftComments, removeDraftComment, draftMarkups, removeDraftMarkup, draftSignatures, removeDraftSignature, onSend, sending, open, setOpen , fieldDraftCount, fieldsLeft, fileName} = props;
+  const ownerSigning = !!props.ownerSigning;
   const [confirm, setConfirm] = useState(false);
   const [minimised, setMinimised] = useState(false);
   useEffect(() => { if (!open) setMinimised(false); }, [open]);
@@ -149,7 +155,7 @@ export function FeedbackMenu(props: {
         display: "flex", alignItems: "center", gap: 12, background: "#141830", border: "1px solid #2E3760", borderRadius: 999,
         padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
         <span style={{ color: "#9098BC", fontSize: 12.5 }}>
-          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? ((fieldsLeft ?? 0) > 0 ? "Tap a “Tap to sign” box, or tap anywhere else to place a signature" : "Tap where you want to place your signature") : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
+          {mode === "comment" ? "Tap a spot on the page to add a comment" : mode === "sign" ? (ownerSigning ? "Tap your countersign box to sign it" : (fieldsLeft ?? 0) > 0 ? "Tap a “Tap to sign” box, or tap anywhere else to place a signature" : "Tap where you want to place your signature") : drawTool === "highlight" ? "Drag across text to highlight it" : "Draw on the page to mark it up"}
         </span>
         <button onClick={() => { setMode("none"); setOpen(true); }}
           style={{ background: "#2E55D4", color: "#fff", border: "none", borderRadius: 999, padding: "7px 15px", fontSize: 12.5, fontWeight: 640, cursor: "pointer" }}>Done</button>
@@ -165,11 +171,17 @@ export function FeedbackMenu(props: {
         <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "transparent" }} />
       )}
       {open && (
-        <FloatingPanel title="Review" pill={`Review${draftCount ? ` · ${draftCount} draft${draftCount === 1 ? "" : "s"}` : ""}`} corner="top-left" zIndex={10001} maxHeight="82vh"
+        <FloatingPanel title={ownerSigning ? "Countersign" : "Review"} pill={`${ownerSigning ? "Countersign" : "Review"}${draftCount ? ` · ${draftCount} draft${draftCount === 1 ? "" : "s"}` : ""}`} corner="top-left" zIndex={10001} maxHeight="82vh"
           onClose={() => setOpen(false)} minimised={minimised} onMinimisedChange={setMinimised}>
           <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column" }}>
 
             <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+              {ownerSigning && (
+                <div style={{ background: "#1A2038", border: "1px solid #26305A", borderRadius: 9, padding: "8px 10px", fontSize: 11.5, lineHeight: 1.45, color: "#C9D2F0", margin: "6px 0 8px" }}>
+                  <b style={{ color: "#fff" }}>Everyone else has signed.</b> Sign your box, then press Send: the document is completed and locked, and every party receives the certificate.
+                </div>
+              )}
+              {!ownerSigning && (<>
               {/* Respond (accordion) */}
               <div style={{ background: expanded === "respond" ? "#161c33" : "transparent", borderRadius: 11 }}>
                 <button onClick={() => setExpanded(expanded === "respond" ? null : "respond")} style={rowStyle}>
@@ -256,11 +268,13 @@ export function FeedbackMenu(props: {
                 )}
               </div>
 
+              </>)}
+
               {/* Sign (row → SignaturePad: draw / type / upload) */}
               <button onClick={() => enterMode("sign")} style={rowStyle}>
                 <span style={iconBox}><Icon name="pen-line" size={15} /></span>
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>Sign</span>
+                  <span style={{ display: "block", fontSize: 13.5, fontWeight: 620 }}>{ownerSigning ? "Countersign" : "Sign"}</span>
                   <span style={{ display: "block", fontSize: 11.5, color: "#8A93BC", marginTop: 1 }}>Draw it, type it, or upload
                     <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9, color: "#7C9CF5", background: "#1C2347", padding: "1px 6px", borderRadius: 999, marginLeft: 5 }}>PASSKEY-VERIFIED</span>
                   </span>
@@ -334,7 +348,7 @@ export function FeedbackMenu(props: {
             {/* Send */}
             <button onClick={() => draftCount > 0 && setConfirm(true)} disabled={draftCount === 0}
               style={{ marginTop: 14, background: draftCount ? "#2E55D4" : "#26305A", color: "#fff", border: "none", borderRadius: 10, padding: 12, fontSize: 13.5, fontWeight: 660, cursor: draftCount ? "pointer" : "default" }}>
-              {draftCount ? `Send ${draftCount} item${draftCount !== 1 ? "s" : ""} to sender` : "Nothing to send yet"}
+              {ownerSigning ? (draftCount ? "Sign and complete the document" : "Sign your box first") : draftCount ? `Send ${draftCount} item${draftCount !== 1 ? "s" : ""} to sender` : "Nothing to send yet"}
             </button>
           </div>
         </FloatingPanel>
@@ -344,8 +358,17 @@ export function FeedbackMenu(props: {
       {confirm && (
         <div style={{ position: "fixed", inset: 0, zIndex: 10002, background: "rgba(4,6,14,.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div style={{ width: "100%", maxWidth: 360, background: "#141830", border: "1px solid #2E3760", borderRadius: 14, padding: 20, boxShadow: "0 24px 60px rgba(0,0,0,.7)", color: "#EAEFFB", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 660 }}>{draftSignatures.length ? "Sign & send?" : "Send to the sender?"}</h3>
-            {(fieldDraftCount ?? 0) > 0 ? (
+            <h3 style={{ margin: "0 0 8px", fontSize: 15, fontWeight: 660 }}>{ownerSigning ? "Countersign and complete?" : draftSignatures.length ? "Sign & send?" : "Send to the sender?"}</h3>
+            {ownerSigning ? (
+              <>
+                <p style={{ margin: "0 0 10px", fontSize: 13, color: "#C9D2F0", lineHeight: 1.5 }}>
+                  You are countersigning <b style={{ color: "#fff" }}>{fieldDraftCount} {fieldDraftCount === 1 ? "box" : "boxes"}</b>{fileName ? ` on ${fileName}` : ""}. The document is then <b style={{ color: "#fff" }}>completed and locked</b>: no further signatures or markups, and every party is sent the Certificate of Completion.
+                </p>
+                <div style={{ margin: "0 0 12px", fontSize: 12.5, color: "#F3D08A", background: "rgba(224,165,75,.12)", border: "1px solid rgba(224,165,75,.45)", borderRadius: 8, padding: "7px 9px", lineHeight: 1.5 }}>
+                  This cannot be undone. You will be asked to confirm with Touch ID, Windows Hello or your password first.
+                </div>
+              </>
+            ) : (fieldDraftCount ?? 0) > 0 ? (
               <>
                 <p style={{ margin: "0 0 10px", fontSize: 13, color: "#C9D2F0", lineHeight: 1.5 }}>
                   You are signing <b style={{ color: "#fff" }}>{fieldDraftCount} requested {fieldDraftCount === 1 ? "place" : "places"}</b>{fileName ? ` on ${fileName}` : ""}. The sender is notified the moment you send.

@@ -110,7 +110,9 @@ type Props = {
   // Signature requests (stage 2, 2026-10-21) — owner-placed fields. Ghost boxes
   // over the page: a recipient taps one to sign INTO it (no manual placement);
   // the owner, in fieldMode, clicks the page to add a draft field and drags it.
-  fields?:          Array<{ id: string; page: number; x: number; y: number; w: number; h: number; label?: string | null; signed: boolean; draft?: boolean; assignee?: string }>;
+  // `muted` (Release A): shown but not clickable — e.g. the owner's countersign
+  // box before every recipient has signed, or a recipient's box after completion.
+  fields?:          Array<{ id: string; page: number; x: number; y: number; w: number; h: number; label?: string | null; signed: boolean; draft?: boolean; assignee?: string; muted?: boolean }>;
   fieldMode?:       boolean;
   onPlaceField?:    (page: number, x: number, y: number) => void;
   onUpdateField?:   (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void;
@@ -1061,7 +1063,7 @@ export function TileRenderer({
               {/* Owner-placed signature fields — ghost boxes (stage 2). */}
               {(fields ?? []).filter((f) => f.page === currentPage).map((f) => {
                 const editable  = !!f.draft && !!onUpdateField;
-                const clickable = !!onFieldClick && !f.signed && !f.draft;
+                const clickable = !!onFieldClick && !f.signed && !f.draft && !f.muted;
                 // Recipient: the box says the ACTION; owner: the request + assignee.
                 const text = f.signed ? "Signed" : clickable ? "Tap to sign" : (f.label || "Sign here");
                 return (

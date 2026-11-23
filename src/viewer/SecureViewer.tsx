@@ -14,7 +14,7 @@ import {
 } from "../lib/audit";
 import { TileRenderer } from "./TileRenderer";
 import { SignatureRequestBanner } from "./SignatureRequestBanner";
-import { SignatureFieldsPanel } from "./SignatureFieldsPanel";
+import { SignatureFieldsPanel, OWNER_ASSIGNEE } from "./SignatureFieldsPanel";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
@@ -146,6 +146,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // Owner review — when the OWNER opens their own file, overlay ALL recipients'
   // pins/strokes, read-only (no menu).
   const [ownerReview, setOwnerReview] = useState(false);
+  // ── Signature completion (Release A, Nov 2026) ──
+  // `signing` mirrors file.signing and is advanced locally after the owner's
+  // Send (the server answers { completed }). ownerSigning = this is the owner's
+  // session AND the server says it is the owner's turn AND the document is not
+  // yet completed. The owner may then sign ONLY their own boxes; the server
+  // enforces all of it again (feedback route) — this is presentation.
+  const [signing, setSigning] = useState<FileInfo["signing"] | null>(null);
+  useEffect(() => { setSigning(file?.signing ?? null); }, [file?.id, file?.signing]);
+  const completedAt = signing?.completed_at ?? null;
+  const [ownerSignedBanner, setOwnerSignedBanner] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
   // Draft-then-send feedback. Sent items come from the server; drafts are local
   // (recipient-only, deletable) until "Send". Overlay only.
   const [fbMode, setFbMode] = useState<"none" | "comment" | "draw" | "sign">("none");
@@ -392,7 +403,14 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   type FieldView = NonNullable<FileInfo["signature_fields"]>[number];
   const [fields, setFields] = useState<FieldView[]>([]);
   useEffect(() => { setFields(file?.signature_fields ?? []); }, [file?.id, file?.signature_fields]);
-  const canPlaceFields = !!file?.is_owner && file?.signature_fields !== undefined;
+  const canPlaceFields = !!file?.is_owner && file?.signature_fields !== undefined && !completedAt;
+  const completionEnabled = !!file?.is_owner && !!file?.signing;
+  const ownerSigning = !!file?.is_owner && !!signing && !signing.completed_at && !!signing.owner_turn;
+  const ownerFieldsLeft = ownerSigning ? fields.filter((f) => f.signer_kind === "owner" && f.required && !f.signed).length : 0;
+  // "I will countersign" — default ON when completion is offered and the
+  // document has no owner box yet; once an owner box exists it reflects that.
+  const [countersign, setCountersign] = useState(true);
+  useEffect(() => { if (fields.some((f) => f.signer_kind === "owner")) setCountersign(true); }, [fields]);
   const [placingFields, setPlacingFields] = useState(false);
   const [fieldDrafts, setFieldDrafts] = useState<Array<{ tempId: string; page: number; x: number; y: number; w: number; h: number; recipient_id: string | null }>>([]);
   const [fieldRecipients, setFieldRecipients] = useState<Array<{ id: string; email: string; outstanding?: number; requested_at?: string | null }>>([]);
@@ -405,8 +423,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/signature-fields?session=${encodeURIComponent(sessionId)}`, { headers: { "X-App-Platform": "desktop" } });
       if (!res.ok) return;
       const d = await res.json();
-      setFields((d.fields ?? []).map((f: any) => ({ id: f.id, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, label: f.label, required: f.required, recipient_id: f.recipient_id, recipient_email: f.recipient_email, signed: (f.fills ?? []).length > 0, signed_by: (f.fills ?? []).map((x: any) => x.recipient_email) })));
+      setFields((d.fields ?? []).map((f: any) => ({ id: f.id, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, label: f.label, required: f.required, recipient_id: f.recipient_id, recipient_email: f.recipient_email, signed: (f.fills ?? []).length > 0, signed_by: (f.fills ?? []).map((x: any) => x.recipient_email) , signer_kind: f.signer_kind ?? 'recipient', signable: f.signable === true })));
       setFieldRecipients(d.recipients ?? []);
+      // Signature completion: the owner route also says whose turn it is now.
+      if (d.signing) setSigning(d.signing);
     } catch { /* keep last */ }
   }, [sessionId, file]);
   useEffect(() => { if (placingFields) refreshFields(); }, [placingFields, refreshFields]);
@@ -426,7 +446,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/signature-fields`, {
         method: "POST", headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
-        body: JSON.stringify({ session_id: sessionId, fields: fieldDrafts.map((f) => ({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, recipient_id: f.recipient_id })) }),
+        body: JSON.stringify({ session_id: sessionId, fields: fieldDrafts.map((f) => (f.recipient_id === OWNER_ASSIGNEE
+          ? { page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, recipient_id: null, signer_kind: "owner" }
+          : { page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, recipient_id: f.recipient_id })) }),
       });
       if (res.ok) { const n = fieldDrafts.length; setFieldDrafts([]); await refreshFields(); setSavedBanner(n); }
     } catch { /* leave drafts in place */ }
@@ -458,17 +480,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const onFieldClick = useCallback((f: { id: string; page: number; x: number; y: number; w: number; h: number }) => {
     setPendingSignature({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, field_id: f.id });
   }, []);
+  // The owner may tap ONLY their own box, and only when the server marked it signable.
+  const onOwnerFieldClick = useCallback((f: { id: string; page: number; x: number; y: number; w: number; h: number }) => {
+    const full = fields.find((x) => x.id === f.id);
+    if (!full || full.signer_kind !== "owner" || !full.signable) return;
+    setPendingSignature({ page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, field_id: f.id });
+  }, [fields]);
   // Sent signatures carry field_id → mark those fields signed (no refetch needed).
   useEffect(() => {
     const done = new Set(sentSignatures.map((s) => s.field_id).filter((v): v is string => !!v));
     if (done.size) setFields((prev) => prev.map((f) => (done.has(f.id) && !f.signed ? { ...f, signed: true } : f)));
   }, [sentSignatures]);
   const draftedFieldIds = new Set(draftSignatures.map((s) => s.field_id).filter((v): v is string => !!v));
-  const outstandingFields = recipientFeedback ? fields.filter((f) => f.required && !f.signed && !draftedFieldIds.has(f.id)) : [];
+  const outstandingFields = recipientFeedback ? fields.filter((f) => f.required && !f.signed && !draftedFieldIds.has(f.id))
+    : ownerSigning ? fields.filter((f) => f.signer_kind === "owner" && f.required && !f.signed && !draftedFieldIds.has(f.id))
+    : [];
   // Prompts (22 Oct 2026): fixed banners/pills, never hover cards.
   const [sentBanner, setSentBanner] = useState(false);
   const [savedBanner, setSavedBanner] = useState<number>(0);
-  const fieldsLeftTotal = recipientFeedback ? fields.filter((f) => f.required && !f.signed).length : 0;
+  const fieldsLeftTotal = recipientFeedback ? fields.filter((f) => f.required && !f.signed).length : ownerSigning ? ownerFieldsLeft : 0;
   const [focusField, setFocusField] = useState<{ id: string; page: number; y: number; seq: number } | null>(null);
   const focusSeq = useRef(0);
   const focusOn = useCallback((f: { id: string; page: number; y: number } | undefined) => {
@@ -491,12 +521,31 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const sendBatch = useCallback(async (): Promise<boolean> => {
     if (!sessionId || !file) return false;
     const hadAnnotations = draftSignatures.length > 0 || draftMarkups.length > 0;
+    setSignError(null);
+    // Owner countersign (Release A, ⬥5): a fresh local confirmation at the
+    // moment of signing — Touch ID / Windows Hello / the account password —
+    // mirroring the recipients' passkey-verified Send. Where the machine has no
+    // local authenticator (biometric_available false) the owner's present-token
+    // session, minted minutes ago by a signed-in owner, is the attribution.
+    if (ownerSigning) {
+      if (draftSignatures.length === 0 || draftSignatures.some((d) => !d.field_id)) { setSignError("Sign your own box first."); return false; }
+      try {
+        const available = await invoke<boolean>("biometric_available").catch(() => true);
+        if (available) await invoke<void>("authenticate_biometric");
+      } catch {
+        setSignError("Confirmation was cancelled — nothing was signed.");
+        return false;
+      }
+    }
     setSending(true);
     try {
       const res = await fetch(`${__API_BASE__}/api/v1/viewer/${file.id}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-App-Platform": "desktop" },
-        body: JSON.stringify({
+        body: JSON.stringify(ownerSigning ? {
+          session_id: sessionId,
+          signatures: draftSignatures.map((s) => ({ page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, style: s.style, points: s.points, typed_name: s.typed_name, image_data: s.image_data, signer_name: s.signer_name, field_id: s.field_id })),
+        } : {
           session_id: sessionId,
           decision: draftDecision ? { decision: draftDecision.decision, note: draftDecision.note.trim() || undefined } : undefined,
           comments: draftComments.length ? draftComments.map((c) => ({ page: c.page, x: c.x, y: c.y, body: c.body })) : undefined,
@@ -505,11 +554,25 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         }),
       });
       setSending(false);
-      if (!res.ok) return false;
+      if (!res.ok) {
+        if (ownerSigning) {
+          const body = await res.json().catch(() => ({}));
+          setSignError(body?.error === "NOT_OWNER_TURN" ? "Not every recipient has signed yet — your box becomes live when they have."
+            : body?.error === "SIGNING_COMPLETED" ? "This document is already completed." : "Could not sign. Try again.");
+          refreshFields().catch(() => {});
+        }
+        return false;
+      }
       const sentFieldDrafts = draftSignatures.some((s) => s.field_id);
+      const answer = ownerSigning ? await res.json().catch(() => ({})) : null;
       setDraftDecision(null); setDraftComments([]); setDraftMarkups([]); setDraftSignatures([]);
       await fetchFeedback();
-      if (sentFieldDrafts) { setSentBanner(true); window.setTimeout(() => setSentBanner(false), 8000); }
+      if (ownerSigning) {
+        // The owner signed last: the server has locked the document.
+        if (answer?.completed) setSigning((prev) => prev ? { ...prev, completed_at: new Date().toISOString(), owner_turn: false } : prev);
+        setOwnerSignedBanner(true); window.setTimeout(() => setOwnerSignedBanner(false), 12000);
+        refreshFields().catch(() => {});
+      } else if (sentFieldDrafts) { setSentBanner(true); window.setTimeout(() => setSentBanner(false), 8000); }
       // Post-cutover: regenerate the owner's stored signed PDF from our local
       // .afs so the download still works after the original ciphertext is
       // purged. Fire-and-forget; no-ops server-side if there are no signatures.
@@ -518,7 +581,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       }
       return true;
     } catch { setSending(false); return false; }
-  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignatures, fetchFeedback, afsRenderEnabled]);
+  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignatures, fetchFeedback, afsRenderEnabled, ownerSigning, refreshFields]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -1650,14 +1713,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         </div>
       )}
       {!locked && !coViewingBanner && (
-        sentBanner ? <SignatureRequestBanner state={{ kind: "sent", senderName: file.sender?.full_name || "The sender" }} />
-        : outstandingFields.length > 0 ? <SignatureRequestBanner state={{ kind: "outstanding", count: outstandingFields.length, page: Math.min(...outstandingFields.map((f) => f.page)), drafted: draftedFieldIds.size, onShow: showFirstField }} />
+        completedAt ? <SignatureRequestBanner state={{ kind: "completed", reference: signing?.completion_reference ?? null, at: completedAt, isOwner: !!file.is_owner }} />
+        : ownerSignedBanner ? <SignatureRequestBanner state={{ kind: "owner_signed" }} />
+        : ownerSigning && outstandingFields.length > 0 ? <SignatureRequestBanner state={{ kind: "owner_turn", count: outstandingFields.length, page: Math.min(...outstandingFields.map((f) => f.page)), drafted: draftedFieldIds.size, onShow: showFirstField }} />
+        : ownerSigning && draftedFieldIds.size > 0 ? <SignatureRequestBanner state={{ kind: "owner_turn", count: 0, page: 1, drafted: draftedFieldIds.size, onShow: showFirstField }} />
+        : completionEnabled && signing?.countersign_required && !signing.recipients_done && fields.some((f) => f.signer_kind === "owner") && !placingFields ? <SignatureRequestBanner state={{ kind: "owner_waiting", waiting: fieldRecipients.filter((r) => (r.outstanding ?? 0) > 0).length || 1 }} />
+        : sentBanner ? <SignatureRequestBanner state={{ kind: "sent", senderName: file.sender?.full_name || "The sender" }} />
+        : outstandingFields.length > 0 && !ownerSigning ? <SignatureRequestBanner state={{ kind: "outstanding", count: outstandingFields.length, page: Math.min(...outstandingFields.map((f) => f.page)), drafted: draftedFieldIds.size, onShow: showFirstField }} />
         : requestedEmails ? <SignatureRequestBanner state={{ kind: "requested", emails: requestedEmails, onDismiss: () => setRequestedEmails(null) }} />
         : savedBanner > 0 && canPlaceFields ? <SignatureRequestBanner state={{ kind: "saved", count: savedBanner, people: fieldRecipients.filter((r) => (r.outstanding ?? 0) > 0).length, busy: requesting, onRequest: requestSignatures, onDismiss: () => setSavedBanner(0) }} />
         : null
       )}
       {/* Draft pill (recipient): a field signature sits in its box, not yet sent. */}
-      {recipientFeedback && draftedFieldIds.size > 0 && fbMode === "none" && !feedbackOpen && !locked && (
+      {(recipientFeedback || ownerSigning) && draftedFieldIds.size > 0 && fbMode === "none" && !feedbackOpen && !locked && (
         <div style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 998, display: "flex", alignItems: "center", gap: 12,
           background: "#141830", border: "1px solid #2E3760", borderRadius: 999, padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", whiteSpace: "nowrap" }}>
           <span style={{ color: "#9098BC", fontSize: 12.5 }}>
@@ -1745,21 +1813,28 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, thickness: d.thickness, draft: true, kind: d.kind }))]}
             onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
             signMode={fbMode === "sign"}
-            onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}
+            onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}   // the owner never free-places: boxes only
             signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, image_data: d.image_data, draft: true, fixed: !!d.field_id }))]}
-            onUpdateSignature={recipientFeedback ? updateDraftSignature : undefined}
+            onUpdateSignature={recipientFeedback || ownerSigning ? updateDraftSignature : undefined}
             // Signature requests (stage 2): ghost boxes for recipients (their own
             // fields, minus the ones they have drafted), every field + drafts for
             // the owner in placement mode.
             fields={[
-              ...fields.filter((f) => !draftedFieldIds.has(f.id)).map((f) => ({ id: f.id, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, label: f.label ?? null, signed: f.signed, assignee: canPlaceFields ? (f.recipient_email ?? "anyone") : undefined })),
-              ...fieldDrafts.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, label: null, signed: false, draft: true, assignee: fieldRecipients.find((r) => r.id === d.recipient_id)?.email ?? "anyone" })),
+              ...fields.filter((f) => !draftedFieldIds.has(f.id)).map((f) => ({
+                id: f.id, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h,
+                label: f.signer_kind === "owner" ? (file.is_owner ? (f.signable ? "Your turn — tap to countersign" : completedAt ? null : "Your countersign box") : "Sender countersigns") : (f.label ?? null),
+                signed: f.signed,
+                assignee: file.is_owner && f.signer_kind !== "owner" ? (f.recipient_email ?? "anyone") : undefined,
+                // Not clickable: a recipient's box in an owner session, the owner's box before its turn, anything after completion.
+                muted: !!completedAt || (file.is_owner && (f.signer_kind !== "owner" || !f.signable)),
+              })),
+              ...fieldDrafts.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, label: null, signed: false, draft: true, assignee: d.recipient_id === OWNER_ASSIGNEE ? "me" : (fieldRecipients.find((r) => r.id === d.recipient_id)?.email ?? "anyone") })),
             ]}
             fieldMode={placingFields}
             focusField={focusField}
             onPlaceField={placingFields ? onPlaceField : undefined}
             onUpdateField={placingFields ? updateFieldDraft : undefined}
-            onFieldClick={recipientFeedback && !placingFields ? onFieldClick : undefined}
+            onFieldClick={recipientFeedback && !placingFields && !completedAt ? onFieldClick : ownerSigning && !placingFields ? onOwnerFieldClick : undefined}
             onPlaceFields={canPlaceFields && !presenterSession ? () => setPlacingFields((v) => !v) : undefined}
             fieldCount={fields.length}
             // Owner-only entry point for co-viewing. Hidden while a
@@ -1817,7 +1892,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             qaUnread={qaUnread}
             // Recipient Feedback launcher (centered blue toolbar button). Same
             // gate as the FeedbackMenu render below (recipient feedback only).
-            onFeedback={recipientFeedback ? () => setFeedbackOpen(true) : undefined}
+            onFeedback={recipientFeedback || ownerSigning ? () => setFeedbackOpen(true) : undefined}
             feedbackDraftCount={(draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length}
           />
           {!firstTileRendered && (
@@ -1994,20 +2069,22 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       {/* Owner placement panel (stage 2). */}
       {placingFields && !locked && (
         <SignatureFieldsPanel
-          saved={fields.map((f) => ({ id: f.id, page: f.page, recipient_email: f.recipient_email ?? null, signed: f.signed, signed_by: f.signed_by }))}
+          saved={fields.map((f) => ({ id: f.id, page: f.page, recipient_email: f.recipient_email ?? null, signed: f.signed, signed_by: f.signed_by, signer_kind: f.signer_kind }))}
           drafts={fieldDrafts.map((d) => ({ tempId: d.tempId, page: d.page, recipient_id: d.recipient_id }))}
           recipients={fieldRecipients} saving={savingFields}
           requesting={requesting} onRequest={requestSignatures}
           onAssign={assignFieldDraft} onRemoveDraft={removeFieldDraft} onDeleteSaved={deleteField}
           onSave={saveFields} onClose={() => { setPlacingFields(false); setFieldDrafts([]); }}
+          completionEnabled={completionEnabled} countersign={countersign} setCountersign={setCountersign}
         />
       )}
 
       {/* Recipient feedback — unified draft-then-send menu. Overlay only; never
           touches the tile renderer. Flag-gated (recipientFeedback). Owner review
           shows pins/strokes without any menu. */}
-      {recipientFeedback && sessionId && !locked && (
+      {(recipientFeedback || ownerSigning) && sessionId && !locked && (
         <FeedbackMenu
+          ownerSigning={ownerSigning}
           fileId={file.id} sessionId={sessionId}
           mode={fbMode} setMode={setFbMode}
           drawTool={drawTool} setDrawTool={setDrawTool}
@@ -2026,12 +2103,19 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       )}
 
       {/* E-signature capture — after tapping a spot in Sign mode. */}
-      {recipientFeedback && pendingSignature && !locked && (
+      {(recipientFeedback || ownerSigning) && pendingSignature && !locked && (
         <SignaturePad
           onCancel={() => { setPendingSignature(null); setFbMode("none"); }}
           onDone={addDraftSignature}
-          defaultName={recipient?.email ?? ""}
+          defaultName={ownerSigning ? (file.sender?.full_name || file.sender?.email || "") : (recipient?.email ?? "")}
         />
+      )}
+      {/* Owner countersign: a refused or cancelled Send, said plainly. */}
+      {signError && !locked && (
+        <div style={{ position: "fixed", bottom: 64, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: "#3A1A1A", border: "1px solid #7A2E2E", color: "#F5C2C2", borderRadius: 10, padding: "9px 14px", fontSize: 12.5, fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", display: "flex", gap: 12, alignItems: "center" }}>
+          <span>{signError}</span>
+          <button onClick={() => setSignError(null)} style={{ background: "transparent", border: "none", color: "#F5C2C2", cursor: "pointer", fontSize: 14 }}>×</button>
+        </div>
       )}
 
       {/* Draft-comment compose — after tapping a spot in Comment mode. */}

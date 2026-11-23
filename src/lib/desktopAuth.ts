@@ -37,12 +37,29 @@ export type FileInfo = {
   // signed state; the owner gets every field with who filled it. Absent when
   // the server flag is off → no ghost boxes, no banner, no owner button.
   signature_fields?: SignatureFieldInfo[];
+  // Signature completion (Release A, Nov 2026). Present only when the server
+  // flag is on. The owner's own boxes become signable on `owner_turn` (every
+  // required recipient box filled); once `completed_at` is set the document is
+  // locked for signing and every party sees every signature.
+  signing?: SigningInfo;
+};
+
+export type SigningInfo = {
+  countersign_required: boolean;
+  completed_at: string | null;
+  completion_reference: string | null;
+  owner_turn?: boolean;        // owner session only
+  recipients_done?: boolean;   // owner session only
 };
 
 export type SignatureFieldInfo = {
   id: string; page: number; x: number; y: number; w: number; h: number;
   label?: string | null; required: boolean; signed: boolean;
   recipient_id?: string | null; recipient_email?: string | null; signed_by?: string[];
+  // 'owner' = the sender's own countersign box (never offered to a recipient);
+  // `signable` = it is the owner's turn and this box is still empty.
+  signer_kind?: 'recipient' | 'owner';
+  signable?: boolean;
 };
 
 export type RecipientInfo = {
