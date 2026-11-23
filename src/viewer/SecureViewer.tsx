@@ -1681,6 +1681,21 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // tiles stop rendering). Reverses when the poll above clears captureApps.
   if (captureApps.length > 0) return <CaptureBlackoutScreen apps={captureApps} />;
 
+
+  // Signature banners live in a FIXED 40px lane at the top (same lane as the
+  // co-viewing banner). Before completion they were transient; the Completed
+  // banner is permanent, and a fixed lane over the toolbar hides zoom, page
+  // navigation, Review and Download for the whole session (found 23 Nov 2026
+  // on the first production run). So, exactly as the PresenterToolbar does
+  // with its 44px, push the viewer row down by the banner's height while one
+  // is showing. Mirrors the render conditions below, nothing else.
+  const signatureBannerShown = !locked && !coViewingBanner && !!(
+    completedAt || ownerSignedBanner
+    || (ownerSigning && (outstandingFields.length > 0 || draftedFieldIds.size > 0))
+    || (completionEnabled && signing?.countersign_required && !signing.recipients_done && fields.some((f) => f.signer_kind === "owner") && !placingFields)
+    || sentBanner || (outstandingFields.length > 0 && !ownerSigning) || requestedEmails || (savedBanner > 0 && canPlaceFields)
+  );
+
   return (
     <>
       {/* Opens & viewing limits chip (v2.0.4): server-authoritative window,
@@ -1756,8 +1771,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           the PresenterToolbar instead of being hidden behind it. */}
       <div style={{
         display:    'flex',
-        height:     presenterSession ? 'calc(100vh - 44px)' : '100vh',
-        marginTop:  presenterSession ? 44 : 0,
+        height:     presenterSession ? 'calc(100vh - 44px)' : signatureBannerShown ? 'calc(100vh - 40px)' : '100vh',
+        marginTop:  presenterSession ? 44 : signatureBannerShown ? 40 : 0,
       }}>
         <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
           {/* Phase 2b — controller cursor overlay. Renders nothing
