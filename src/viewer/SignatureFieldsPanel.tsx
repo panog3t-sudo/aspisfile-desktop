@@ -12,7 +12,7 @@ export type DraftField = { tempId: string; page: number; recipient_id: string | 
 export const OWNER_ASSIGNEE = '__owner__';
 export type PanelRecipient = { id: string; email: string; outstanding?: number; requested_at?: string | null };
 
-export function SignatureFieldsPanel({ saved, drafts, recipients, saving, requesting, onRequest, onAssign, onRemoveDraft, onDeleteSaved, onSave, onClose, countersign, setCountersign, completionEnabled }: {
+export function SignatureFieldsPanel({ saved, drafts, recipients, saving, requesting, onRequest, onAssign, onRemoveDraft, onDeleteSaved, onSave, onClose, countersign, setCountersign, completionEnabled, releaseExecutedCopy, setReleaseExecutedCopy }: {
   saved: SavedField[]; drafts: DraftField[]; recipients: PanelRecipient[]; saving: boolean;
   requesting?: boolean; onRequest?: () => void;
   onAssign: (tempId: string, recipientId: string | null) => void; onRemoveDraft: (tempId: string) => void;
@@ -20,6 +20,8 @@ export function SignatureFieldsPanel({ saved, drafts, recipients, saving, reques
   // Signature completion (Release A): "I will countersign" — default ON when
   // the server offers completion. While on, Save waits for a box assigned to Me.
   countersign?: boolean; setCountersign?: (b: boolean) => void; completionEnabled?: boolean;
+  // Release B: "Parties may download the executed copy when everyone has signed" — the sender's decision, default on.
+  releaseExecutedCopy?: boolean; setReleaseExecutedCopy?: (b: boolean) => void;
 }) {
   const ownerBoxes = saved.filter(f => f.signer_kind === 'owner').length + drafts.filter(d => d.recipient_id === OWNER_ASSIGNEE).length;
   const needsOwnerBox = !!completionEnabled && !!countersign && ownerBoxes === 0;
@@ -43,6 +45,12 @@ export function SignatureFieldsPanel({ saved, drafts, recipients, saving, reques
           <span><b>I will countersign</b> — I sign last, after everyone else. When all parties have signed, the document is completed and locked and every party receives the certificate.
             {needsOwnerBox && <span style={{ display: 'block', color: '#F4BF4F', marginTop: 3 }}>Click the page for your own box and pick <b>Me</b>.</span>}
           </span>
+        </label>
+      )}
+      {completionEnabled && setReleaseExecutedCopy && releaseExecutedCopy !== undefined && (
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12.5, color: '#EAEFFB', margin: '0 0 8px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!releaseExecutedCopy} onChange={e => setReleaseExecutedCopy(e.target.checked)} style={{ marginTop: 2 }} />
+          <span><b>Parties may download the executed copy when everyone has signed</b> — <span style={{ color: '#9DB4FF' }}>A released copy is the party&rsquo;s own and is not recalled by revoke.</span></span>
         </label>
       )}
       {saved.length > 0 && (

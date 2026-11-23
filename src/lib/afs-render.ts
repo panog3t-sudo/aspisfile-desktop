@@ -288,3 +288,37 @@ function confirmHold(fileId: string, sessionId: string, h: Record<string, string
   fetch(`${BASE}/api/v1/viewer/${fileId}/afs/confirm-hold?session=${sessionId}`, { method: 'POST', headers: h })
     .catch(() => { /* best-effort; 7-day lifecycle is the backstop */ });
 }
+
+// ─── Signature completion, Release B — the executed copy ─────────────────────
+// A party downloads the executed agreement (signed PDF + certificate) from the
+// viewer. The server gates every call (completed, record, the sender's release,
+// the caller is a party) and foots the copy per party; here we only fetch the
+// bytes with the session's own headers and hand them to the OS save dialog.
+export async function downloadExecutedCopy(opts: {
+  fileId: string; sessionId: string; fingerprint: string; fileName?: string | null; reference?: string | null;
+}): Promise<{ ok: true } | { ok: false; error: 'cancelled' | 'refused' | 'network' | 'write' }> {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const { writeFile } = await import('@tauri-apps/plugin-fs');
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/api/v1/viewer/${opts.fileId}/executed-copy?session=${encodeURIComponent(opts.sessionId)}`, { headers: authHeaders(opts.fingerprint) });
+  } catch { return { ok: false, error: 'network' }; }
+  if (!res.ok) return { ok: false, error: 'refused' };
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const base = (opts.fileName ?? 'document').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._ -]+/g, '_') || 'document';
+  const path = await save({ defaultPath: `${base} - executed copy${opts.reference ? ` ${opts.reference}` : ''}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+  if (!path) return { ok: false, error: 'cancelled' };
+  try { await writeFile(path, bytes); } catch { return { ok: false, error: 'write' }; }
+  return { ok: true };
+}
+
+/** The sender's release decision, from the viewer's placement panel (owner session). */
+export async function setExecutedCopyRelease(opts: { fileId: string; sessionId: string; release: boolean }): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/viewer/${opts.fileId}/executed-copy-release`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop' },
+      body: JSON.stringify({ session_id: opts.sessionId, release: opts.release }),
+    });
+    return res.ok;
+  } catch { return false; }
+}

@@ -50,6 +50,10 @@ export type SigningInfo = {
   completion_reference: string | null;
   owner_turn?: boolean;        // owner session only
   recipients_done?: boolean;   // owner session only
+  // Release B: the sender's release of the executed copy, and whether THIS
+  // session may download it now (completed, record produced, released, and
+  // the caller is a party). Absent on servers before Release B.
+  executed_copy?: { released: boolean; available: boolean; withdrawn_at?: string | null };
 };
 
 export type SignatureFieldInfo = {

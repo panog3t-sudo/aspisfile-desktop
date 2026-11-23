@@ -18,7 +18,7 @@ import { SignatureFieldsPanel, OWNER_ASSIGNEE } from "./SignatureFieldsPanel";
 import { AuthLoadingScreen } from "../components/AuthLoadingScreen";
 import { RevokedScreen } from "../components/RevokedScreen";
 import { CaptureBlackoutScreen } from "../components/CaptureBlackoutScreen";
-import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, generateSignedOutput, deleteStoredAfs, rememberHeldToken, heldFileIdForToken, type HeldStatus } from "../lib/afs-render";
+import { isAfsRenderEnabled, primeAfsRender, getHeldStatus, exportAfs, hasStoredAfs, generateSignedOutput, deleteStoredAfs, rememberHeldToken, heldFileIdForToken, type HeldStatus, downloadExecutedCopy, setExecutedCopyRelease } from "../lib/afs-render";
 import { translateAccessError, type FriendlyAccessError } from "../lib/access-errors";
 import { debugLog } from "../lib/debug-log";
 import { LegalOverlay } from "../components/LegalOverlay";
@@ -411,6 +411,24 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   // document has no owner box yet; once an owner box exists it reflects that.
   const [countersign, setCountersign] = useState(true);
   useEffect(() => { if (fields.some((f) => f.signer_kind === "owner")) setCountersign(true); }, [fields]);
+  // Release B — the sender's release decision (placement panel) and the party's download.
+  const [releaseExecutedCopy, setReleaseExecutedCopyState] = useState<boolean>(true);
+  useEffect(() => { if (signing?.executed_copy) setReleaseExecutedCopyState(signing.executed_copy.released); }, [signing?.executed_copy?.released]);
+  const setReleaseExecutedCopy = useCallback(async (next: boolean) => {
+    if (!sessionId || !file) return;
+    setReleaseExecutedCopyState(next);
+    const ok = await setExecutedCopyRelease({ fileId: file.id, sessionId, release: next });
+    if (!ok) { setReleaseExecutedCopyState(!next); setSignError("Could not change the release. Try again."); }
+  }, [sessionId, file]);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const executedCopyAvailable = !!signing?.executed_copy?.available && !!completedAt;
+  const onDownloadExecutedCopy = useCallback(async () => {
+    if (!sessionId || !file || copyBusy) return;
+    setCopyBusy(true); setSignError(null);
+    const r = await downloadExecutedCopy({ fileId: file.id, sessionId, fingerprint: fpRef.current, fileName: file.name, reference: signing?.completion_reference ?? null });
+    setCopyBusy(false);
+    if (!r.ok && r.error !== "cancelled") setSignError(r.error === "refused" ? "The executed copy is not available — the sender may have withdrawn the release." : r.error === "write" ? "Could not save the file." : "Couldn't reach AspisFile. Check your connection and try again.");
+  }, [sessionId, file, copyBusy, signing?.completion_reference]);
   const [placingFields, setPlacingFields] = useState(false);
   const [fieldDrafts, setFieldDrafts] = useState<Array<{ tempId: string; page: number; x: number; y: number; w: number; h: number; recipient_id: string | null }>>([]);
   const [fieldRecipients, setFieldRecipients] = useState<Array<{ id: string; email: string; outstanding?: number; requested_at?: string | null }>>([]);
@@ -1728,7 +1746,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         </div>
       )}
       {!locked && !coViewingBanner && (
-        completedAt ? <SignatureRequestBanner state={{ kind: "completed", reference: signing?.completion_reference ?? null, at: completedAt, isOwner: !!file.is_owner }} />
+        completedAt ? <SignatureRequestBanner state={{ kind: "completed", reference: signing?.completion_reference ?? null, at: completedAt, isOwner: !!file.is_owner, ...(executedCopyAvailable ? { onDownload: onDownloadExecutedCopy, downloading: copyBusy } : {}) }} />
         : ownerSignedBanner ? <SignatureRequestBanner state={{ kind: "owner_signed" }} />
         : ownerSigning && outstandingFields.length > 0 ? <SignatureRequestBanner state={{ kind: "owner_turn", count: outstandingFields.length, page: Math.min(...outstandingFields.map((f) => f.page)), drafted: draftedFieldIds.size, onShow: showFirstField }} />
         : ownerSigning && draftedFieldIds.size > 0 ? <SignatureRequestBanner state={{ kind: "owner_turn", count: 0, page: 1, drafted: draftedFieldIds.size, onShow: showFirstField }} />
@@ -2091,6 +2109,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onAssign={assignFieldDraft} onRemoveDraft={removeFieldDraft} onDeleteSaved={deleteField}
           onSave={saveFields} onClose={() => { setPlacingFields(false); setFieldDrafts([]); }}
           completionEnabled={completionEnabled} countersign={countersign} setCountersign={setCountersign}
+          releaseExecutedCopy={signing?.executed_copy ? releaseExecutedCopy : undefined} setReleaseExecutedCopy={setReleaseExecutedCopy}
         />
       )}
 

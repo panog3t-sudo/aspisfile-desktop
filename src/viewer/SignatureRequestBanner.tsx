@@ -13,7 +13,7 @@ export type SignatureBannerState =
   | { kind: "owner_turn"; count: number; page: number; drafted: number; onShow: () => void }
   | { kind: "owner_waiting"; waiting: number }
   | { kind: "owner_signed"; }
-  | { kind: "completed"; reference: string | null; at: string | null; isOwner: boolean };
+  | { kind: "completed"; reference: string | null; at: string | null; isOwner: boolean; onDownload?: () => void; downloading?: boolean };
 
 export function SignatureRequestBanner({ state }: { state: SignatureBannerState }) {
   const bg = state.kind === "outstanding" || state.kind === "owner_turn" ? "#B7791F" : state.kind === "owner_waiting" ? "#2E3760" : "#1B8A57";
@@ -39,8 +39,9 @@ export function SignatureRequestBanner({ state }: { state: SignatureBannerState 
           : <><strong>Everyone has signed. Your countersignature completes the document.</strong> {state.count} {state.count === 1 ? "box" : "boxes"} to sign · the first is on page {state.page}</>)}
         {state.kind === "owner_waiting" && <><strong>Waiting for {state.waiting === 1 ? "1 recipient" : `${state.waiting} recipients`} to sign.</strong> Your countersign box becomes live when they have.</>}
         {state.kind === "owner_signed" && <><strong>Countersigned.</strong> The document is completed and locked; every party is being sent the certificate.</>}
-        {state.kind === "completed" && <><strong>Completed by all parties{state.at ? ` on ${when(state.at)}` : ""}.</strong>{state.reference ? ` Reference ${state.reference}.` : ""} {state.isOwner ? "The signed PDF with its certificate is on the file page." : "Every party's signature is shown; the sender holds the signed record."}</>}
+        {state.kind === "completed" && <><strong>Completed by all parties{state.at ? ` on ${when(state.at)}` : ""}.</strong>{state.reference ? ` Reference ${state.reference}.` : ""} {state.onDownload ? "Your executed copy is ready." : state.isOwner ? "The signed PDF with its certificate is on the file page." : "Every party's signature is shown; the sender holds the signed record."}</>}
       </span>
+      {state.kind === "completed" && state.onDownload && <button onClick={state.onDownload} disabled={state.downloading} style={btn}>{state.downloading ? "Preparing…" : "Download executed copy (PDF)"}</button>}
       {state.kind === "owner_turn" && <button onClick={state.onShow} style={btn}>Show me</button>}
       {state.kind === "outstanding" && <button onClick={state.onShow} style={btn}>Show me</button>}
       {state.kind === "saved" && state.people > 0 && <button onClick={state.onRequest} disabled={state.busy} style={btn}>{state.busy ? "Sending…" : "Request signatures"}</button>}
