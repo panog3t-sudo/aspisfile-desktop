@@ -29,7 +29,7 @@ type Props = {
   onOpenToken?: (token: string, coview?: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; unavailable_reason?: 'revoked' | 'expired' | null; opened?: boolean; reviewed?: boolean; view_minutes?: number | null; opens_left?: number | null };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; unavailable_reason?: 'revoked' | 'expired' | null; opened?: boolean; reviewed?: boolean; completed?: boolean; view_minutes?: number | null; opens_left?: number | null };
 type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
 type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
@@ -271,6 +271,8 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             {!d.opened && <span title="You haven't opened this file yet" style={{ width: 7, height: 7, borderRadius: 4, background: NEW_DOT }} />}
             {d.opened && <span title="You've opened this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#22C55E" }} />}
             {d.reviewed && <span title="You've left a review on this file" style={{ width: 7, height: 7, borderRadius: 4, background: "#5C82EE" }} />}
+            {/* Signed by every party and locked (Pano, 24 Nov 2026): a small lock, not a fourth colour. */}
+            {d.completed && <span title="Signed by all parties and locked" style={{ display: "inline-flex", alignItems: "center" }}><svg width={10} height={11} viewBox="0 0 12 14" fill="none" aria-hidden="true" style={{ display: "block" }}><rect x="1.5" y="6" width="9" height="7" rx="1.5" stroke="#CBD5E1" strokeWidth="1.6" /><path d="M3.5 6V4.2a2.5 2.5 0 0 1 5 0V6" stroke="#CBD5E1" strokeWidth="1.6" /></svg></span>}
           </span>
         )}
         {d.created_at ? <span style={{ fontSize: 11, color: "#64748B", flexShrink: 0, whiteSpace: "nowrap", textAlign: "right" }}>Shared {fmtDate(d.created_at)}</span> : null}
@@ -628,6 +630,9 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
               </span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#94A3B8" }}>
                 <span style={{ width: 7, height: 7, borderRadius: 4, background: "#5C82EE", display: "inline-block" }} /> Reviewed
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#94A3B8" }}>
+                <svg width={9} height={10} viewBox="0 0 12 14" fill="none" aria-hidden="true" style={{ display: "inline-block" }}><rect x="1.5" y="6" width="9" height="7" rx="1.5" stroke="#CBD5E1" strokeWidth="1.6" /><path d="M3.5 6V4.2a2.5 2.5 0 0 1 5 0V6" stroke="#CBD5E1" strokeWidth="1.6" /></svg> Signed &amp; locked
               </span>
             </div>
           )}
