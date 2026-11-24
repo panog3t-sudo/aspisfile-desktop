@@ -157,6 +157,9 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const completedAt = signing?.completed_at ?? null;
   const [ownerSignedBanner, setOwnerSignedBanner] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
+  // A quiet confirmation (saved / sent) in the same lane as signError, green.
+  const [signNotice, setSignNotice] = useState<string | null>(null);
+  useEffect(() => { if (!signNotice) return; const t = window.setTimeout(() => setSignNotice(null), 9000); return () => window.clearTimeout(t); }, [signNotice]);
   // Draft-then-send feedback. Sent items come from the server; drafts are local
   // (recipient-only, deletable) until "Send". Overlay only.
   const [fbMode, setFbMode] = useState<"none" | "comment" | "draw" | "sign">("none");
@@ -428,6 +431,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
     setCopyBusy(true); setSignError(null);
     const r = await downloadExecutedCopy({ fileId: file.id, sessionId, fingerprint: fpRef.current, fileName: file.name, reference: signing?.completion_reference ?? null });
     setCopyBusy(false);
+    if (r.ok) { setSignNotice(`Executed copy saved · ${r.path.replace(/^\/Users\/[^/]+/, "~")}`); return; }
     if (!r.ok && r.error !== "cancelled") setSignError(r.error === "refused" ? "The executed copy is not available — the sender may have withdrawn the release." : r.error === "write" ? "Could not save the file." : "Couldn't reach AspisFile. Check your connection and try again.");
   }, [sessionId, file, copyBusy, signing?.completion_reference]);
   const [placingFields, setPlacingFields] = useState(false);
@@ -2189,6 +2193,13 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onSubmit={lastBox ? padSubmit : undefined}
           footer={pureSigning ? (lastBox ? "Signed with your passkey · sent when you press the button" : "Signed with your passkey · sent after the last box") : undefined}
         />
+      )}
+      {/* Quiet confirmation: the executed copy was saved. */}
+      {signNotice && !locked && (
+        <div style={{ position: "fixed", bottom: 64, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: "#14311F", border: "1px solid #1B8A57", color: "#CFEFD9", borderRadius: 10, padding: "9px 14px", fontSize: 12.5, fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", display: "flex", gap: 12, alignItems: "center", maxWidth: "80vw" }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{signNotice}</span>
+          <button onClick={() => setSignNotice(null)} style={{ background: "transparent", border: "none", color: "#CFEFD9", cursor: "pointer", fontSize: 14 }}>×</button>
+        </div>
       )}
       {/* Owner countersign: a refused or cancelled Send, said plainly. */}
       {signError && !locked && (

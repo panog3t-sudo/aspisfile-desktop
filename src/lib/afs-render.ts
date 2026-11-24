@@ -296,7 +296,7 @@ function confirmHold(fileId: string, sessionId: string, h: Record<string, string
 // bytes with the session's own headers and hand them to the OS save dialog.
 export async function downloadExecutedCopy(opts: {
   fileId: string; sessionId: string; fingerprint: string; fileName?: string | null; reference?: string | null;
-}): Promise<{ ok: true } | { ok: false; error: 'cancelled' | 'refused' | 'network' | 'write' }> {
+}): Promise<{ ok: true; path: string } | { ok: false; error: 'cancelled' | 'refused' | 'network' | 'write' }> {
   const { save } = await import('@tauri-apps/plugin-dialog');
   const { writeFile } = await import('@tauri-apps/plugin-fs');
   let res: Response;
@@ -309,7 +309,7 @@ export async function downloadExecutedCopy(opts: {
   const path = await save({ defaultPath: `${base} - executed copy${opts.reference ? ` ${opts.reference}` : ''}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
   if (!path) return { ok: false, error: 'cancelled' };
   try { await writeFile(path, bytes); } catch { return { ok: false, error: 'write' }; }
-  return { ok: true };
+  return { ok: true, path };
 }
 
 /** The sender's release decision, from the viewer's placement panel (owner session). */
