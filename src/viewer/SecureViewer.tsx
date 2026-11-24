@@ -155,6 +155,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [signing, setSigning] = useState<FileInfo["signing"] | null>(null);
   useEffect(() => { setSigning(file?.signing ?? null); }, [file?.id, file?.signing]);
   const completedAt = signing?.completed_at ?? null;
+  // Review closes at completion (Pano, 24 Nov 2026): once every party has
+  // signed, the Review button and every tool behind it leave the viewer.
+  // The server refuses the same writes, so an older build is refused too.
+  const reviewOpen = recipientFeedback && !completedAt;
   const [ownerSignedBanner, setOwnerSignedBanner] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
   // A quiet confirmation (saved / sent) in the same lane as signError, green.
@@ -195,6 +199,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [offline, setOffline]         = useState(false);
   const [error, setError]             = useState<FriendlyAccessError | null>(null);
   const [locked, setLocked]           = useState(false);
+  useEffect(() => {
+    if (!completedAt) return;
+    setFbMode("none"); setFeedbackOpen(false); setPendingComment(null); setPendingSignature(null);
+  }, [completedAt]);
   // Dedicated screen-capture tools detected running (OBS/Loom/…). When
   // non-empty, the viewer blacks out + a soft screen_share_detected
   // violation is reported. Reversible — clears when the tool closes.
@@ -581,11 +589,20 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       });
       setSending(false);
       if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
         if (ownerSigning) {
-          const body = await res.json().catch(() => ({}));
           setSignError(body?.error === "NOT_OWNER_TURN" ? "Not every recipient has signed yet — your box becomes live when they have."
             : body?.error === "SIGNING_COMPLETED" ? "This document is already completed." : "Could not sign. Try again.");
           refreshFields().catch(() => {});
+        } else if (body?.error === "SIGNING_COMPLETED") {
+          // Completed while this session was reviewing: review is closed for
+          // everyone. Mark it locally so the banner shows and Review leaves.
+          setSignError("This document was completed while you were reviewing. Nothing further can be added.");
+          setSigning((prev) => prev ? { ...prev, completed_at: prev.completed_at ?? new Date().toISOString(), owner_turn: false } : prev);
+          setDraftDecision(null); setDraftComments([]); setDraftMarkups([]); setDraftSignatures([]);
+          fetchFeedback().catch(() => {});
+        } else {
+          setSignError("Could not send. Try again.");
         }
         return false;
       }
@@ -1804,7 +1821,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
         : null
       )}
       {/* Draft pill (recipient): a field signature sits in its box, not yet sent. */}
-      {(recipientFeedback || ownerSigning) && draftedFieldIds.size > 0 && fbMode === "none" && !feedbackOpen && !locked && (
+      {(reviewOpen || ownerSigning) && draftedFieldIds.size > 0 && fbMode === "none" && !feedbackOpen && !locked && (
         <div style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 998, display: "flex", alignItems: "center", gap: 12,
           background: "#141830", border: "1px solid #2E3760", borderRadius: 999, padding: "8px 8px 8px 16px", boxShadow: "0 8px 22px rgba(0,0,0,.45)", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif", whiteSpace: "nowrap" }}>
           <span style={{ color: "#9098BC", fontSize: 12.5 }}>
@@ -1884,17 +1901,17 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             commentMode={fbMode === "comment"}
             comments={[...sentComments, ...draftComments.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, body: d.body, draft: true }))]}
             draftPin={pendingComment}
-            onPlaceComment={recipientFeedback ? onPlaceComment : undefined}
+            onPlaceComment={reviewOpen ? onPlaceComment : undefined}
             drawMode={fbMode === "draw"}
             drawColor={drawTool === "highlight" ? highlightColor : drawColor}
             drawThickness={drawTool === "highlight" ? highlightThickness : drawThickness}
             drawTool={drawTool}
             markups={[...sentMarkups, ...draftMarkups.map((d) => ({ id: d.tempId, page: d.page, points: d.points, color: d.color, thickness: d.thickness, draft: true, kind: d.kind }))]}
-            onStrokeComplete={recipientFeedback ? onStrokeComplete : undefined}
+            onStrokeComplete={reviewOpen ? onStrokeComplete : undefined}
             signMode={fbMode === "sign"}
-            onPlaceSignature={recipientFeedback ? onPlaceSignature : undefined}   // the owner never free-places: boxes only
+            onPlaceSignature={reviewOpen ? onPlaceSignature : undefined}   // the owner never free-places: boxes only
             signatures={[...sentSignatures, ...draftSignatures.map((d) => ({ id: d.tempId, page: d.page, x: d.x, y: d.y, w: d.w, h: d.h, style: d.style, points: d.points, typed_name: d.typed_name, image_data: d.image_data, draft: true, fixed: !!d.field_id }))]}
-            onUpdateSignature={recipientFeedback || ownerSigning ? updateDraftSignature : undefined}
+            onUpdateSignature={reviewOpen || ownerSigning ? updateDraftSignature : undefined}
             // Signature requests (stage 2): ghost boxes for recipients (their own
             // fields, minus the ones they have drafted), every field + drafts for
             // the owner in placement mode.
@@ -1971,7 +1988,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             qaUnread={qaUnread}
             // Recipient Feedback launcher (centered blue toolbar button). Same
             // gate as the FeedbackMenu render below (recipient feedback only).
-            onFeedback={recipientFeedback || ownerSigning ? () => setFeedbackOpen(true) : undefined}
+            onFeedback={reviewOpen || ownerSigning ? () => setFeedbackOpen(true) : undefined}
             feedbackDraftCount={(draftDecision ? 1 : 0) + draftComments.length + draftMarkups.length + draftSignatures.length}
           />
           {!firstTileRendered && (
@@ -2162,7 +2179,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       {/* Recipient feedback — unified draft-then-send menu. Overlay only; never
           touches the tile renderer. Flag-gated (recipientFeedback). Owner review
           shows pins/strokes without any menu. */}
-      {(recipientFeedback || ownerSigning) && sessionId && !locked && (
+      {(reviewOpen || ownerSigning) && sessionId && !locked && (
         <FeedbackMenu
           ownerSigning={ownerSigning}
           fileId={file.id} sessionId={sessionId}
@@ -2183,7 +2200,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       )}
 
       {/* E-signature capture — after tapping a spot in Sign mode. */}
-      {(recipientFeedback || ownerSigning) && pendingSignature && !locked && (
+      {(reviewOpen || ownerSigning) && pendingSignature && !locked && (
         <SignaturePad
           onCancel={() => { setPendingSignature(null); setFbMode("none"); }}
           onDone={addDraftSignature}
@@ -2210,7 +2227,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       )}
 
       {/* Draft-comment compose — after tapping a spot in Comment mode. */}
-      {recipientFeedback && pendingComment && !locked && (
+      {reviewOpen && pendingComment && !locked && (
         <div onClick={() => { setPendingComment(null); setPendingText(""); }}
           style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(4,6,14,.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
           <div onClick={(e) => e.stopPropagation()}
