@@ -172,7 +172,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [draftDecision, setDraftDecision] = useState<{ decision: Decision; note: string } | null>(null);
   const [draftComments, setDraftComments] = useState<DraftComment[]>([]);
   const [draftMarkups, setDraftMarkups] = useState<DraftMarkup[]>([]);
-  const [draftSignatures, setDraftSignatures] = useState<DraftSignature[]>([]);
+  const [draftSignaturesState, setDraftSignatures] = useState<DraftSignature[]>([]);
+  const draftSignatures = draftSignaturesState;
   // w/h/field_id present when the tap was on an owner-placed field (stage 2):
   // the signature is fitted INTO that box and carries the field reference.
   const [pendingSignature, setPendingSignature] = useState<{ page: number; x: number; y: number; w?: number; h?: number; field_id?: string } | null>(null);
@@ -536,8 +537,11 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   }, [draftedFieldIds.size]);
 
   // Send the whole draft bundle (irreversible). Clears drafts + refetches sent.
-  const sendBatch = useCallback(async (): Promise<boolean> => {
+  const sendBatch = useCallback(async (override?: { signatures: DraftSignature[] }): Promise<boolean> => {
     if (!sessionId || !file) return false;
+    // One-button signing passes the signatures explicitly (the new draft is not
+    // in state yet); everything else reads the drafts as before.
+    const draftSignatures = override?.signatures ?? draftSignaturesState;
     const hadAnnotations = draftSignatures.length > 0 || draftMarkups.length > 0;
     setSignError(null);
     // Owner countersign (Release A, ⬥5): a fresh local confirmation at the
@@ -599,7 +603,45 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
       }
       return true;
     } catch { setSending(false); return false; }
-  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignatures, fetchFeedback, afsRenderEnabled, ownerSigning, refreshFields]);
+  }, [sessionId, file, draftDecision, draftComments, draftMarkups, draftSignaturesState, fetchFeedback, afsRenderEnabled, ownerSigning, refreshFields]);
+
+  // ── One-button signing (24 Nov 2026) ──
+  // When the signature goes INTO a requested box and nothing else is drafted
+  // (no decision, comments or markups), the pad's own button sends: on the last
+  // outstanding box it signs and sends; with boxes still to go it signs and the
+  // viewer moves to the next box, as it already does. The adoption sentence
+  // moves into the pad. Free-placed signatures and mixed drafts keep the Review
+  // menu, where the send is confirmed with the drafts listed.
+  const buildDraftFromPad = useCallback((s: SignatureData): DraftSignature | null => {
+    const ps = pendingSignature;
+    if (!ps) return null;
+    const w = ps.w ?? SIG_W, h = ps.h ?? SIG_H;
+    const base = { tempId: "d" + (++tempIdRef.current), page: ps.page, x: ps.x, y: Math.min(1 - h, ps.y), w, h, signer_name: s.signer_name, at: new Date().toISOString(), ...(ps.field_id ? { field_id: ps.field_id } : {}) };
+    return s.style === "drawn" ? { ...base, style: "drawn", points: s.points }
+      : s.style === "uploaded" ? { ...base, style: "uploaded", image_data: s.image_data }
+      : { ...base, style: "typed", typed_name: s.typed_name };
+  }, [pendingSignature]);
+  const pureSigning = !!pendingSignature?.field_id && !draftDecision && draftComments.length === 0 && draftMarkups.length === 0;
+  const boxesAfterThis = pendingSignature?.field_id ? outstandingFields.filter((f) => f.id !== pendingSignature.field_id).length : 0;
+  const lastBox = pureSigning && boxesAfterThis === 0;
+  const senderFirst = (file?.sender?.full_name || "the sender").split(" ")[0];
+  const padPrimaryLabel = !pureSigning ? undefined
+    : lastBox ? (ownerSigning ? "Sign and complete the document" : `Sign and send to ${senderFirst}`)
+    : `Sign · ${boxesAfterThis} more ${boxesAfterThis === 1 ? "box" : "boxes"}`;
+  const padIntent = !pureSigning ? undefined
+    : ownerSigning
+      ? "By signing you adopt this as your electronic signature on this document, verified with your passkey and timestamped. Pressing the button completes and locks the document for every party; you will confirm with Touch ID, Windows Hello or your password. This cannot be undone."
+      : lastBox
+        ? `By signing you adopt this as your electronic signature on this document, verified with your passkey and timestamped. Pressing the button sends it to ${senderFirst}. This cannot be undone.`
+        : "By signing you adopt this as your electronic signature on this document. Nothing is sent until the last box.";
+  const padSubmit = useCallback(async (s: SignatureData): Promise<boolean> => {
+    const draft = buildDraftFromPad(s);
+    if (!draft) return false;
+    const all = [...draftSignatures, draft];
+    const ok = await sendBatch({ signatures: all });
+    if (ok) { setPendingSignature(null); setFbMode("none"); }
+    return ok;
+  }, [buildDraftFromPad, draftSignatures, sendBatch]);
 
   // Co-viewing recipient state
   const [coViewingBanner, setCoViewingBanner] = useState<{
@@ -2142,6 +2184,10 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onCancel={() => { setPendingSignature(null); setFbMode("none"); }}
           onDone={addDraftSignature}
           defaultName={ownerSigning ? (file.sender?.full_name || file.sender?.email || "") : (recipient?.email ?? "")}
+          primaryLabel={padPrimaryLabel}
+          intent={padIntent}
+          onSubmit={lastBox ? padSubmit : undefined}
+          footer={pureSigning ? (lastBox ? "Signed with your passkey · sent when you press the button" : "Signed with your passkey · sent after the last box") : undefined}
         />
       )}
       {/* Owner countersign: a refused or cancelled Send, said plainly. */}

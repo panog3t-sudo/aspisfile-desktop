@@ -37,7 +37,16 @@ function loadSavedImg(email: string): { dataUrl: string; aspect: number } | null
 function saveSavedImg(email: string, img: { dataUrl: string; aspect: number }) { if (!email) return; try { localStorage.setItem(IMG_KEY(email), JSON.stringify(img)); } catch { /* quota */ } }
 function clearSavedImg(email: string) { try { localStorage.removeItem(IMG_KEY(email)); } catch { /* */ } }
 
-export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () => void; onDone: (s: SignatureData) => void; defaultName?: string }) {
+export function SignaturePad({ onCancel, onDone, defaultName, primaryLabel, intent, onSubmit, footer }: {
+  onCancel: () => void; onDone: (s: SignatureData) => void; defaultName?: string;
+  // One-button signing (24 Nov 2026): when the signature goes into a requested
+  // box and nothing else is being sent, the pad's own button is the send. The
+  // adoption sentence (`intent`) sits above it, `onSubmit` performs the send and
+  // resolves true on success (false keeps the pad open with an error).
+  primaryLabel?: string; intent?: string; onSubmit?: (s: SignatureData) => Promise<boolean>; footer?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [submitErr, setSubmitErr] = useState<string | null>(null);
   const emailKey = (defaultName ?? "").trim().toLowerCase();
   const [tab, setTab] = useState<"draw" | "type" | "upload">("draw");
   const [typed, setTyped] = useState("");
@@ -82,18 +91,31 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
     reader.readAsDataURL(file);
   };
 
-  const submit = () => {
-    if (!canAdd) return;
-    if (tab === "draw") {
-      const pts = strokes.filter((st) => st.length > 1);
-      if (save) saveSavedSig(emailKey, pts);
-      onDone({ style: "drawn", points: pts, signer_name: drawnName });
-    } else if (tab === "type") {
-      onDone({ style: "typed", typed_name: typed.trim(), signer_name: typed.trim() });
-    } else if (upImg) {
-      if (saveImg) saveSavedImg(emailKey, upImg);
-      onDone({ style: "uploaded", image_data: upImg.dataUrl, aspect: upImg.aspect, signer_name: drawnName });
+  const submit = async () => {
+    if (!canAdd || busy) return;
+    const build = (): SignatureData | null => {
+      if (tab === "draw") {
+        const pts = strokes.filter((st) => st.length > 1);
+        if (save) saveSavedSig(emailKey, pts);
+        return { style: "drawn", points: pts, signer_name: drawnName };
+      } else if (tab === "type") {
+        return { style: "typed", typed_name: typed.trim(), signer_name: typed.trim() };
+      } else if (upImg) {
+        if (saveImg) saveSavedImg(emailKey, upImg);
+        return { style: "uploaded", image_data: upImg.dataUrl, aspect: upImg.aspect, signer_name: drawnName };
+      }
+      return null;
+    };
+    const data = build();
+    if (!data) return;
+    if (onSubmit) {
+      setBusy(true); setSubmitErr(null);
+      const ok = await onSubmit(data).catch(() => false);
+      setBusy(false);
+      if (!ok) setSubmitErr("Could not send. Check your connection and try again.");
+      return;
     }
+    onDone(data);
   };
 
   return (
@@ -165,11 +187,15 @@ export function SignaturePad({ onCancel, onDone, defaultName }: { onCancel: () =
             style={{ width: "100%", boxSizing: "border-box", border: "1px solid #2E3760", background: "#080A14", color: "#EAEFFB", borderRadius: 10, padding: "10px 12px", fontSize: 13, marginTop: 10 }} />
         )}
 
+        {intent && (
+          <div style={{ marginTop: 12, fontSize: 12, color: "#C9D2F0", lineHeight: 1.5, background: "#141C3D", border: "1px solid #2E3760", borderRadius: 9, padding: "9px 11px" }}>{intent}</div>
+        )}
+        {submitErr && <div style={{ marginTop: 8, fontSize: 12, color: "#F5C2C2" }}>{submitErr}</div>}
         <div style={{ display: "flex", gap: 9, marginTop: 14 }}>
-          <button onClick={submit} disabled={!canAdd} style={{ flex: 1, background: canAdd ? "#2E55D4" : "#26305A", color: "#fff", border: "none", borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 660, cursor: canAdd ? "pointer" : "default" }}>Add signature</button>
+          <button onClick={submit} disabled={!canAdd || busy} style={{ flex: 1, background: canAdd && !busy ? "#2E55D4" : "#26305A", color: "#fff", border: "none", borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 660, cursor: canAdd ? "pointer" : "default" }}>{busy ? "Sending…" : (primaryLabel ?? "Add signature")}</button>
           <button onClick={onCancel} style={{ padding: "11px 14px", borderRadius: 10, border: "1px solid #2E3760", background: "transparent", color: "#9098BC", cursor: "pointer", fontSize: 13 }}>Cancel</button>
         </div>
-        <div style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, color: "#666E96", marginTop: 10, textAlign: "center" }}>Signed with your passkey · draft until you press Send</div>
+        <div style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, color: "#666E96", marginTop: 10, textAlign: "center" }}>{footer ?? "Signed with your passkey · draft until you press Send"}</div>
       </div>
     </div>
   );
