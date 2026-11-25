@@ -17,7 +17,7 @@ interface StartSessionModalProps {
   // Desktop owner-token — required to authenticate the modal's POST to /co-viewing/start
   // and the GET /recipients fetch (no Supabase auth session on desktop).
   token:    string;
-  onStart:  (sessionId: string, channel: string, mode: 'synchronized' | 'free', context: 'standalone' | 'teams' | 'zoom') => void;
+  onStart:  (sessionId: string, channel: string, mode: 'synchronized' | 'free', context: 'standalone' | 'teams' | 'zoom', startedAt: string) => void;
   onClose:  () => void;
 }
 
@@ -110,7 +110,7 @@ export function StartSessionModal({ fileId, fileName, token, onStart, onClose }:
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? 'Failed to start session'); setLoading(false); return; }
-      onStart(data.session_id, data.channel, mode, context);
+      onStart(data.session_id, data.channel, mode, context, data.started_at ?? new Date().toISOString());
     } catch {
       setError('Network error — please try again.');
       setLoading(false);
@@ -234,16 +234,20 @@ export function StartSessionModal({ fileId, fileName, token, onStart, onClose }:
           <button onClick={onClose} style={{ flex: 1, padding: '9px 0', fontSize: 12, background: 'transparent', border: '0.5px solid #BFDBFE', borderRadius: 6, color: '#64748B', cursor: 'pointer', fontFamily: FONT }}>
             Cancel
           </button>
+          {/* Nobody ticked, no guests: a session would tell no one, so the
+              honest action is to open the document for the presenter alone.
+              Invitations can still be sent later from the Participants panel. */}
           <button
-            onClick={handleStart}
+            onClick={notifyCount > 0 ? handleStart : onClose}
             disabled={loading}
+            title={notifyCount > 0 ? undefined : 'Nobody will be told. The document opens in your viewer only; you can invite people from the Participants panel once presenting.'}
             style={{ flex: 2, padding: '9px 0', fontSize: 12, fontWeight: 500, background: loading ? '#BFDBFE' : '#1D4ED8', border: 'none', borderRadius: 6, color: '#FFFFFF', cursor: loading ? 'wait' : 'pointer', fontFamily: FONT }}
           >
             {loading
               ? 'Starting…'
               : notifyCount > 0
                 ? `Start presenting · notify ${notifyCount}`
-                : 'Start presenting'}
+                : 'Open without presenting'}
           </button>
         </div>
       </div>

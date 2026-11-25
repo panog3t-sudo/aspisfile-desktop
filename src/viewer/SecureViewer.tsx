@@ -686,6 +686,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
   const [presenterSession, setPresenterSession] = useState<{
     sessionId: string; channel: string;
     mode: 'synchronized' | 'free'; context: 'standalone' | 'teams' | 'zoom';
+    startedAt: string;   // Batch B: the presenter's elapsed counter
   } | null>(null);
 
   // Zoom level (shared between presenter and recipient). Index into
@@ -2006,6 +2007,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
             token={token}
             currentPage={currentPage}
             onClose={() => setParticipantPanelOpen(false)}
+            fileId={file.id}
+            startedAt={presenterSession.startedAt}
           />
         )}
         {/* Data-room Q&A — docked beside the document (flex sibling), so the
@@ -2040,6 +2043,7 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           onTogglePanel={() => setParticipantPanelOpen(o => !o)}
           presenterEmail={recipient?.email}
           controllerEmail={currentControllerEmail}
+          startedAt={presenterSession.startedAt}
         />
       )}
 
@@ -2071,8 +2075,8 @@ export function SecureViewer({ token, sig, env, onClose, present, coviewSessionI
           fileId={file.id}
           fileName={file.name}
           token={token}
-          onStart={(sessionId, channel, mode, context) => {
-            setPresenterSession({ sessionId, channel, mode, context });
+          onStart={(sessionId, channel, mode, context, startedAt) => {
+            setPresenterSession({ sessionId, channel, mode, context, startedAt });
             setShowStartModal(false);
           }}
           onClose={() => setShowStartModal(false)}

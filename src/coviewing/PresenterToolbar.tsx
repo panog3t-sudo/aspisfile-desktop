@@ -33,11 +33,29 @@ interface PresenterToolbarProps {
   // if any. Null when no recipient is driving. Rendered as a
   // distinct chip so the presenter sees at a glance who's steering.
   controllerEmail?: string | null;
+  // Batch B (25 Nov 2026): when the session started — the presenter's own
+  // elapsed counter. Recipients see "Live now" on the home and the elapsed
+  // time only once inside, where everyone present knows it anyway.
+  startedAt?: string;
 }
 
 export function PresenterToolbar({
   sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail, controllerEmail,
+  startedAt,
 }: PresenterToolbarProps) {
+  // Elapsed counter (Batch B): ticks once a second from startedAt.
+  const [elapsed, setElapsed] = useState('');
+  useEffect(() => {
+    if (!startedAt) return;
+    const fmt = () => {
+      const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), sec = secs % 60;
+      return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+    };
+    setElapsed(fmt());
+    const iv = setInterval(() => setElapsed(fmt()), 1000);
+    return () => clearInterval(iv);
+  }, [startedAt]);
   const [stopping,     setStopping]     = useState(false);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -103,6 +121,11 @@ export function PresenterToolbar({
       <span style={{ fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 10, background: '#1D4ED8', color: '#FFFFFF', flexShrink: 0 }}>
         {CONTEXT_LABEL[context]} · {mode === 'synchronized' ? 'Sync' : 'Free'}
       </span>
+      {startedAt && (
+        <span title="Presenting for" style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums', color: 'rgba(255,255,255,0.7)', flexShrink: 0 }}>
+          {elapsed}
+        </span>
+      )}
 
       {/* Controller chip — surfaces who's currently driving the doc
           when a recipient holds pointer_control. Empty when the

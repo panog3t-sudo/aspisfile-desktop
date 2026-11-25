@@ -19,6 +19,21 @@ interface Props {
   // Presenter's current page — used to compute "same page as you" per row
   currentPage:  number;
   onClose:      () => void;
+  // Batch B (25 Nov 2026): the file, for the mid-session Invite picker; when
+  // the session started, for the elapsed counter.
+  fileId:       string;
+  startedAt:    string;
+}
+
+// One row of the WHOLE roster (joined or not) with its delivery state — what
+// the server derives from the tracking rows the presentation emails write.
+interface InvitedRow {
+  recipient_email: string;
+  access_type:     'permanent' | 'session_only';
+  notified:        boolean;
+  joined_at:       string | null;
+  left_at:         string | null;
+  delivery:        'joined' | 'sent' | 'bounced' | 'not_reachable' | 'not_invited';
 }
 
 interface ParticipantRow {
@@ -57,8 +72,11 @@ interface PresenceRow {
 // Timer ticks every 1s from joined_at.
 export function PresenterParticipantPanel({
   sessionId, channel, token, currentPage, onClose,
-}: Props) {
+ fileId, startedAt }: Props) {
   const [roster, setRoster]         = useState<ParticipantRow[]>([]);
+  const [invited, setInvited]       = useState<InvitedRow[]>([]);
+  const [roomName, setRoomName]     = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [presence, setPresence]     = useState<Record<string, PresenceRow>>({});
   const [gone, setGone]             = useState<Record<string, { at: number }>>({});
   const [recentJoin, setRecentJoin] = useState<Record<string, number>>({});
@@ -109,12 +127,17 @@ export function PresenterParticipantPanel({
         headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
       })
         .then(r => r.json())
-        .then(d => setRoster(d.participants ?? []))
+        .then(d => { setRoster(d.participants ?? []); setInvited(d.invited ?? []); setRoomName(d.room_name ?? null); })
         .catch(() => {});
     };
     fetch_();
     const iv = setInterval(fetch_, 10_000);
     return () => clearInterval(iv);
+  }, [sessionId, token]);
+  const refreshRoster = useCallback(() => {
+    fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/participants`, {
+      headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
+    }).then(r => r.json()).then(d => { setRoster(d.participants ?? []); setInvited(d.invited ?? []); }).catch(() => {});
   }, [sessionId, token]);
 
   // Realtime presence subscription + 3s defensive poll.
@@ -341,6 +364,12 @@ export function PresenterParticipantPanel({
   });
 
   const liveCount = rows.filter(r => r.isLive).length;
+  // Invited but not (yet) in: everything on the roster that has no joined row.
+  const joinedEmails = new Set(roster.map(r => r.recipient_email.toLowerCase()));
+  const pending = invited
+    .filter(i => i.notified && !joinedEmails.has(i.recipient_email.toLowerCase()))
+    .sort((a, b) => a.recipient_email.localeCompare(b.recipient_email));
+  const notInvited = invited.filter(i => !i.notified).map(i => i.recipient_email);
 
   return (
     <aside
@@ -375,9 +404,17 @@ export function PresenterParticipantPanel({
             Participants
           </p>
           <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', margin: '2px 0 0' }}>
-            {liveCount} of {rows.length} live
+            {liveCount} of {rows.length} live · {elapsedLabel(startedAt)}{roomName ? ` · ${roomName}` : ''}
           </p>
         </div>
+        <button
+          onClick={() => setInviteOpen(o => !o)}
+          aria-label="Invite someone to this presentation"
+          title="Invite a recipient of this document, or a guest by email"
+          style={{ ...permBtnStyle(inviteOpen ? 'deny' : 'grant'), marginRight: 8, padding: '5px 10px', fontSize: 11 }}
+        >
+          {inviteOpen ? 'Close' : 'Invite'}
+        </button>
         <button
           onClick={onClose}
           aria-label="Hide participant panel"
@@ -402,9 +439,18 @@ export function PresenterParticipantPanel({
         </button>
       </div>
 
+      {inviteOpen && (
+        <InviteSection
+          sessionId={sessionId} fileId={fileId} token={token}
+          alreadyInvited={new Set(invited.filter(i => i.notified).map(i => i.recipient_email.toLowerCase()))}
+          suggested={notInvited}
+          onInvited={() => { refreshRoster(); }}
+        />
+      )}
+
       {/* List */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
-        {rows.length === 0 ? (
+        {rows.length === 0 && pending.length === 0 ? (
           <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', textAlign: 'center', margin: '24px 8px 0', lineHeight: 1.6 }}>
             Waiting for someone to join…
           </p>
@@ -435,6 +481,14 @@ export function PresenterParticipantPanel({
               }}
             />
           ))
+        )}
+        {pending.length > 0 && (
+          <>
+            <p style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', margin: '14px 8px 6px' }}>
+              Invited · not joined
+            </p>
+            {pending.map(p => <InvitedRowView key={p.recipient_email} row={p} />)}
+          </>
         )}
       </div>
     </aside>
@@ -686,4 +740,133 @@ function colorFromEmail(email: string): string {
   }
   const hue = Math.abs(h) % 360;
   return `hsl(${hue}, 55%, 45%)`;
+}
+
+// ── Batch B (25 Nov 2026) ─────────────────────────────────────────────────
+
+// A person who was invited but has not joined, with what we know about the
+// invitation. Never claims more than the server knows: "Invited" means the
+// email went out; "Email bounced" comes from the SendGrid webhook; "Not
+// reachable" means their access had lapsed and no link could be sent.
+function InvitedRowView({ row }: { row: InvitedRow }) {
+  const label =
+    row.delivery === 'bounced'       ? { text: 'Email bounced', color: '#FCA5A5' } :
+    row.delivery === 'not_reachable' ? { text: 'Not reachable — their access has lapsed', color: '#FDE68A' } :
+    row.left_at                      ? { text: `Left ${new Date(row.left_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, color: 'rgba(255,255,255,0.45)' } :
+                                       { text: 'Invited', color: 'rgba(255,255,255,0.5)' };
+  return (
+    <div style={{ padding: '7px 8px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10, opacity: 0.85 }}>
+      <div style={{ width: 24, height: 24, borderRadius: 12, flexShrink: 0, border: '0.5px dashed rgba(255,255,255,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'rgba(255,255,255,0.6)' }}>
+        {row.recipient_email.slice(0, 1).toUpperCase()}
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.recipient_email}</p>
+        <p style={{ fontSize: 10, color: label.color, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {label.text}{row.access_type === 'session_only' ? ' · guest' : ''}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+type InviteOutcome = { email: string; kind: 'recipient' | 'guest'; delivery: 'sent' | 'no_usable_access_token' | 'blocked' | 'already_invited' | 'invalid' };
+
+// Invite while presenting: tick recipients of the document who were not
+// ticked at start (the server lists them as not_invited), or type a guest
+// email. One POST; the server does the rest and the roster refreshes.
+function InviteSection({ sessionId, fileId, token, alreadyInvited, suggested, onInvited }: {
+  sessionId: string; fileId: string; token: string;
+  alreadyInvited: Set<string>; suggested: string[]; onInvited: () => void;
+}) {
+  const [recipients, setRecipients] = useState<string[]>([]);
+  const [picked, setPicked]         = useState<Set<string>>(new Set());
+  const [guest, setGuest]           = useState('');
+  const [guests, setGuests]         = useState<string[]>([]);
+  const [sending, setSending]       = useState(false);
+  const [outcome, setOutcome]       = useState<InviteOutcome[] | null>(null);
+  const [error, setError]           = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${__API_BASE__}/api/v1/recipients?file_id=${encodeURIComponent(fileId)}`, {
+      headers: { 'X-App-Platform': 'desktop', 'X-Access-Token': token },
+    }).then(r => r.json()).then(d => {
+      const list: { recipient_email: string; status?: string }[] = d.recipients ?? [];
+      setRecipients(list.filter(r => r.status !== 'revoked').map(r => r.recipient_email.toLowerCase()));
+    }).catch(() => setRecipients(suggested));
+  }, [fileId, token, suggested]);
+
+  const candidates = recipients.filter(e => !alreadyInvited.has(e));
+  const toggle = (e: string) => setPicked(prev => { const n = new Set(prev); n.has(e) ? n.delete(e) : n.add(e); return n; });
+  const addGuest = () => {
+    const e = guest.trim().toLowerCase();
+    if (!e.includes('@')) return;
+    if (!guests.includes(e) && !alreadyInvited.has(e)) setGuests(g => [...g, e]);
+    setGuest('');
+  };
+  const send = async () => {
+    const emails = [...picked, ...guests];
+    if (emails.length === 0) return;
+    setSending(true); setError(null); setOutcome(null);
+    try {
+      const res = await fetch(`${__API_BASE__}/api/v1/co-viewing/${sessionId}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Platform': 'desktop', 'X-Access-Token': token },
+        body: JSON.stringify({ emails }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(d.error === 'SESSION_ENDED' ? 'The presentation has ended.' : 'Could not send the invitations. Try again.'); return; }
+      setOutcome(d.invited ?? []); setPicked(new Set()); setGuests([]); onInvited();
+    } catch { setError('Could not reach AspisFile. Try again.'); }
+    finally { setSending(false); }
+  };
+  const outcomeText = (o: InviteOutcome) =>
+    o.delivery === 'sent'                   ? 'invited' :
+    o.delivery === 'no_usable_access_token' ? 'not reachable — their access has lapsed' :
+    o.delivery === 'blocked'                ? 'blocked — unblock them in Recipients first' :
+    o.delivery === 'already_invited'        ? 'already invited' : 'not a valid address';
+
+  const field: React.CSSProperties = { flex: 1, minWidth: 0, height: 28, padding: '0 9px', fontSize: 11, borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.05)', color: '#E2E8F0', outline: 'none', fontFamily: FONT };
+  return (
+    <div style={{ padding: '10px 12px 12px', borderBottom: '0.5px solid rgba(59,130,246,0.25)', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+      <p style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', margin: 0 }}>Invite to this presentation</p>
+      {candidates.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 120, overflowY: 'auto' }}>
+          {candidates.map(e => (
+            <label key={e} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'rgba(255,255,255,0.85)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={picked.has(e)} onChange={() => toggle(e)} style={{ margin: 0 }} />
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e}</span>
+            </label>
+          ))}
+        </div>
+      ) : (
+        <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', margin: 0 }}>Every recipient of this document has been invited.</p>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input value={guest} onChange={e => setGuest(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addGuest(); }} placeholder="Guest email — this session only" style={field} />
+        <button onClick={addGuest} style={permBtnStyle('deny')}>Add</button>
+      </div>
+      {guests.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {guests.map(g => (
+            <span key={g} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 9, background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.8)' }}>
+              {g} <button onClick={() => setGuests(x => x.filter(y => y !== g))} aria-label={`Remove ${g}`} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, marginLeft: 2 }}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <button onClick={send} disabled={sending || (picked.size + guests.length) === 0} style={{ ...permBtnStyle('grant'), alignSelf: 'flex-start', padding: '5px 12px', fontSize: 11, opacity: sending || (picked.size + guests.length) === 0 ? 0.5 : 1 }}>
+        {sending ? 'Sending…' : `Send ${picked.size + guests.length || ''} ${picked.size + guests.length === 1 ? 'invitation' : 'invitations'}`.replace('  ', ' ')}
+      </button>
+      {error && <p style={{ fontSize: 10, color: '#FCA5A5', margin: 0 }}>{error}</p>}
+      {outcome && outcome.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {outcome.map(o => (
+            <p key={o.email} style={{ fontSize: 10, margin: 0, color: o.delivery === 'sent' ? '#86EFAC' : '#FDE68A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {o.email} — {outcomeText(o)}{o.kind === 'guest' && o.delivery === 'sent' ? ' as a guest' : ''}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
