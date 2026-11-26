@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, type ReactElement } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactElement } from "react";
 import { BrandWatermark } from "./BrandWatermark";
 import { getActiveSessionToken, getRecipientSession, clearAllRecipientState, RecipientSession } from "../lib/recipient-session";
 import { isAfsRenderEnabled, toggleAfsRender } from "../lib/afs-render";
@@ -29,9 +29,11 @@ type Props = {
   onOpenToken?: (token: string, coview?: string) => void;
 };
 
-type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; unavailable_reason?: 'revoked' | 'expired' | null; opened?: boolean; reviewed?: boolean; completed?: boolean; view_minutes?: number | null; opens_left?: number | null };
+type HomeDoc  = { id: string; name: string; file_type: string; file_size: number; created_at?: string; token: string; folder_id?: string | null; expired?: boolean; unavailable_reason?: 'revoked' | 'expired' | null; opened?: boolean; reviewed?: boolean; completed?: boolean; title?: string | null; description?: string | null; tags?: string[]; doc_index?: string | null; view_minutes?: number | null; opens_left?: number | null };
 type HomeFolder = { id: string; name: string; position: number; parent_id?: string | null };
-type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[] };
+type HomeRoom = { id: string; name: string; docs: HomeDoc[]; folders?: HomeFolder[]; search_enabled?: boolean };
+// A server search result: a HomeDoc plus where it sits and why it matched.
+type SearchHit = HomeDoc & { snippet?: string | null; match_on?: string; folder_path?: string; room?: { id: string; name: string } | null };
 type HomeData = { rooms: HomeRoom[]; files: HomeDoc[] };
 type LivePresentation = {
   session_id: string; file_id: string; file_name: string;
@@ -94,6 +96,15 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
 
   // Home controls — collapsed sections by default, name filter, sort.
   const [query, setQuery] = useState("");
+  // Room search (Tier 1): the box still filters names on the device instantly;
+  // after a pause it also asks the server, which searches the sender-written
+  // index (titles, descriptions, tags, folder names) over rooms whose sender
+  // switched Member search on, plus standalone files. Server unavailable →
+  // the device filter stays, with one quiet line.
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchFallback, setSearchFallback] = useState(false);
+  const searchTimer = useRef<number | null>(null);
   const [sortBy, setSortBy] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>({});
@@ -208,11 +219,34 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
     });
   };
 
+  // Ask the server once the user pauses on two or more characters.
+  useEffect(() => {
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
+    const trimmed = query.trim();
+    if (trimmed.length < 2 || !active || !home) { setHits(null); setSearching(false); setSearchFallback(false); return; }
+    const anySearchable = home.files.some(d => !d.expired) || home.rooms.some(r => r.search_enabled);
+    if (!anySearchable) { setHits(null); return; }
+    setSearching(true);
+    searchTimer.current = window.setTimeout(async () => {
+      const token = getActiveSessionToken();
+      if (!token) { setSearching(false); return; }
+      try {
+        const res = await fetch(`${BASE}/api/v1/viewer/search?q=${encodeURIComponent(trimmed)}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) { setHits(null); setSearchFallback(true); return; }
+        const d = await res.json().catch(() => null);
+        setHits(Array.isArray(d?.results) ? d.results : []); setSearchFallback(false);
+      } catch { setHits(null); setSearchFallback(true); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => { if (searchTimer.current) window.clearTimeout(searchTimer.current); };
+  }, [query, active, home]);
+
   // A single document/file row. Expired links (no live access token) render
   // muted and non-clickable with an "Expired" tag instead of "Open →", so the
   // list never shows a dead link that the viewer can't actually open.
-  const docRow = (d: HomeDoc) => {
+  const docRow = (d: HomeDoc, sub?: string) => {
     const expired = !!d.expired;
+    const secondLine = sub ?? [d.description, (d.tags ?? []).length ? (d.tags ?? []).map(t => `#${t}`).join(' ') : null].filter(Boolean).join(' · ');
     return (
       <button
         key={d.id}
@@ -249,8 +283,14 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             </span>
           );
         })()}
-        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: expired ? "#A6ADC8" : "#E2E8F0", textDecoration: expired && d.unavailable_reason === "revoked" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {d.name}
+        <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 1 }}>
+          <span style={{ fontSize: 13, color: expired ? "#A6ADC8" : "#E2E8F0", textDecoration: expired && d.unavailable_reason === "revoked" ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {d.doc_index && <span style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 10.5, color: "#94A3B8", marginRight: 8 }}>{d.doc_index}</span>}
+            {d.title || d.name}
+          </span>
+          {secondLine && (
+            <span style={{ fontSize: 11, color: "#94A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{secondLine}</span>
+          )}
         </span>
         {/* Opens & viewing limits — shown BEFORE opening so the click is an
             informed act (spec 49ac0c32 transparency rule; Pano 2026-09-03). */}
@@ -310,7 +350,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           <div style={{ maxHeight: 320, overflowY: "auto" }}>
             {docs.length === 0
               ? <p style={{ fontSize: 12, color: "#64748B", padding: "12px 14px", margin: 0 }}>No documents.</p>
-              : docs.map(docRow)}
+              : docs.map(d => docRow(d))}
           </div>
         )}
       </div>
@@ -352,7 +392,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
           </button>
           {fOpen && <div style={{ marginLeft: 13, paddingLeft: 13, borderLeft: "1.5px solid rgba(255,255,255,0.10)" }}>
             {subNodes}
-            {docs.map(docRow)}
+            {docs.map(d => docRow(d))}
           </div>}
         </div>
       );
@@ -375,9 +415,9 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             {unfiled.length > 0 && (folders.length > 0
               ? <div style={{ background: "rgba(255,255,255,0.02)", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 9, overflow: "hidden" }}>
                   <div style={{ padding: "8px 12px", fontFamily: "ui-monospace,Menlo,monospace", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "#64748B" }}>Room root</div>
-                  {unfiled.map(docRow)}
+                  {unfiled.map(d => docRow(d))}
                 </div>
-              : <div>{unfiled.map(docRow)}</div>)}
+              : <div>{unfiled.map(d => docRow(d))}</div>)}
           </div>
         )}
       </div>
@@ -593,7 +633,7 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
               <input
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                placeholder="Filter by name…"
+                placeholder="Search…"
                 style={{ flex: 1, minWidth: 150, height: 34, padding: "0 12px", fontSize: 13, borderRadius: 8, border: "0.5px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.04)", color: "#E2E8F0", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
               />
               <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.04)", border: "0.5px solid rgba(255,255,255,0.12)", borderRadius: 8, padding: 2 }}>
@@ -637,12 +677,32 @@ export function IdleScreen({ onLink, onEnrol, onSignIn, onOpenToken }: Props) {
             </div>
           )}
 
+          {/* Server search results (room search, Tier 1). While the server is
+              asked, the device-side name filter below keeps working; once
+              results arrive they replace the tree. Clearing the box restores it. */}
+          {q.length >= 2 && (hits !== null || searching || searchFallback) && (
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "0.5px solid rgba(255,255,255,0.10)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", fontSize: 11, color: "#94A3B8", borderBottom: hits && hits.length ? "0.5px solid rgba(255,255,255,0.06)" : "none" }}>
+                {searching ? "Searching…"
+                  : searchFallback ? "Showing name matches only — the search service could not be reached."
+                  : hits && hits.length === 0 ? `No documents match “${query.trim()}” in what you have been granted.`
+                  : `${hits!.length} ${hits!.length === 1 ? "result" : "results"} for “${query.trim()}”`}
+              </div>
+              {hits && hits.map(h => docRow(h, [
+                h.room ? h.room.name : "Your files",
+                h.folder_path || null,
+                h.snippet || h.description || null,
+                h.match_on === "folder" ? "matched the folder name" : h.match_on === "fuzzy" ? "close match" : null,
+              ].filter(Boolean).join(" · ")))}
+            </div>
+          )}
+
           {/* Data rooms — collapsible → folders → docs; collapsed by default */}
-          {home?.rooms.map(renderRoom)}
+          {!(hits && hits.length > 0) && home?.rooms.map(renderRoom)}
 
           {/* Your files — collapsed by default; expired links live in their
               own section below so the working list stays clean (2026-09-03). */}
-          {home && home.files.filter(d => !d.expired).length > 0 &&
+          {!(hits && hits.length > 0) && home && home.files.filter(d => !d.expired).length > 0 &&
             section("__files__", <Icon name="folder-open" size={14} style={{ color: "#94A3B8" }} />, "Your files", prep(home.files.filter(d => !d.expired)), q ? prep(home.files.filter(d => !d.expired)).length > 0 : filesOpen, () => setFilesOpen(o => !o))}
 
           {/* Expired — collapsed by default; rows stay non-clickable with the
