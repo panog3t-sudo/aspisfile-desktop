@@ -25,7 +25,7 @@ export function StartSessionModal({ fileId, fileName, token, onStart, onClose }:
   // Sprint 8 — sessions always start synchronized. Per-participant
   // free scroll is granted on request via the new permission flow.
   const mode: 'synchronized' = 'synchronized';
-  const [context,   setContext]     = useState<'standalone' | 'teams' | 'zoom'>('standalone');
+  const context: 'standalone' = 'standalone';
   const [guests,    setGuests]      = useState<string[]>([]);
   const [guestInput, setGuestInput] = useState('');
   const [recipients, setRecipients] = useState<Recipient[]>([]);
@@ -157,18 +157,9 @@ export function StartSessionModal({ fileId, fileName, token, onStart, onClose }:
             for free scroll per-participant via the request/grant flow
             in CoViewingRecipient + PresenterParticipantPanel. */}
 
-        {/* Context */}
-        <FieldLabel label="Context" />
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {(['standalone', 'teams', 'zoom'] as const).map(c => (
-            <ModeChip key={c} label={c.charAt(0).toUpperCase() + c.slice(1)} active={context === c} onClick={() => setContext(c)} />
-          ))}
-        </div>
-        {context !== 'standalone' && (
-          <p style={{ fontSize: 11, color: '#EF9F27', marginBottom: 14, marginTop: -8, lineHeight: 1.6 }}>
-            Screenshot protection is not available in Teams/Zoom. Watermark attribution only.
-          </p>
-        )}
+        {/* Context: Standalone only. Teams and Zoom were offered here before any
+            integration existed (Pano, 25 Nov 2026: "we have not enabled or tested
+            these"); they return when one does. The server still accepts the field. */}
 
         {/* Permanent recipients with notify checkboxes */}
         {eligibleRecipients.length > 0 && (
@@ -334,22 +325,3 @@ function RecipientRow({
   );
 }
 
-function ModeChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding:      '5px 12px',
-        borderRadius: 6,
-        border:       `0.5px solid ${active ? '#3B82F6' : '#BFDBFE'}`,
-        background:   active ? '#EFF6FF' : 'transparent',
-        color:        active ? '#185FA5' : '#64748B',
-        fontSize:     12,
-        cursor:       'pointer',
-        fontFamily:   FONT,
-      }}
-    >
-      {label}
-    </button>
-  );
-}

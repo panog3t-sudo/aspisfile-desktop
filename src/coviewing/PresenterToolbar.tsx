@@ -40,7 +40,7 @@ interface PresenterToolbarProps {
 }
 
 export function PresenterToolbar({
-  sessionId, channel: _channel, fileId: _fileId, token, mode, context, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail, controllerEmail,
+  sessionId, channel: _channel, fileId: _fileId, token, mode, currentPage, pageCount, onPageChange, onStop, panelOpen, onTogglePanel, presenterEmail, controllerEmail,
   startedAt,
 }: PresenterToolbarProps) {
   // Elapsed counter (Batch B): ticks once a second from startedAt.
@@ -95,11 +95,6 @@ export function PresenterToolbar({
     onStop();
   };
 
-  const CONTEXT_LABEL: Record<string, string> = {
-    standalone: 'Standalone',
-    teams:      'Teams',
-    zoom:       'Zoom',
-  };
 
   return (
     <div style={{
@@ -119,7 +114,7 @@ export function PresenterToolbar({
     }}>
       {/* Context + mode badge */}
       <span style={{ fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 10, background: '#1D4ED8', color: '#FFFFFF', flexShrink: 0 }}>
-        {CONTEXT_LABEL[context]} · {mode === 'synchronized' ? 'Sync' : 'Free'}
+        {mode === 'synchronized' ? 'Sync' : 'Free'}
       </span>
       {startedAt && (
         <span title="Presenting for" style={{ fontSize: 10, fontVariantNumeric: 'tabular-nums', color: 'rgba(255,255,255,0.7)', flexShrink: 0 }}>
