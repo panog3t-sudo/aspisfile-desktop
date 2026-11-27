@@ -206,15 +206,14 @@ export function SignInScreen({ onComplete, onCancel, initialEmail, token, coldSi
           });
       if (res.ok) {
         setResendState("sent");
-        // Cold sign-in (no token) hits /recipient/signin-code, which only emails
-        // an address that actually has files — and returns the SAME generic 200
-        // either way (enumeration-safe). So we must NOT claim a code was sent;
-        // use a non-revealing message that never leaks whether files exist.
+        // Cold sign-in (no token) hits /recipient/signin-code, which since 27 Nov
+        // 2026 emails a code to ANY valid address (enrolling creates a passkey
+        // identity and nothing else). The message can therefore say so plainly.
         if (!token) {
           setResendMsg(
             cleanEmail
-              ? `If ${cleanEmail} has files shared with it, we've sent a code — check your inbox and spam. No code? Make sure it's the exact address the file was shared to.`
-              : "If that address has files shared with it, we've sent a code — check your inbox and spam.",
+              ? `We've emailed a code to ${cleanEmail} — check your inbox and spam. If you sent the files yourself, open them from your dashboard; the viewer is for the people you share with.`
+              : "We've emailed a code to that address — check your inbox and spam.",
           );
         } else {
           setResendMsg(
