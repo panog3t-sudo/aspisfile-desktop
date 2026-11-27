@@ -535,8 +535,8 @@ function RowView({
     ? `Left ${new Date(goneAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
     : null;
 
-  const showFreeRow    = isLive && (freeScrollGranted    || !!freeScrollRequestedAt);
-  const showControlRow = isLive && (pointerControlGranted || !!pointerControlRequestedAt);
+  const showFreeRow    = isLive || (isLive && (freeScrollGranted    || !!freeScrollRequestedAt));
+  const showControlRow = isLive || (isLive && (pointerControlGranted || !!pointerControlRequestedAt));
 
   return (
     <div style={{
@@ -668,9 +668,11 @@ function PermControls({ label, requestedAt, granted, email, onSet }: {
   email:       string;
   onSet:       (granted: boolean) => void;
 }) {
-  // Fixed-width label column so scroll: and control: line up
-  // vertically when both rows are visible. Buttons sit to the right
-  // of the label in a stable order.
+  // A switch, not a "Revoke" button: Revoke is the word for destroying a
+  // file's key, and it must never appear next to a viewer's scroll or
+  // pointer permission (Pano, 27 Nov 2026). A pending request shows Grant /
+  // Deny beside the switch; otherwise the switch alone turns the permission
+  // on or off, in either direction, without waiting for a request.
   const labelStyle: React.CSSProperties = {
     fontSize:     9,
     fontWeight:   500,
@@ -680,24 +682,36 @@ function PermControls({ label, requestedAt, granted, email, onSet }: {
     textTransform:'uppercase',
     letterSpacing: 0.4,
   };
-  if (requestedAt && !granted) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={labelStyle}>{label}</span>
-        <button onClick={() => onSet(true)}  title={`Grant ${label} to ${email}`} style={permBtnStyle('grant')}>Grant</button>
-        <button onClick={() => onSet(false)} title="Dismiss the request"          style={permBtnStyle('deny')}>Deny</button>
-      </div>
-    );
-  }
-  if (granted) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={labelStyle}>{label}</span>
-        <button onClick={() => onSet(false)} title={`Revoke ${label} from ${email}`} style={permBtnStyle('revoke')}>Revoke</button>
-      </div>
-    );
-  }
-  return null;
+  const pending = !!requestedAt && !granted;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={labelStyle}>{label}</span>
+      <button
+        role="switch"
+        aria-checked={granted}
+        aria-label={`${label} for ${email}: ${granted ? 'on' : 'off'}`}
+        title={granted ? `Turn ${label} off for ${email}` : `Turn ${label} on for ${email}`}
+        onClick={() => onSet(!granted)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: FONT,
+          padding: '2px 7px 2px 2px', borderRadius: 999, border: `0.5px solid ${granted ? 'rgba(134,239,172,0.5)' : 'rgba(255,255,255,0.18)'}`,
+          background: granted ? 'rgba(134,239,172,0.14)' : 'rgba(255,255,255,0.05)', color: granted ? '#86EFAC' : 'rgba(255,255,255,0.6)', fontSize: 10, fontWeight: 500,
+        }}
+      >
+        <span aria-hidden="true" style={{ width: 22, height: 12, borderRadius: 6, position: 'relative', background: granted ? '#22C55E' : 'rgba(255,255,255,0.22)', transition: 'background 120ms' }}>
+          <span style={{ position: 'absolute', top: 2, left: granted ? 12 : 2, width: 8, height: 8, borderRadius: 4, background: '#fff', transition: 'left 120ms' }} />
+        </span>
+        {granted ? 'On' : 'Off'}
+      </button>
+      {pending && (
+        <>
+          <span style={{ fontSize: 9, color: '#FDE68A' }}>asked</span>
+          <button onClick={() => onSet(true)}  title={`Grant ${label} to ${email}`} style={permBtnStyle('grant')}>Grant</button>
+          <button onClick={() => onSet(false)} title="Dismiss the request"          style={permBtnStyle('deny')}>Deny</button>
+        </>
+      )}
+    </div>
+  );
 }
 
 function permBtnStyle(kind: 'grant' | 'deny' | 'revoke'): React.CSSProperties {
